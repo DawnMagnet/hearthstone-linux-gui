@@ -1,0 +1,9 @@
+[package]
+name = "hearthstone-linux-blz-commerce-sdk-plugin-stub"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[lib]
+name = "blz_commerce_sdk_plugin"
+crate-type = ["cdylib"]

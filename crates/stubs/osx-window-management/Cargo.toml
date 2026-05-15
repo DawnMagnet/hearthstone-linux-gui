@@ -1,0 +1,9 @@
+[package]
+name = "hearthstone-linux-osx-window-management-stub"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[lib]
+name = "OSXWindowManagement"
+crate-type = ["cdylib"]

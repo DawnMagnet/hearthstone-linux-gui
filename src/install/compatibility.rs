@@ -1,0 +1,117 @@
+use crate::{Locale, Region};
+use anyhow::{Context, Result};
+use std::path::{Path, PathBuf};
+
+pub fn install_compatibility_files(game_dir: &Path, region: Region, locale: Locale) -> Result<()> {
+    let config = include_str!("../../assets/client.config.in")
+        .replace("{{region}}", region.as_str())
+        .replace("{{locale}}", locale.as_str());
+    std::fs::write(game_dir.join("client.config"), config)?;
+
+    let stubs = stub_files()?;
+    let frameworks = game_dir
+        .join("Bin/Hearthstone_Data/Plugins/System/Library/Frameworks/CoreFoundation.framework");
+    std::fs::create_dir_all(&frameworks)?;
+    copy_required(
+        &stubs.core_foundation,
+        &frameworks.join("CoreFoundation.so"),
+    )?;
+    copy_required(
+        &stubs.osx_window_management,
+        &game_dir.join("Bin/Hearthstone_Data/Plugins/libOSXWindowManagement.so"),
+    )?;
+    copy_required(
+        &stubs.blz_commerce_sdk_plugin,
+        &game_dir.join("Bin/Hearthstone_Data/Plugins/libblz_commerce_sdk_plugin.so"),
+    )?;
+    Ok(())
+}
+
+struct StubFiles {
+    core_foundation: PathBuf,
+    osx_window_management: PathBuf,
+    blz_commerce_sdk_plugin: PathBuf,
+}
+
+fn copy_required(from: &Path, to: &Path) -> Result<()> {
+    if let Some(parent) = to.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::copy(from, to)
+        .with_context(|| format!("failed to copy {} to {}", from.display(), to.display()))?;
+    Ok(())
+}
+
+fn resource_dir() -> Result<PathBuf> {
+    if let Ok(path) = std::env::var("HEARTHSTONE_LINUX_RESOURCES") {
+        return Ok(PathBuf::from(path));
+    }
+
+    let exe = std::env::current_exe()?;
+    if let Some(prefix) = exe.parent().and_then(|bin| bin.parent()) {
+        let share = prefix.join("share/hearthstone-linux");
+        if share.exists() {
+            return Ok(share);
+        }
+    }
+
+    anyhow::bail!("could not locate hearthstone-linux resources")
+}
+
+fn stub_files() -> Result<StubFiles> {
+    if let Ok(path) = std::env::var("HEARTHSTONE_LINUX_STUBS") {
+        return stub_files_in(PathBuf::from(path));
+    }
+
+    if let Ok(resources) = resource_dir() {
+        let stubs = resources.join("stubs");
+        if stubs.exists() {
+            return stub_files_in(stubs);
+        }
+    }
+
+    if let Some(stubs) = dev_stub_files()? {
+        return Ok(stubs);
+    }
+
+    anyhow::bail!("could not locate hearthstone-linux stub libraries")
+}
+
+fn stub_files_in(dir: PathBuf) -> Result<StubFiles> {
+    let files = StubFiles {
+        core_foundation: dir.join("CoreFoundation.so"),
+        osx_window_management: dir.join("libOSXWindowManagement.so"),
+        blz_commerce_sdk_plugin: dir.join("libblz_commerce_sdk_plugin.so"),
+    };
+    if files.core_foundation.exists()
+        && files.osx_window_management.exists()
+        && files.blz_commerce_sdk_plugin.exists()
+    {
+        return Ok(files);
+    }
+
+    anyhow::bail!("stub libraries are missing from {}", dir.display())
+}
+
+fn dev_stub_files() -> Result<Option<StubFiles>> {
+    let exe = std::env::current_exe()?;
+    let Some(profile_dir) = exe.parent() else {
+        return Ok(None);
+    };
+
+    for dir in [profile_dir, &profile_dir.join("deps")] {
+        let files = StubFiles {
+            core_foundation: dir.join("libCoreFoundation.so"),
+            osx_window_management: dir.join("libOSXWindowManagement.so"),
+            blz_commerce_sdk_plugin: dir.join("libblz_commerce_sdk_plugin.so"),
+        };
+        if files.core_foundation.exists()
+            && files.osx_window_management.exists()
+            && files.blz_commerce_sdk_plugin.exists()
+        {
+            return Ok(Some(files));
+        }
+    }
+
+    Ok(None)
+}

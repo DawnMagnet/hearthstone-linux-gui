@@ -1,4 +1,5 @@
 hearthstone/
-login/login
-stubs/*.so
-token/Token.exe
+target/
+AppDir/
+result
+*.AppImage

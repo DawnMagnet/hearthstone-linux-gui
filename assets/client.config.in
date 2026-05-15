@@ -1,0 +1,4 @@
+Aurora.ClientCheck=false
+Aurora.Env.Override=1
+Aurora.Env={{region}}.actual.battle.net
+Localization.Locale={{locale}}
