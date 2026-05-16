@@ -109,10 +109,10 @@ impl ArchiveMap {
             size = item.size,
             "fetching file from archive"
         );
-        let archive = cdn.fetch_data(&item.archive_key, false).await?;
-        let end = item.offset + item.size;
-        anyhow::ensure!(end <= archive.len(), "archive item exceeds archive size");
-        let decoded = blte::decode(&archive[item.offset..end], key, verify)?;
+        let encoded = cdn
+            .fetch_data_range(&item.archive_key, item.offset, item.size)
+            .await?;
+        let decoded = blte::decode(&encoded, key, verify)?;
         trace!(
             key = %key,
             archive_key = %item.archive_key,

@@ -13,6 +13,7 @@ use hearthstone_linux::{
 };
 use std::{
     cell::{Cell, RefCell},
+    process::Child,
     rc::Rc,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -129,6 +130,7 @@ fn build_window(app: &adw::Application) {
     update_login_button(&login, &paths);
     let login_waiting = Rc::new(Cell::new(false));
     let install_cancel = Rc::new(RefCell::new(None::<Arc<AtomicBool>>));
+    let running_game = Rc::new(RefCell::new(None::<Child>));
 
     {
         let config = config.clone();
@@ -332,14 +334,71 @@ fn build_window(app: &adw::Application) {
     {
         let paths = paths.clone();
         let config = config.clone();
+        let status = status.clone();
+        let launch_button = launch.clone();
+        let running_game = running_game.clone();
         launch.connect_clicked(move |_| {
+            if let Some(child) = running_game.borrow_mut().as_mut() {
+                tracing::info!("game stop requested from UI");
+                match child.kill() {
+                    Ok(()) => {
+                        set_launch_stopping(&launch_button);
+                        status.set_text("Stopping game");
+                    }
+                    Err(error) => {
+                        tracing::error!(error = %error, "failed to stop game");
+                        status.set_text(&format!("Failed to stop game: {error}"));
+                    }
+                }
+                return;
+            }
+
             let game_dir = config
                 .borrow()
                 .game_dir
                 .clone()
                 .unwrap_or(paths.game_dir.clone());
             tracing::info!(game_dir = %game_dir.display(), "launch requested from UI");
-            let _ = launcher::launch_game(&game_dir);
+            match launcher::launch_game(&game_dir) {
+                Ok(child) => {
+                    status.set_text("Game running");
+                    set_launch_running(&launch_button);
+                    *running_game.borrow_mut() = Some(child);
+
+                    let status = status.clone();
+                    let launch_button = launch_button.clone();
+                    let running_game = running_game.clone();
+                    glib::timeout_add_local(std::time::Duration::from_secs(1), move || {
+                        let mut game = running_game.borrow_mut();
+                        let Some(child) = game.as_mut() else {
+                            set_launch_idle(&launch_button);
+                            return glib::ControlFlow::Break;
+                        };
+
+                        match child.try_wait() {
+                            Ok(Some(exit)) => {
+                                tracing::info!(status = %exit, "game exited");
+                                status.set_text("Game stopped");
+                                *game = None;
+                                set_launch_idle(&launch_button);
+                                glib::ControlFlow::Break
+                            }
+                            Ok(None) => glib::ControlFlow::Continue,
+                            Err(error) => {
+                                tracing::error!(error = %error, "failed to poll game process");
+                                status.set_text(&format!("Game status error: {error}"));
+                                *game = None;
+                                set_launch_idle(&launch_button);
+                                glib::ControlFlow::Break
+                            }
+                        }
+                    });
+                }
+                Err(error) => {
+                    tracing::error!(error = %format!("{error:#}"), "launch failed");
+                    status.set_text(&format!("Launch failed: {error:#}"));
+                }
+            }
         });
     }
 
@@ -417,6 +476,27 @@ fn set_login_waiting(button: &gtk::Button) {
     button.set_label("Stop");
     button.remove_css_class("suggested-action");
     button.add_css_class("destructive-action");
+}
+
+fn set_launch_idle(button: &gtk::Button) {
+    button.set_sensitive(true);
+    button.set_label("Play");
+    button.remove_css_class("destructive-action");
+    button.add_css_class("suggested-action");
+}
+
+fn set_launch_running(button: &gtk::Button) {
+    button.set_sensitive(true);
+    button.set_label("Stop");
+    button.remove_css_class("suggested-action");
+    button.add_css_class("destructive-action");
+}
+
+fn set_launch_stopping(button: &gtk::Button) {
+    button.set_label("Stopping...");
+    button.remove_css_class("suggested-action");
+    button.add_css_class("destructive-action");
+    button.set_sensitive(false);
 }
 
 fn mark_logged_in(paths: &AppPaths, config: &Rc<RefCell<AppConfig>>) {

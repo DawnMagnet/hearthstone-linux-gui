@@ -112,8 +112,18 @@ impl InstallManager {
             fraction: Some(0.98),
         });
         debug!("installing Unity player");
-        let unity_version =
-            unity::ensure_unity_player(&self.paths.game_dir, &self.paths.unity_cache_dir).await?;
+        let unity_version = unity::ensure_unity_player_with_progress(
+            &self.paths.game_dir,
+            &self.paths.unity_cache_dir,
+            cancel.clone(),
+            |download| {
+                event(TaskEvent::Progress {
+                    message: format_unity_download_progress(&download),
+                    fraction: download.fraction().map(|value| 0.97 + value * 0.02),
+                })
+            },
+        )
+        .await?;
         config.unity_version = Some(unity_version);
         check_cancelled(cancel.as_ref())?;
 
@@ -141,6 +151,47 @@ fn check_cancelled(cancel: Option<&Arc<AtomicBool>>) -> Result<()> {
         anyhow::bail!("installation cancelled");
     }
     Ok(())
+}
+
+fn format_unity_download_progress(progress: &unity::UnityDownloadProgress) -> String {
+    let action = if progress.resumed {
+        "Resuming Unity download"
+    } else {
+        "Downloading Unity"
+    };
+    let downloaded = format_bytes(progress.downloaded as f64);
+    let speed = if progress.speed_bytes_per_second > 0.0 {
+        format!(" at {}/s", format_bytes(progress.speed_bytes_per_second))
+    } else {
+        String::new()
+    };
+
+    match progress.total {
+        Some(total) if total > 0 => format!(
+            "{action}: {downloaded}/{}{speed}",
+            format_bytes(total as f64)
+        ),
+        _ => format!("{action}: {downloaded}{speed}"),
+    }
+}
+
+fn format_bytes(bytes: f64) -> String {
+    const UNITS: [&str; 4] = ["B", "KiB", "MiB", "GiB"];
+    let mut value = bytes;
+    let mut unit = UNITS[0];
+    for candidate in UNITS.iter().skip(1) {
+        if value < 1024.0 {
+            break;
+        }
+        value /= 1024.0;
+        unit = candidate;
+    }
+
+    if unit == "B" {
+        format!("{value:.0} {unit}")
+    } else {
+        format!("{value:.1} {unit}")
+    }
 }
 
 async fn cleanup_installation(game_dir: &std::path::Path) -> Result<()> {

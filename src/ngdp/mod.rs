@@ -352,7 +352,13 @@ impl NgdpClient {
             has_archive = has_archive,
             "fetching install entry"
         );
-        if let Some(encoded) = cdn.fetch_data_optional_unverified(encoding_key).await? {
+        let loose_data = if has_archive {
+            cdn.read_data_cache_unverified(encoding_key).await?
+        } else {
+            cdn.fetch_data_optional_unverified(encoding_key).await?
+        };
+
+        if let Some(encoded) = loose_data {
             if let Ok(decoded) =
                 decode_install_entry(&encoded, encoding_key, content_key, path, verify)
             {

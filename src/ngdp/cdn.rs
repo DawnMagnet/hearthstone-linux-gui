@@ -1,7 +1,7 @@
 use super::{partition_hash, verify_md5};
 use anyhow::{Context, Result};
 use std::{
-    io::ErrorKind,
+    io::{ErrorKind, SeekFrom},
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -9,6 +9,7 @@ use std::{
     },
     time::{Duration, Instant},
 };
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tracing::{debug, trace, warn};
 use url::Url;
 
@@ -100,6 +101,26 @@ impl RemoteCdn {
             .await
     }
 
+    pub async fn fetch_data_range(&self, key: &str, offset: usize, size: usize) -> Result<Vec<u8>> {
+        if let Some(data) = self.read_cached_range("data", key, offset, size).await? {
+            trace!(
+                namespace = "data",
+                key = %key,
+                offset = offset,
+                bytes = data.len(),
+                "cache range hit"
+            );
+            return Ok(data);
+        }
+
+        let data = self.fetch_data(key, false).await?;
+        let end = offset
+            .checked_add(size)
+            .context("requested CDN data range overflows")?;
+        anyhow::ensure!(end <= data.len(), "CDN data range exceeds file size");
+        Ok(data[offset..end].to_vec())
+    }
+
     pub async fn fetch_data_optional(&self, key: &str, verify: bool) -> Result<Option<Vec<u8>>> {
         if let Some(data) = self.read_cached("data", key).await? {
             if !verify || data_md5_matches(&data, key) {
@@ -132,6 +153,15 @@ impl RemoteCdn {
 
         let path = format!("/data/{}", partition_hash(key)?);
         self.fetch_joined_optional(&self.data_base, &path).await
+    }
+
+    pub async fn read_data_cache_unverified(&self, key: &str) -> Result<Option<Vec<u8>>> {
+        if let Some(data) = self.read_cached("data", key).await? {
+            trace!(namespace = "data", key = %key, bytes = data.len(), "unverified cache hit");
+            return Ok(Some(data));
+        }
+
+        Ok(None)
     }
 
     pub async fn cache_data(&self, key: &str, data: &[u8]) {
@@ -211,6 +241,7 @@ impl RemoteCdn {
                 Err(error) => {
                     warn!(url = %url, attempt = attempt, error = %format!("{error:#}"), "CDN fetch attempt failed");
                     last_error = Some(error);
+                    self.check_cancelled()?;
                     if attempt < 5 {
                         tokio::time::sleep(Duration::from_secs(attempt)).await;
                     }
@@ -241,7 +272,10 @@ impl RemoteCdn {
                 }
                 Ok(Ok(None)) => break,
                 Ok(Err(error)) => return Err(error.into()),
-                Err(_) => anyhow::bail!("connection stalled, no data received for {}s", idle_timeout.as_secs()),
+                Err(_) => anyhow::bail!(
+                    "connection stalled, no data received for {}s",
+                    idle_timeout.as_secs()
+                ),
             }
         }
         self.check_cancelled()?;
@@ -276,6 +310,80 @@ impl RemoteCdn {
                 Ok(None)
             }
         }
+    }
+
+    async fn read_cached_range(
+        &self,
+        namespace: &str,
+        key: &str,
+        offset: usize,
+        size: usize,
+    ) -> Result<Option<Vec<u8>>> {
+        let Some(path) = self.cache_path(namespace, key)? else {
+            return Ok(None);
+        };
+        let end = offset
+            .checked_add(size)
+            .context("requested cache range overflows")?;
+        let offset_u64 = u64::try_from(offset).context("cache range offset is too large")?;
+        let end_u64 = u64::try_from(end).context("cache range end is too large")?;
+
+        let mut file = match tokio::fs::File::open(&path).await {
+            Ok(file) => file,
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+            Err(_) => {
+                warn!(path = %path.display(), "failed to open cache file; removing it");
+                let _ = tokio::fs::remove_file(&path).await;
+                return Ok(None);
+            }
+        };
+
+        match file.metadata().await {
+            Ok(metadata) if end_u64 <= metadata.len() => {}
+            Ok(metadata) => {
+                warn!(
+                    path = %path.display(),
+                    offset = offset,
+                    bytes = size,
+                    file_bytes = metadata.len(),
+                    "cache file is too short for requested range; removing it"
+                );
+                let _ = tokio::fs::remove_file(&path).await;
+                return Ok(None);
+            }
+            Err(_) => {
+                warn!(path = %path.display(), "failed to stat cache file; removing it");
+                let _ = tokio::fs::remove_file(&path).await;
+                return Ok(None);
+            }
+        }
+
+        let mut data = vec![0; size];
+        if file.seek(SeekFrom::Start(offset_u64)).await.is_err()
+            || file.read_exact(&mut data).await.is_err()
+        {
+            warn!(
+                path = %path.display(),
+                offset = offset,
+                bytes = size,
+                "failed to read cache range; removing it"
+            );
+            let _ = tokio::fs::remove_file(&path).await;
+            return Ok(None);
+        }
+
+        trace!(
+            path = %path.display(),
+            offset = offset,
+            bytes = data.len(),
+            "read cache file range"
+        );
+        self.record_transfer(TransferStats {
+            bytes: data.len(),
+            elapsed: Duration::ZERO,
+            from_cache: true,
+        });
+        Ok(Some(data))
     }
 
     async fn write_cached(&self, namespace: &str, key: &str, data: &[u8]) {
@@ -366,5 +474,46 @@ fn format_bytes(bytes: f64) -> String {
         format!("{value:.0} {unit}")
     } else {
         format!("{value:.1} {unit}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RemoteCdn;
+
+    fn cached_test_cdn(cache_dir: &std::path::Path) -> RemoteCdn {
+        RemoteCdn::from_forced_url(reqwest::Client::new(), "https://example.com/tpr/hs")
+            .unwrap()
+            .with_cache_dir(cache_dir)
+    }
+
+    #[tokio::test]
+    async fn read_cached_range_returns_requested_slice() {
+        let temp = tempfile::tempdir().unwrap();
+        let cdn = cached_test_cdn(temp.path());
+        let key = "0123456789abcdef";
+        cdn.cache_data(key, b"0123456789").await;
+
+        let data = cdn
+            .read_cached_range("data", key, 2, 5)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(data, b"23456");
+    }
+
+    #[tokio::test]
+    async fn read_cached_range_removes_short_cache_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let cdn = cached_test_cdn(temp.path());
+        let key = "0123456789abcdef";
+        cdn.cache_data(key, b"short").await;
+        let path = cdn.cache_path("data", key).unwrap().unwrap();
+
+        let data = cdn.read_cached_range("data", key, 2, 8).await.unwrap();
+
+        assert!(data.is_none());
+        assert!(!path.exists());
     }
 }
