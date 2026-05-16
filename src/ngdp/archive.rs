@@ -1,6 +1,7 @@
 use super::{blte, cdn::RemoteCdn, configfile::CdnConfig, verify_md5};
 use anyhow::{Context, Result};
 use std::collections::HashMap;
+use tracing::{debug, trace};
 
 #[derive(Clone, Debug)]
 struct ArchiveItem {
@@ -42,6 +43,11 @@ impl ArchiveMap {
         mut progress: impl FnMut(String, Option<f64>),
     ) -> Result<Self> {
         let mut map = HashMap::new();
+        debug!(
+            archive_group = %config.archive_group,
+            archive_count = config.archives.len(),
+            "loading archive map"
+        );
         for (idx, archive_key) in config.archives.iter().enumerate() {
             let fraction = if config.archives.is_empty() {
                 1.0
@@ -69,6 +75,11 @@ impl ArchiveMap {
             }
             let parsed = ArchiveIndex::parse(&index, archive_key, verify)
                 .with_context(|| format!("failed to parse index for archive {archive_key}"))?;
+            debug!(
+                archive_key = %archive_key,
+                item_count = parsed.items.len(),
+                "parsed archive index"
+            );
             for item in parsed.items {
                 map.insert(
                     item.key,
@@ -81,6 +92,7 @@ impl ArchiveMap {
             }
         }
         progress("Archive indices ready".into(), Some(1.0));
+        debug!(item_count = map.len(), "archive map ready");
 
         Ok(Self { items: map })
     }
@@ -90,10 +102,25 @@ impl ArchiveMap {
             .items
             .get(key)
             .context("file is not present in archive map")?;
+        debug!(
+            key = %key,
+            archive_key = %item.archive_key,
+            offset = item.offset,
+            size = item.size,
+            "fetching file from archive"
+        );
         let archive = cdn.fetch_data(&item.archive_key, false).await?;
         let end = item.offset + item.size;
         anyhow::ensure!(end <= archive.len(), "archive item exceeds archive size");
-        blte::decode(&archive[item.offset..end], key, verify)
+        let decoded = blte::decode(&archive[item.offset..end], key, verify)?;
+        trace!(
+            key = %key,
+            archive_key = %item.archive_key,
+            encoded_bytes = item.size,
+            decoded_bytes = decoded.len(),
+            "decoded archive file"
+        );
+        Ok(decoded)
     }
 
     pub fn contains(&self, key: &str) -> bool {
@@ -125,6 +152,15 @@ impl ArchiveIndex {
         let size_size = footer[13] as usize;
         let key_size = footer[14] as usize;
         let num_items = u32::from_le_bytes(footer[16..20].try_into().unwrap()) as usize;
+        trace!(
+            key = %key,
+            block_size_kb = block_size_kb,
+            offset_size = offset_size,
+            size_size = size_size,
+            key_size = key_size,
+            num_items = num_items,
+            "archive index footer parsed"
+        );
 
         anyhow::ensure!(
             key_size == 16 && size_size == 4 && offset_size == 4,

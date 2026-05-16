@@ -41,10 +41,12 @@ struct Args {
 }
 
 fn main() -> Result<()> {
+    let _log_guard = hearthstone_linux::logging::init();
     let args = Args::parse();
     let callback = args.auth_callback.or(args.uri);
 
     if let Some(uri) = callback {
+        tracing::info!("handling auth callback");
         let paths = hearthstone_linux::paths::AppPaths::discover()?;
         let mut config = hearthstone_linux::AppConfig::load_or_default(&paths.config_file)?;
         let game_dir = config.game_dir.clone().unwrap_or(paths.game_dir);
@@ -67,6 +69,7 @@ fn main() -> Result<()> {
     }
 
     if let Some(token) = args.write_token {
+        tracing::info!("writing token from command line");
         let paths = hearthstone_linux::paths::AppPaths::discover()?;
         let mut config = hearthstone_linux::AppConfig::load_or_default(&paths.config_file)?;
         let game_dir = config.game_dir.clone().unwrap_or(paths.game_dir);
@@ -82,6 +85,11 @@ fn main() -> Result<()> {
     }
 
     if args.install {
+        tracing::info!(
+            region = args.region.map(|region| region.as_str()),
+            locale = args.locale.map(|locale| locale.as_str()),
+            "starting command-line install"
+        );
         let paths = hearthstone_linux::paths::AppPaths::discover()?;
         let mut config = hearthstone_linux::AppConfig::load_or_default(&paths.config_file)?;
         if let Some(region) = args.region {
@@ -110,11 +118,15 @@ fn main() -> Result<()> {
             hearthstone_linux::install::manager::TaskEvent::Failed(message) => {
                 eprintln!("Failed: {message}")
             }
+            hearthstone_linux::install::manager::TaskEvent::Cancelled(message) => {
+                eprintln!("{message}")
+            }
         }))?;
         return Ok(());
     }
 
     if args.launch {
+        tracing::info!("launching game from command line");
         let paths = hearthstone_linux::paths::AppPaths::discover()?;
         let config = hearthstone_linux::AppConfig::load_or_default(&paths.config_file)?;
         let game_dir = config.game_dir.unwrap_or(paths.game_dir);
@@ -123,12 +135,14 @@ fn main() -> Result<()> {
     }
 
     if args.no_gui {
+        tracing::info!("no-gui smoke check");
         println!("hearthstone-linux core is available");
         return Ok(());
     }
 
     #[cfg(feature = "gui")]
     {
+        tracing::info!("starting GUI");
         ui::run();
         Ok(())
     }

@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use std::{path::Path, process::Command};
+use tracing::info;
 
 pub fn launch_game(game_dir: &Path) -> Result<()> {
     let exe = game_dir.join("Bin/Hearthstone.x86_64");
@@ -10,6 +11,7 @@ pub fn launch_game(game_dir: &Path) -> Result<()> {
         "client.config is missing"
     );
 
+    info!(exe = %exe.display(), game_dir = %game_dir.display(), "launching Hearthstone");
     Command::new(exe)
         .current_dir(game_dir)
         .spawn()

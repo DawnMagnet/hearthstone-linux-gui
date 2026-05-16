@@ -1,8 +1,15 @@
 use crate::{Locale, Region};
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
+use tracing::{debug, info};
 
 pub fn install_compatibility_files(game_dir: &Path, region: Region, locale: Locale) -> Result<()> {
+    info!(
+        game_dir = %game_dir.display(),
+        region = %region,
+        locale = %locale,
+        "installing compatibility files"
+    );
     let config = include_str!("../../assets/client.config.in")
         .replace("{{region}}", region.as_str())
         .replace("{{locale}}", locale.as_str());
@@ -34,6 +41,7 @@ struct StubFiles {
 }
 
 fn copy_required(from: &Path, to: &Path) -> Result<()> {
+    debug!(from = %from.display(), to = %to.display(), "copying compatibility file");
     if let Some(parent) = to.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -44,6 +52,7 @@ fn copy_required(from: &Path, to: &Path) -> Result<()> {
 
 fn resource_dir() -> Result<PathBuf> {
     if let Ok(path) = std::env::var("HEARTHSTONE_LINUX_RESOURCES") {
+        debug!(path = %path, "using resources from environment");
         return Ok(PathBuf::from(path));
     }
 
@@ -51,6 +60,7 @@ fn resource_dir() -> Result<PathBuf> {
     if let Some(prefix) = exe.parent().and_then(|bin| bin.parent()) {
         let share = prefix.join("share/hearthstone-linux");
         if share.exists() {
+            debug!(path = %share.display(), "using installed resources");
             return Ok(share);
         }
     }
@@ -60,17 +70,20 @@ fn resource_dir() -> Result<PathBuf> {
 
 fn stub_files() -> Result<StubFiles> {
     if let Ok(path) = std::env::var("HEARTHSTONE_LINUX_STUBS") {
+        debug!(path = %path, "using stubs from environment");
         return stub_files_in(PathBuf::from(path));
     }
 
     if let Ok(resources) = resource_dir() {
         let stubs = resources.join("stubs");
         if stubs.exists() {
+            debug!(path = %stubs.display(), "using installed stubs");
             return stub_files_in(stubs);
         }
     }
 
     if let Some(stubs) = dev_stub_files()? {
+        debug!("using development stub libraries");
         return Ok(stubs);
     }
 

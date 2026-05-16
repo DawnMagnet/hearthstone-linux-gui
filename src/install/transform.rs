@@ -1,12 +1,15 @@
 use anyhow::Result;
 use std::path::Path;
+use tracing::{debug, info};
 
 pub fn transform_macos_installation(game_dir: &Path) -> Result<()> {
     let app = game_dir.join("Hearthstone.app");
     if !app.exists() {
+        debug!(game_dir = %game_dir.display(), "macOS layout already transformed");
         return Ok(());
     }
 
+    info!(game_dir = %game_dir.display(), "transforming macOS layout");
     let data_dir = game_dir.join("Bin/Hearthstone_Data");
     std::fs::create_dir_all(game_dir.join("Bin"))?;
     rename_or_copy(&app.join("Contents/Resources/Data"), &data_dir)?;
@@ -25,6 +28,7 @@ pub fn transform_macos_installation(game_dir: &Path) -> Result<()> {
 }
 
 fn rename_or_copy(from: &Path, to: &Path) -> Result<()> {
+    debug!(from = %from.display(), to = %to.display(), "moving install path");
     if let Some(parent) = to.parent() {
         std::fs::create_dir_all(parent)?;
     }

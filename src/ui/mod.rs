@@ -14,10 +14,14 @@ use hearthstone_linux::{
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
-    sync::mpsc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc, Arc,
+    },
 };
 
 pub fn run() {
+    tracing::debug!("creating GTK application");
     let app = adw::Application::builder()
         .application_id("io.github.hearthstone_linux")
         .flags(gio::ApplicationFlags::HANDLES_OPEN)
@@ -44,6 +48,7 @@ fn configure_color_scheme() {
 }
 
 fn build_window(app: &adw::Application) {
+    tracing::debug!("building main window");
     let paths = Rc::new(AppPaths::discover().expect("XDG paths are required"));
     let config = Rc::new(RefCell::new(
         AppConfig::load_or_default(&paths.config_file).unwrap_or_default(),
@@ -123,6 +128,7 @@ fn build_window(app: &adw::Application) {
     update_status(&status, &version, &paths);
     update_login_button(&login, &paths);
     let login_waiting = Rc::new(Cell::new(false));
+    let install_cancel = Rc::new(RefCell::new(None::<Arc<AtomicBool>>));
 
     {
         let config = config.clone();
@@ -153,8 +159,25 @@ fn build_window(app: &adw::Application) {
         let version = version.clone();
         let progress = progress.clone();
         let install_button = install.clone();
+        let install_cancel = install_cancel.clone();
         install.connect_clicked(move |_| {
-            install_button.set_sensitive(false);
+            if let Some(cancel) = install_cancel.borrow().as_ref() {
+                tracing::info!("install stop requested from UI");
+                cancel.store(true, Ordering::Relaxed);
+                set_install_stopping(&install_button);
+                status.set_text("Stopping installation");
+                return;
+            }
+
+            let install_action = if paths.game_dir.join("Bin/Hearthstone.x86_64").exists() {
+                "Update"
+            } else {
+                "Install"
+            };
+            let cancel = Arc::new(AtomicBool::new(false));
+            *install_cancel.borrow_mut() = Some(cancel.clone());
+            set_install_running(&install_button, install_action);
+            tracing::info!(action = install_action, "install/update requested from UI");
             progress.set_visible(true);
             progress.set_fraction(0.0);
             progress.set_text(Some("0%"));
@@ -163,20 +186,31 @@ fn build_window(app: &adw::Application) {
             let (sender, receiver) = mpsc::channel::<TaskEvent>();
             let paths_for_thread = (*paths).clone();
             let mut config_for_thread = config.borrow().clone();
+            let cancel_for_thread = cancel.clone();
             std::thread::spawn(move || {
                 let manager = InstallManager::new(paths_for_thread);
                 let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
-                let result =
-                    runtime.block_on(manager.install_or_update(&mut config_for_thread, |event| {
+                let result = runtime.block_on(manager.install_or_update_cancellable(
+                    &mut config_for_thread,
+                    |event| {
                         let _ = sender.send(event);
-                    }));
+                    },
+                    cancel_for_thread.clone(),
+                ));
                 if let Err(error) = result {
-                    let _ = sender.send(TaskEvent::Failed(error.to_string()));
+                    tracing::error!(error = %format!("{error:#}"), "install/update failed");
+                    let event = if cancel_for_thread.load(Ordering::Relaxed) {
+                        TaskEvent::Cancelled("Installation cancelled".into())
+                    } else {
+                        TaskEvent::Failed(format!("{error:#}"))
+                    };
+                    let _ = sender.send(event);
                 }
             });
 
             let paths = paths.clone();
             let install_button = install_button.clone();
+            let install_cancel = install_cancel.clone();
             let status = status.clone();
             let version = version.clone();
             let progress = progress.clone();
@@ -198,18 +232,31 @@ fn build_window(app: &adw::Application) {
                             }
                         }
                         TaskEvent::Finished(message) => {
+                            tracing::info!("install/update finished");
                             status.set_text(&message);
                             progress.set_fraction(1.0);
                             progress.set_text(Some("100%"));
                             progress.set_visible(false);
-                            install_button.set_sensitive(true);
+                            *install_cancel.borrow_mut() = None;
+                            set_install_idle(&install_button);
                             update_status(&status, &version, &paths);
                             return glib::ControlFlow::Break;
                         }
                         TaskEvent::Failed(message) => {
+                            tracing::error!(error = %message, "install/update failed in UI");
                             status.set_text(&format!("Failed: {message}"));
                             progress.set_visible(false);
-                            install_button.set_sensitive(true);
+                            *install_cancel.borrow_mut() = None;
+                            set_install_idle(&install_button);
+                            return glib::ControlFlow::Break;
+                        }
+                        TaskEvent::Cancelled(message) => {
+                            tracing::info!("install/update cancelled");
+                            status.set_text(&message);
+                            progress.set_visible(false);
+                            *install_cancel.borrow_mut() = None;
+                            set_install_idle(&install_button);
+                            update_status(&status, &version, &paths);
                             return glib::ControlFlow::Break;
                         }
                     }
@@ -228,6 +275,7 @@ fn build_window(app: &adw::Application) {
         let login_waiting = login_waiting.clone();
         login.connect_clicked(move |_| {
             if login_waiting.get() {
+                tracing::info!("login wait cancelled from UI");
                 login_waiting.set(false);
                 set_login_idle(&login_button, &paths);
                 status.set_text("Login cancelled");
@@ -235,6 +283,7 @@ fn build_window(app: &adw::Application) {
             }
 
             if paths.game_token().exists() {
+                tracing::debug!("login token already exists");
                 mark_logged_in(&paths, &config);
                 status.set_text("Already logged in");
                 update_status(&status, &version, &paths);
@@ -250,6 +299,7 @@ fn build_window(app: &adw::Application) {
             login_waiting.set(true);
             set_login_waiting(&login_button);
             status.set_text("Waiting for browser login");
+            tracing::info!(region = %current.region, "opening browser login");
 
             let _ = gio::AppInfo::launch_default_for_uri(login_url, None::<&gio::AppLaunchContext>);
 
@@ -265,6 +315,7 @@ fn build_window(app: &adw::Application) {
                 }
 
                 if paths.game_token().exists() {
+                    tracing::info!("browser login completed");
                     login_waiting.set(false);
                     mark_logged_in(&paths, &config);
                     status.set_text("Login complete");
@@ -287,6 +338,7 @@ fn build_window(app: &adw::Application) {
                 .game_dir
                 .clone()
                 .unwrap_or(paths.game_dir.clone());
+            tracing::info!(game_dir = %game_dir.display(), "launch requested from UI");
             let _ = launcher::launch_game(&game_dir);
         });
     }
@@ -297,6 +349,7 @@ fn build_window(app: &adw::Application) {
         let version = version.clone();
         let login = login.clone();
         refresh.connect_clicked(move |_| {
+            tracing::debug!("refresh requested from UI");
             update_status(&status, &version, &paths);
             update_login_button(&login, &paths);
         });
@@ -331,6 +384,27 @@ fn update_login_button(button: &gtk::Button, paths: &AppPaths) {
     } else {
         set_login_idle(button, paths);
     }
+}
+
+fn set_install_idle(button: &gtk::Button) {
+    button.set_sensitive(true);
+    button.set_label("Install / Update");
+    button.remove_css_class("destructive-action");
+    button.add_css_class("suggested-action");
+}
+
+fn set_install_running(button: &gtk::Button, action: &str) {
+    button.set_sensitive(true);
+    button.set_label(&format!("Stop {action}"));
+    button.remove_css_class("suggested-action");
+    button.add_css_class("destructive-action");
+}
+
+fn set_install_stopping(button: &gtk::Button) {
+    button.set_label("Stopping...");
+    button.remove_css_class("suggested-action");
+    button.add_css_class("destructive-action");
+    button.set_sensitive(false);
 }
 
 fn set_login_idle(button: &gtk::Button, _paths: &AppPaths) {

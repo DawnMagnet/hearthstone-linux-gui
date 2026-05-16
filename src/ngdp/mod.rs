@@ -15,8 +15,13 @@ use encoding::EncodingFile;
 use installfile::InstallFile;
 use std::{
     path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     time::Duration,
 };
+use tracing::{debug, info, trace, warn};
 
 #[derive(Clone, Debug)]
 pub struct VersionInfo {
@@ -65,8 +70,7 @@ impl NgdpClient {
     pub fn new() -> Self {
         Self {
             http: reqwest::Client::builder()
-                .connect_timeout(Duration::from_secs(10))
-                .timeout(Duration::from_secs(30))
+                .connect_timeout(Duration::from_secs(30))
                 .build()
                 .expect("reqwest client"),
             cache_dir: None,
@@ -83,8 +87,20 @@ impl NgdpClient {
 
         for url in version_urls() {
             match self.fetch_latest_version(region, &url).await {
-                Ok(version) => return Ok(version),
-                Err(error) => errors.push(format!("{url}: {error:#}")),
+                Ok(version) => {
+                    info!(
+                        region = %region,
+                        source = %url,
+                        version = %version.version_name,
+                        build_id = %version.build_id,
+                        "found latest version"
+                    );
+                    return Ok(version);
+                }
+                Err(error) => {
+                    warn!(region = %region, source = %url, error = %format!("{error:#}"), "version metadata fetch failed");
+                    errors.push(format!("{url}: {error:#}"));
+                }
             }
         }
 
@@ -106,6 +122,7 @@ impl NgdpClient {
             .text()
             .await
             .with_context(|| format!("failed to read response from {url}"))?;
+        debug!(region = %region, source = %url, bytes = text.len(), "read version metadata");
         let psv = psv::PsvFile::parse(&text)?;
 
         psv.rows
@@ -128,15 +145,51 @@ impl NgdpClient {
         out_dir: &Path,
         mut progress: impl FnMut(ProgressUpdate) + Send,
     ) -> Result<VersionInfo> {
+        self.install_latest_with_cancel(options, out_dir, &mut progress, None)
+            .await
+    }
+
+    pub async fn install_latest_cancellable(
+        &self,
+        options: &InstallOptions,
+        out_dir: &Path,
+        mut progress: impl FnMut(ProgressUpdate) + Send,
+        cancel: Option<Arc<AtomicBool>>,
+    ) -> Result<VersionInfo> {
+        self.install_latest_with_cancel(options, out_dir, &mut progress, cancel)
+            .await
+    }
+
+    async fn install_latest_with_cancel(
+        &self,
+        options: &InstallOptions,
+        out_dir: &Path,
+        progress: &mut (impl FnMut(ProgressUpdate) + Send),
+        cancel: Option<Arc<AtomicBool>>,
+    ) -> Result<VersionInfo> {
+        check_cancelled(cancel.as_ref())?;
+        info!(
+            region = %options.region,
+            locale = %options.locale,
+            out_dir = %out_dir.display(),
+            verify = options.verify,
+            "starting NGDP install"
+        );
         progress(ProgressUpdate::new(
             "Checking latest Hearthstone version",
             0.02,
         ));
         let version = self.latest_version(options.region).await?;
+        check_cancelled(cancel.as_ref())?;
+
         let mut cdn = RemoteCdn::from_forced_url(self.http.clone(), options.region.default_cdn())?;
         if let Some(cache_dir) = &self.cache_dir {
             cdn = cdn.with_cache_dir(cache_dir);
         }
+        if let Some(cancel) = &cancel {
+            cdn = cdn.with_cancel_token(cancel.clone());
+        }
+        debug!(cdn = %options.region.default_cdn(), "configured CDN");
 
         progress(ProgressUpdate::new(
             format!("Fetching build config {}", version.build_config),
@@ -146,6 +199,17 @@ impl NgdpClient {
             &cdn.fetch_config(&version.build_config, options.verify)
                 .await?,
         )?;
+        debug!(
+            build = %version.build_config,
+            build_name = %build_config.build_name,
+            root = %build_config.root,
+            install_content = %build_config.install.content_key,
+            install_encoding = %build_config.install.encoding_key,
+            encoding_content = %build_config.encoding.content_key,
+            encoding_key = %build_config.encoding.encoding_key,
+            "parsed build config"
+        );
+        check_cancelled(cancel.as_ref())?;
 
         progress(ProgressUpdate::new(
             format!("Fetching CDN config {}", version.cdn_config),
@@ -155,19 +219,33 @@ impl NgdpClient {
             &cdn.fetch_config(&version.cdn_config, options.verify)
                 .await?,
         )?;
+        debug!(
+            cdn_config = %version.cdn_config,
+            archive_group = %cdn_config.archive_group,
+            archive_count = cdn_config.archives.len(),
+            "parsed CDN config"
+        );
+        check_cancelled(cancel.as_ref())?;
 
         progress(ProgressUpdate::new("Fetching encoding table", 0.14));
         let encoding = self
             .fetch_encoding(&cdn, &build_config, options.verify)
             .await?;
+        check_cancelled(cancel.as_ref())?;
 
         progress(ProgressUpdate::new("Fetching install manifest", 0.18));
         let install = self
             .fetch_install_manifest(&cdn, &build_config, &encoding, options.verify)
             .await?;
+        check_cancelled(cancel.as_ref())?;
 
         let tags = ["OSX", options.locale.as_str(), "Production"];
         let entries = install.filter_entries(&tags)?;
+        info!(
+            tags = ?tags,
+            entries = entries.len(),
+            "filtered install manifest"
+        );
         progress(ProgressUpdate::new(
             format!("Installing {} files", entries.len()),
             0.22,
@@ -181,8 +259,18 @@ impl NgdpClient {
                 ))
             })
             .await?;
+        check_cancelled(cancel.as_ref())?;
 
         for (idx, entry) in entries.iter().enumerate() {
+            check_cancelled(cancel.as_ref())?;
+            trace!(
+                index = idx + 1,
+                total = entries.len(),
+                path = %entry.path,
+                content_key = %entry.content_key,
+                size = entry.size,
+                "installing entry"
+            );
             if idx % 10 == 0 || idx + 1 == entries.len() {
                 let file_fraction = if entries.is_empty() {
                     1.0
@@ -202,6 +290,13 @@ impl NgdpClient {
             let encoding_key = encoding
                 .find_by_content_key(&entry.content_key)
                 .with_context(|| format!("encoding key not found for {}", entry.path))?;
+            trace!(
+                path = %entry.path,
+                content_key = %entry.content_key,
+                encoding_key,
+                in_archive = archive_map.contains(encoding_key),
+                "resolved install entry encoding key"
+            );
             let decoded = self
                 .fetch_install_entry(
                     &cdn,
@@ -213,6 +308,7 @@ impl NgdpClient {
                     archive_map.contains(encoding_key),
                 )
                 .await?;
+            check_cancelled(cancel.as_ref())?;
             if let Some(transfer) = cdn.last_transfer_label() {
                 let file_fraction = if entries.is_empty() {
                     1.0
@@ -249,13 +345,32 @@ impl NgdpClient {
         verify: bool,
         has_archive: bool,
     ) -> Result<Vec<u8>> {
+        trace!(
+            path = %path,
+            encoding_key = %encoding_key,
+            content_key = %content_key,
+            has_archive = has_archive,
+            "fetching install entry"
+        );
         if let Some(encoded) = cdn.fetch_data_optional_unverified(encoding_key).await? {
             if let Ok(decoded) =
                 decode_install_entry(&encoded, encoding_key, content_key, path, verify)
             {
+                trace!(
+                    path = %path,
+                    encoding_key = %encoding_key,
+                    bytes = decoded.len(),
+                    "decoded loose data"
+                );
                 cdn.cache_data(encoding_key, &encoded).await;
                 return Ok(decoded);
             }
+            warn!(
+                path = %path,
+                encoding_key = %encoding_key,
+                content_key = %content_key,
+                "loose data existed but failed decode/verification; removing cache and trying archive"
+            );
             cdn.remove_data_cache(encoding_key).await;
         }
 
@@ -267,6 +382,12 @@ impl NgdpClient {
             .fetch_file(cdn, encoding_key, verify)
             .await
             .with_context(|| format!("archive data missing for {path}"))?;
+        trace!(
+            path = %path,
+            encoding_key = %encoding_key,
+            bytes = decoded.len(),
+            "decoded archive data"
+        );
         verify_md5("installed file", &decoded, content_key, verify)?;
         Ok(decoded)
     }
@@ -287,7 +408,9 @@ impl NgdpClient {
             "build config has no encoding data key"
         );
         let encoded = cdn.fetch_data(&pair.encoding_key, false).await?;
+        debug!(encoding_key = %pair.encoding_key, bytes = encoded.len(), "fetched encoded encoding table");
         let decoded = blte::decode(&encoded, &pair.encoding_key, false)?;
+        debug!(content_key = %pair.content_key, bytes = decoded.len(), "decoded encoding table");
         EncodingFile::parse(&decoded, &pair.content_key, verify)
     }
 
@@ -308,9 +431,23 @@ impl NgdpClient {
                 .to_string()
         };
         let encoded = cdn.fetch_data(&encoding_key, false).await?;
+        debug!(
+            encoding_key = %encoding_key,
+            bytes = encoded.len(),
+            "fetched encoded install manifest"
+        );
         let decoded = blte::decode(&encoded, &encoding_key, false)?;
+        debug!(content_key = %install.content_key, bytes = decoded.len(), "decoded install manifest");
         InstallFile::parse(&decoded, &install.content_key, verify)
     }
+}
+
+fn check_cancelled(cancel: Option<&Arc<AtomicBool>>) -> Result<()> {
+    if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
+        warn!("NGDP install cancelled");
+        anyhow::bail!("installation cancelled");
+    }
+    Ok(())
 }
 
 fn decode_install_entry(

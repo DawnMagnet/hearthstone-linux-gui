@@ -1,23 +1,27 @@
 use anyhow::{Context, Result};
 use serde_json::json;
 use std::{fs::File, path::Path};
+use tracing::{debug, info};
 
 const UNITY_ENGINE: &str =
     "Editor/Data/PlaybackEngines/LinuxStandaloneSupport/Variations/linux64_player_nondevelopment_mono";
 
 pub async fn ensure_unity_player(game_dir: &Path, cache_dir: &Path) -> Result<String> {
     let unity_version = detect_unity_version(&game_dir.join("Bin/Hearthstone_Data/level0"))?;
+    info!(version = %unity_version, "detected required Unity version");
     let marker = game_dir.join(".unity");
     if marker.exists()
         && std::fs::read_to_string(&marker).unwrap_or_default().trim() == unity_version
         && game_dir.join("Bin/Hearthstone.x86_64").exists()
     {
+        debug!(version = %unity_version, "Unity player already installed");
         return Ok(unity_version);
     }
 
     std::fs::create_dir_all(cache_dir)?;
     let unity_root = cache_dir.join(&unity_version).join(UNITY_ENGINE);
     if !unity_root.join("LinuxPlayer").exists() {
+        info!(version = %unity_version, cache_dir = %cache_dir.display(), "Unity player cache miss");
         download_unity(&unity_version, cache_dir).await?;
     }
 
@@ -64,17 +68,25 @@ async fn download_unity(version: &str, cache_dir: &Path) -> Result<()> {
         "https://download.unity3d.com/download_unity/{hash}/LinuxEditorInstaller/Unity.tar.xz"
     );
     let archive_path = cache_dir.join(format!("{version}.tar.xz"));
+    info!(
+        version = %version,
+        url = %url,
+        archive = %archive_path.display(),
+        "downloading Unity archive"
+    );
     let bytes = reqwest::get(&url)
         .await?
         .error_for_status()?
         .bytes()
         .await?;
     tokio::fs::write(&archive_path, bytes).await?;
+    debug!(archive = %archive_path.display(), "extracting Unity archive");
     extract_unity_archive(&archive_path, &cache_dir.join(version))?;
     Ok(())
 }
 
 async fn fetch_unity_archive_hash(version: &str) -> Result<String> {
+    debug!(version = %version, "fetching Unity archive hash");
     let body = json!({
         "operationName": "GetRelease",
         "variables": {
@@ -132,6 +144,7 @@ fn should_extract(path: &Path) -> bool {
 }
 
 fn copy_unity_files(unity_root: &Path, game_dir: &Path) -> Result<()> {
+    info!(unity_root = %unity_root.display(), game_dir = %game_dir.display(), "copying Unity player files");
     let bin = game_dir.join("Bin");
     let data = bin.join("Hearthstone_Data");
     std::fs::create_dir_all(&bin)?;
