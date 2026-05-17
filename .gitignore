@@ -1,6 +1,7 @@
 hearthstone/
 target/
 AppDir/
+dist/
 result
 *.AppImage
 .direnv

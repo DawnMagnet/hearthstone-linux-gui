@@ -29,6 +29,53 @@
               "target"
             ]);
         };
+        hearthstoneRuntime = pkgs.buildFHSEnv {
+          name = "hearthstone-linux-runtime";
+          targetPkgs = pkgs: with pkgs; [
+            alsa-lib
+            at-spi2-atk
+            at-spi2-core
+            cairo
+            cups
+            dbus
+            expat
+            fontconfig
+            freetype
+            gcc.cc.lib
+            gdk-pixbuf
+            glib
+            gtk3
+            libdrm
+            libglvnd
+            libpulseaudio
+            libuuid
+            libxkbcommon
+            libxml2
+            mesa
+            nspr
+            nss
+            openssl
+            pango
+            vulkan-loader
+            wayland
+            libice
+            libsm
+            libx11
+            libxscrnsaver
+            libxcursor
+            libxdamage
+            libxext
+            libxfixes
+            libxi
+            libxinerama
+            libxrandr
+            libxrender
+            libxtst
+            libxxf86vm
+            libxcb
+          ];
+          runScript = "${pkgs.coreutils}/bin/env";
+        };
         nativeBuildInputs = with pkgs; [
           desktop-file-utils
           glib
@@ -57,15 +104,21 @@
           mesa
           pango
         ];
-      in {
-        packages.default = pkgs.rustPlatform.buildRustPackage {
+        packageVersion = "0.1.0";
+        hearthstonePackage = pkgs.rustPlatform.buildRustPackage {
           pname = "hearthstone-linux";
-          version = "0.1.0";
+          version = packageVersion;
           src = source;
           cargoLock.lockFile = ./Cargo.lock;
           inherit nativeBuildInputs buildInputs;
           cargoBuildFlags = [ "--workspace" ];
           cargoTestFlags = [ "--workspace" ];
+
+          preFixup = ''
+            gappsWrapperArgs+=(
+              --set-default HEARTHSTONE_LINUX_RUNNER "${hearthstoneRuntime}/bin/hearthstone-linux-runtime"
+            )
+          '';
 
           postInstall = ''
             target_dir="target/${pkgs.stdenv.hostPlatform.config}/release"
@@ -87,13 +140,256 @@
               $out/share/hearthstone-linux/stubs/libblz_commerce_sdk_plugin.so
           '';
         };
+        appimageTool = pkgs.appimageTools.extractType2 {
+          pname = "appimagetool";
+          version = "12";
+          src = pkgs.fetchurl {
+            url = "https://github.com/AppImage/AppImageKit/releases/download/12/appimagetool-x86_64.AppImage";
+            sha256 = "04ws94q71bwskmhizhwmaf41ma4wabvfgjgkagr8wf3vakgv866r";
+          };
+        };
+        portableRuntimeInputs = with pkgs; [
+          adwaita-icon-theme
+          alsa-lib
+          at-spi2-atk
+          at-spi2-core
+          cairo
+          cups
+          dbus.lib
+          dconf.lib
+          expat
+          fontconfig
+          freetype
+          gcc.cc.lib
+          gdk-pixbuf
+          glib
+          glib-networking
+          glibc
+          graphene
+          gsettings-desktop-schemas
+          gtk4
+          hicolor-icon-theme
+          libadwaita
+          libdrm
+          libepoxy
+          libglvnd
+          libpulseaudio
+          libxkbcommon
+          mesa
+          openssl
+          pango
+          vulkan-loader
+          wayland
+          zlib
+          libice
+          libsm
+          libx11
+          libxscrnsaver
+          libxcursor
+          libxdamage
+          libxext
+          libxfixes
+          libxi
+          libxinerama
+          libxrandr
+          libxrender
+          libxtst
+          libxxf86vm
+          libxcb
+        ];
+        portableLibraryPath = pkgs.lib.makeLibraryPath portableRuntimeInputs;
+        appDir = pkgs.runCommand "hearthstone-linux-AppDir"
+          {
+            nativeBuildInputs = with pkgs; [
+              coreutils
+              desktop-file-utils
+              findutils
+              glib
+              patchelf
+            ];
+          } ''
+          mkdir -p \
+            $out/usr/bin \
+            $out/usr/lib \
+            $out/usr/lib/hearthstone-linux-runtime \
+            $out/usr/share/applications \
+            $out/usr/share/icons/hicolor/scalable/apps \
+            $out/usr/share/metainfo
+
+          install -Dm755 ${hearthstonePackage}/bin/.hearthstone-linux-wrapped \
+            $out/usr/bin/hearthstone-linux
+          cp -a ${hearthstonePackage}/share/. $out/usr/share/
+          install -Dm644 ${./packaging/appimage/io.github.hearthstone_linux.svg} \
+            $out/usr/share/icons/hicolor/scalable/apps/io.github.hearthstone_linux.svg
+          install -Dm755 ${./packaging/appimage/AppRun} $out/AppRun
+
+          ln -s usr/share/applications/io.github.hearthstone_linux.desktop \
+            $out/io.github.hearthstone_linux.desktop
+          ln -s usr/share/icons/hicolor/scalable/apps/io.github.hearthstone_linux.svg \
+            $out/io.github.hearthstone_linux.svg
+
+          IFS=: read -r -a lib_dirs <<< "${portableLibraryPath}"
+          for dir in "''${lib_dirs[@]}"; do
+            if [ -d "$dir" ]; then
+              while IFS= read -r lib; do
+                install -Dm755 "$lib" "$out/usr/lib/$(basename "$lib")"
+              done < <(find "$dir" -maxdepth 1 \( -type f -o -type l \) -name '*.so*')
+            fi
+          done
+
+          for input in ${pkgs.lib.concatStringsSep " " portableRuntimeInputs}; do
+            if [ -d "$input/lib/gio/modules" ]; then
+              mkdir -p $out/usr/lib/gio/modules
+              for module in "$input"/lib/gio/modules/*.so; do
+                [ -e "$module" ] || continue
+                install -Dm755 "$module" "$out/usr/lib/gio/modules/$(basename "$module")"
+              done
+            fi
+            if [ -d "$input/lib/gdk-pixbuf-2.0" ]; then
+              mkdir -p $out/usr/lib/gdk-pixbuf-2.0
+              cp -aL "$input"/lib/gdk-pixbuf-2.0/. $out/usr/lib/gdk-pixbuf-2.0/
+              chmod -R u+w $out/usr/lib/gdk-pixbuf-2.0
+            fi
+            if [ -d "$input/share/glib-2.0/schemas" ]; then
+              mkdir -p $out/usr/share/glib-2.0/schemas
+              cp -L "$input"/share/glib-2.0/schemas/*.xml $out/usr/share/glib-2.0/schemas/ 2>/dev/null || true
+            fi
+            if [ -d "$input/share/gsettings-schemas" ]; then
+              find "$input/share/gsettings-schemas" -path '*/glib-2.0/schemas/*.xml' \
+                -exec cp -L {} $out/usr/share/glib-2.0/schemas/ \;
+            fi
+            if [ -d "$input/share/icons" ]; then
+              mkdir -p $out/usr/share/icons
+              cp -aL "$input"/share/icons/. $out/usr/share/icons/
+              chmod -R u+w $out/usr/share/icons
+            fi
+          done
+
+          if [ -d $out/usr/share/glib-2.0/schemas ]; then
+            glib-compile-schemas $out/usr/share/glib-2.0/schemas
+          fi
+
+          install -Dm755 ${pkgs.glibc.out}/lib/ld-linux-x86-64.so.2 \
+            $out/usr/lib/hearthstone-linux-runtime/ld-linux-x86-64.so.2
+          install -Dm755 ${pkgs.patchelf}/bin/patchelf \
+            $out/usr/lib/hearthstone-linux-runtime/patchelf
+          cat > $out/usr/bin/patchelf <<'EOF'
+          #!/usr/bin/env sh
+          appdir="$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)"
+          lib_path="$appdir/usr/lib:$appdir/usr/lib/hearthstone-linux-runtime''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          exec "$appdir/usr/lib/hearthstone-linux-runtime/ld-linux-x86-64.so.2" \
+            --library-path "$lib_path" \
+            "$appdir/usr/lib/hearthstone-linux-runtime/patchelf" "$@"
+          EOF
+          chmod 755 $out/usr/bin/patchelf
+
+          patchelf --set-rpath '$ORIGIN/../lib:$ORIGIN/../lib/hearthstone-linux-runtime' \
+            $out/usr/bin/hearthstone-linux
+          patchelf --set-rpath '$ORIGIN:$ORIGIN/../../usr/lib:$ORIGIN/../../usr/lib/hearthstone-linux-runtime' \
+            $out/usr/lib/hearthstone-linux-runtime/patchelf
+        '';
+        appImage = pkgs.runCommand "Hearthstone_Linux-x86_64.AppImage"
+          {
+            nativeBuildInputs = with pkgs; [
+              appimageTool
+              coreutils
+            ];
+          } ''
+          mkdir -p $out
+          ARCH=x86_64 ${appimageTool}/usr/bin/appimagetool \
+            ${appDir} $out/Hearthstone_Linux-x86_64.AppImage
+        '';
+        packageFromAppImage = packager: extension:
+          pkgs.runCommand "hearthstone-linux-${extension}"
+            {
+              nativeBuildInputs = with pkgs; [
+                coreutils
+                nfpm
+              ];
+            } ''
+            mkdir -p root/opt/hearthstone-linux root/usr/bin \
+              root/usr/share/applications root/usr/share/icons/hicolor/scalable/apps $out
+
+            install -Dm755 ${appImage}/Hearthstone_Linux-x86_64.AppImage \
+              root/opt/hearthstone-linux/Hearthstone_Linux-x86_64.AppImage
+            install -Dm644 ${./data/io.github.hearthstone_linux.desktop} \
+              root/usr/share/applications/io.github.hearthstone_linux.desktop
+            install -Dm644 ${./packaging/appimage/io.github.hearthstone_linux.svg} \
+              root/usr/share/icons/hicolor/scalable/apps/io.github.hearthstone_linux.svg
+
+            cat > root/usr/bin/hearthstone-linux <<'EOF'
+            #!/usr/bin/env sh
+            export APPIMAGE_EXTRACT_AND_RUN="''${APPIMAGE_EXTRACT_AND_RUN:-1}"
+            exec /opt/hearthstone-linux/Hearthstone_Linux-x86_64.AppImage "$@"
+            EOF
+            chmod 755 root/usr/bin/hearthstone-linux
+
+            cat > nfpm.yaml <<EOF
+            name: hearthstone-linux
+            arch: amd64
+            platform: linux
+            version: "${packageVersion}"
+            section: games
+            priority: optional
+            maintainer: Hearthstone Linux contributors
+            description: Native Linux manager for installing, logging into, and launching Hearthstone.
+            license: MIT
+            contents:
+              - src: $(pwd)/root/opt/hearthstone-linux/Hearthstone_Linux-x86_64.AppImage
+                dst: /opt/hearthstone-linux/Hearthstone_Linux-x86_64.AppImage
+                file_info:
+                  mode: 0755
+              - src: $(pwd)/root/usr/bin/hearthstone-linux
+                dst: /usr/bin/hearthstone-linux
+                file_info:
+                  mode: 0755
+              - src: $(pwd)/root/usr/share/applications/io.github.hearthstone_linux.desktop
+                dst: /usr/share/applications/io.github.hearthstone_linux.desktop
+              - src: $(pwd)/root/usr/share/icons/hicolor/scalable/apps/io.github.hearthstone_linux.svg
+                dst: /usr/share/icons/hicolor/scalable/apps/io.github.hearthstone_linux.svg
+            EOF
+
+            nfpm package --config nfpm.yaml --packager ${packager} --target $out
+          '';
+        debPackage = packageFromAppImage "deb" "deb";
+        rpmPackage = packageFromAppImage "rpm" "rpm";
+      in {
+        packages.default = hearthstonePackage;
+
+        packages.runtime = hearthstoneRuntime;
+        packages.AppDir = appDir;
+        packages.AppImage = appImage;
+        packages.Deb = debPackage;
+        packages.Rpm = rpmPackage;
+        packages.AllDist = pkgs.runCommand "hearthstone-linux-AllDist" { } ''
+          mkdir -p $out/nix $out/appimage $out/deb $out/rpm
+          ln -s ${hearthstonePackage} $out/nix/hearthstone-linux
+          ln -s ${hearthstoneRuntime} $out/nix/hearthstone-linux-runtime
+          cp ${appImage}/Hearthstone_Linux-x86_64.AppImage $out/appimage/
+          cp ${debPackage}/*.deb $out/deb/
+          cp ${rpmPackage}/*.rpm $out/rpm/
+          cat > $out/README.txt <<EOF
+          Hearthstone Linux distribution artifacts
+
+          nix/hearthstone-linux          Native Nix package output
+          nix/hearthstone-linux-runtime  Nix runtime wrapper for the Unity player
+          appimage/*.AppImage            Portable x86_64 AppImage
+          deb/*.deb                      Debian package that installs the AppImage payload
+          rpm/*.rpm                      RPM package that installs the AppImage payload
+          EOF
+        '';
 
         devShells.default = pkgs.mkShell {
           inherit nativeBuildInputs buildInputs;
           packages = with pkgs; [
             appimage-run
+            appimageTool
+            hearthstoneRuntime
+            linuxdeploy
+            nfpm
             rust-analyzer
           ];
+          HEARTHSTONE_LINUX_RUNNER = "${hearthstoneRuntime}/bin/hearthstone-linux-runtime";
           RUST_BACKTRACE = "1";
         };
 

@@ -26,20 +26,23 @@ pub fn launch_game(game_dir: &Path) -> Result<Child> {
         game_dir.join("client.config").exists(),
         "client.config is missing"
     );
+    ensure_bundled_interpreter(&exe)?;
 
     info!(exe = %exe.display(), game_dir = %game_dir.display(), "launching Hearthstone");
-    if let Some(runner) = find_fhs_runner() {
-        info!(runner = %runner.display(), "launching Hearthstone through FHS runtime");
+    let library_path = game_library_path(game_dir);
+    debug!(ld_library_path = ?library_path, "configured game library path");
+    if let Some(runner) = find_runtime_runner() {
+        info!(runner = %runner.display(), "launching Hearthstone through runtime");
         return Command::new(&runner)
             .arg(&exe)
             .current_dir(game_dir)
+            .env("LD_LIBRARY_PATH", library_path)
+            .envs(graphics_env())
             .spawn()
             .with_context(|| format!("failed to launch Hearthstone through {}", runner.display()));
     }
 
-    warn!("steam-run was not found; falling back to direct launch");
-    let library_path = game_library_path(game_dir);
-    debug!(ld_library_path = ?library_path, "configured game library path");
+    debug!("no runtime runner configured; launching directly");
     let child = Command::new(exe)
         .current_dir(game_dir)
         .env("LD_LIBRARY_PATH", library_path)
@@ -58,6 +61,7 @@ fn game_library_path(game_dir: &Path) -> OsString {
         ),
         game_dir.join("Bin/Hearthstone_Data/MonoBleedingEdge/x86_64"),
     ]);
+    paths.extend(runtime_library_paths());
     push_existing(&mut paths, "/run/opengl-driver/lib");
     push_existing(&mut paths, "/run/current-system/sw/share/nix-ld/lib");
     push_existing(&mut paths, "/run/current-system/sw/lib");
@@ -73,6 +77,17 @@ fn game_library_path(game_dir: &Path) -> OsString {
     std::env::join_paths(paths).unwrap_or_default()
 }
 
+fn runtime_library_paths() -> Vec<PathBuf> {
+    let Some(runtime_dir) = env::var_os("HEARTHSTONE_LINUX_RUNTIME_DIR") else {
+        return Vec::new();
+    };
+
+    env::split_paths(&runtime_dir)
+        .flat_map(|path| [path.clone(), path.join("lib")])
+        .filter(|path| path.exists())
+        .collect()
+}
+
 fn nix_ld_library_paths() -> Vec<PathBuf> {
     let Some(flags) = env::var_os("NIX_LDFLAGS") else {
         return Vec::new();
@@ -84,7 +99,7 @@ fn nix_ld_library_paths() -> Vec<PathBuf> {
         .collect()
 }
 
-fn find_fhs_runner() -> Option<PathBuf> {
+fn find_runtime_runner() -> Option<PathBuf> {
     if env::var_os("HEARTHSTONE_LINUX_DIRECT_LAUNCH").is_some() {
         return None;
     }
@@ -95,10 +110,87 @@ fn find_fhs_runner() -> Option<PathBuf> {
         }
     }
 
-    find_in_path("steam-run").or_else(|| {
-        let runner = PathBuf::from("/run/current-system/sw/bin/steam-run");
-        runner.exists().then_some(runner)
-    })
+    find_in_path("hearthstone-linux-runtime")
+}
+
+fn ensure_bundled_interpreter(exe: &Path) -> Result<()> {
+    let Some(interpreter) = bundled_interpreter() else {
+        return Ok(());
+    };
+    if !interpreter.exists() {
+        warn!(
+            interpreter = %interpreter.display(),
+            "bundled ELF interpreter was configured but does not exist"
+        );
+        return Ok(());
+    }
+
+    let Some(patchelf) = find_patchelf() else {
+        warn!("bundled ELF interpreter was configured but patchelf was not found");
+        return Ok(());
+    };
+
+    let current = Command::new(&patchelf)
+        .arg("--print-interpreter")
+        .arg(exe)
+        .output()
+        .with_context(|| {
+            format!(
+                "failed to inspect ELF interpreter with {}",
+                patchelf.display()
+            )
+        })?;
+    if current.status.success() {
+        let current = String::from_utf8_lossy(&current.stdout).trim().to_string();
+        if current == interpreter.to_string_lossy() {
+            return Ok(());
+        }
+        if env::var_os("HEARTHSTONE_LINUX_FORCE_BUNDLED_INTERPRETER").is_none()
+            && Path::new(&current).exists()
+        {
+            debug!(
+                exe = %exe.display(),
+                interpreter = %current,
+                "Unity player ELF interpreter exists on this system"
+            );
+            return Ok(());
+        }
+    }
+
+    info!(
+        exe = %exe.display(),
+        interpreter = %interpreter.display(),
+        "patching Unity player ELF interpreter"
+    );
+    let status = Command::new(&patchelf)
+        .arg("--set-interpreter")
+        .arg(&interpreter)
+        .arg(exe)
+        .status()
+        .with_context(|| format!("failed to run {}", patchelf.display()))?;
+    anyhow::ensure!(
+        status.success(),
+        "{} failed to patch {}",
+        patchelf.display(),
+        exe.display()
+    );
+    Ok(())
+}
+
+fn bundled_interpreter() -> Option<PathBuf> {
+    env::var_os("HEARTHSTONE_LINUX_ELF_INTERPRETER")
+        .map(PathBuf::from)
+        .or_else(|| {
+            let runtime_dir = env::var_os("HEARTHSTONE_LINUX_RUNTIME_DIR")?;
+            Some(PathBuf::from(runtime_dir).join("ld-linux-x86-64.so.2"))
+        })
+}
+
+fn find_patchelf() -> Option<PathBuf> {
+    env::var_os("HEARTHSTONE_LINUX_PATCHELF")
+        .map(PathBuf::from)
+        .filter(|path| path.exists())
+        .or_else(|| find_in_path("patchelf"))
 }
 
 fn find_in_path(command: &str) -> Option<PathBuf> {
