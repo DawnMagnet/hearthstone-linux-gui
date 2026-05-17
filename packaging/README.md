@@ -1,5 +1,9 @@
 # Packaging
 
+Nix is the single source of truth for release builds. The helper scripts in
+this directory are thin wrappers around flake targets; they do not duplicate
+packaging logic.
+
 This project has three release tracks:
 
 - `nix`: a native Nix package from `flake.nix`.
@@ -9,6 +13,22 @@ This project has three release tracks:
 The `.deb` and `.rpm` packages intentionally reuse the AppImage instead of
 linking the GTK/libadwaita launcher against each target distro. That keeps the
 package-format installers broad while the AppImage carries the portable runtime.
+
+## All Artifacts
+
+Build everything with one command:
+
+```sh
+nix build .#AllDist
+```
+
+The output contains:
+
+- `nix/hearthstone-linux`: native Nix package output.
+- `nix/hearthstone-linux-runtime`: Nix runtime wrapper for the Unity player.
+- `appimage/*.AppImage`: portable x86_64 AppImage.
+- `deb/*.deb`: Debian package that installs the AppImage payload.
+- `rpm/*.rpm`: RPM package that installs the AppImage payload.
 
 ## Nix
 
@@ -26,22 +46,23 @@ nix build .#runtime
 
 ## AppImage
 
-Build on an old-enough x86_64 Linux baseline, for example Ubuntu 22.04 or newer.
-The build host should have `cargo`, `linuxdeploy`, `appimagetool`, `patchelf`,
-and standard GTK development packages installed.
+Build only the AppImage:
 
 ```sh
-packaging/appimage/build.sh
+nix build .#AppImage
 ```
 
-The output is written to `dist/`.
+`packaging/appimage/build.sh` is a convenience wrapper that copies this output
+to `dist/`.
 
 ## Deb/RPM
 
-Build the AppImage first, then wrap it with nfpm:
+Build only one package format:
 
 ```sh
-packaging/deb-rpm/build.sh dist/Hearthstone_Linux-x86_64.AppImage
+nix build .#Deb
+nix build .#Rpm
 ```
 
-This produces both `.deb` and `.rpm` files in `dist/packages/`.
+`packaging/deb-rpm/build.sh` is a convenience wrapper that copies both package
+formats from `.#AllDist` to `dist/packages/`.
