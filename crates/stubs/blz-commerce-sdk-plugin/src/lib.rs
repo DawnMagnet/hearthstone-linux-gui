@@ -15,3 +15,6 @@ pub extern "C" fn SWIGRegisterStringCallback_battlenet_commerce(_callback: isize
 
 #[no_mangle]
 pub extern "C" fn CSharp_BlizzardfCommerce_blz_commerce_update___(_sdk: isize) {}
+
+#[no_mangle]
+pub extern "C" fn CSharp_BlizzardfCommerce_blz_commerce_unregister_log___(_owner: isize) {}

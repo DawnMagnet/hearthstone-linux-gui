@@ -14,8 +14,8 @@ use hearthstone_linux::{
 };
 use std::{
     cell::{Cell, RefCell},
-    path::Path,
-    process::Child,
+    path::{Path, PathBuf},
+    process::{Child, Command},
     rc::Rc,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -91,6 +91,7 @@ fn build_window(app: &adw::Application) {
 
     let status = gtk::Label::new(None);
     status.set_xalign(0.0);
+    status.set_selectable(true);
     status.add_css_class("title-3");
 
     let version = gtk::Label::new(None);
@@ -335,7 +336,14 @@ fn build_window(app: &adw::Application) {
             status.set_text("Waiting for browser login");
             tracing::info!(region = %current.region, "opening browser login");
 
-            let _ = gio::AppInfo::launch_default_for_uri(login_url, None::<&gio::AppLaunchContext>);
+            if let Err(error) = open_login_url(login_url) {
+                tracing::error!(
+                    url = login_url,
+                    error = %format!("{error:#}"),
+                    "failed to open browser login"
+                );
+                status.set_text(&format!("Open this URL manually: {login_url}"));
+            }
 
             let paths = paths.clone();
             let config = config.clone();
@@ -593,7 +601,7 @@ fn reconcile_status_config(paths: &AppPaths, token_exists: bool) -> AppConfig {
 }
 
 fn ensure_auth_scheme_handlers() -> std::io::Result<()> {
-    let exe = std::env::current_exe()?;
+    let exe = auth_handler_executable()?;
     let Some(applications_dir) = std::env::var_os("XDG_DATA_HOME")
         .map(std::path::PathBuf::from)
         .or_else(|| {
@@ -630,9 +638,60 @@ fn ensure_auth_scheme_handlers() -> std::io::Result<()> {
 
 fn user_desktop_entry(exe: &Path) -> String {
     format!(
-        "[Desktop Entry]\nType=Application\nName=hearthstone-linux-gui\nExec={} %u\nIcon=io.github.hearthstone_linux_gui\nCategories=Game;\nMimeType=x-scheme-handler/wtcg;x-scheme-handler/blizzard-hearthstone;x-scheme-handler/hearthstone-linux;x-scheme-handler/hearthstone-linux-gui;\nStartupNotify=true\n",
+        "[Desktop Entry]\nType=Application\nName=hearthstone-linux-gui\nExec={} --auth-callback %u\nIcon=io.github.hearthstone_linux_gui\nCategories=Game;\nMimeType=x-scheme-handler/wtcg;x-scheme-handler/blizzard-hearthstone;x-scheme-handler/hearthstone-linux;x-scheme-handler/hearthstone-linux-gui;\nStartupNotify=true\n",
         shell_quote_path(exe)
     )
+}
+
+fn auth_handler_executable() -> std::io::Result<PathBuf> {
+    if let Some(appimage) = std::env::var_os("APPIMAGE") {
+        let appimage = PathBuf::from(appimage);
+        if appimage.exists() {
+            return Ok(appimage);
+        }
+    }
+
+    std::env::current_exe()
+}
+
+fn open_login_url(url: &str) -> anyhow::Result<()> {
+    let mut errors = Vec::new();
+    if let Err(error) = spawn_browser_command("xdg-open", &[url]) {
+        errors.push(format!("xdg-open: {error}"));
+    } else {
+        return Ok(());
+    }
+
+    if let Some(browser) = std::env::var_os("BROWSER") {
+        let browser = browser.to_string_lossy();
+        for command in browser.split(':').filter(|command| !command.is_empty()) {
+            if let Err(error) = spawn_browser_command(command, &[url]) {
+                errors.push(format!("{command}: {error}"));
+            } else {
+                return Ok(());
+            }
+        }
+    }
+
+    for command in ["firefox", "firefox-esr", "librewolf", "chromium", "google-chrome"] {
+        if let Err(error) = spawn_browser_command(command, &[url]) {
+            errors.push(format!("{command}: {error}"));
+        } else {
+            return Ok(());
+        }
+    }
+
+    if let Err(error) = gio::AppInfo::launch_default_for_uri(url, None::<&gio::AppLaunchContext>) {
+        errors.push(format!("gio: {error}"));
+    } else {
+        return Ok(());
+    }
+
+    anyhow::bail!("could not open a browser ({})", errors.join("; "))
+}
+
+fn spawn_browser_command(command: &str, args: &[&str]) -> std::io::Result<()> {
+    Command::new(command).args(args).spawn().map(|_| ())
 }
 
 fn shell_quote_path(path: &Path) -> String {
