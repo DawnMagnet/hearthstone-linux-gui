@@ -149,18 +149,15 @@
           };
         };
         portableRuntimeInputs = with pkgs; [
-          adwaita-icon-theme
           alsa-lib
           at-spi2-atk
           at-spi2-core
           cairo
-          cups
           dbus.lib
           dconf.lib
           expat
           fontconfig
           freetype
-          gcc.cc.lib
           gdk-pixbuf
           glib
           glib-networking
@@ -168,17 +165,13 @@
           graphene
           gsettings-desktop-schemas
           gtk4
-          hicolor-icon-theme
           libadwaita
           libdrm
           libepoxy
           libglvnd
           libpulseaudio
           libxkbcommon
-          mesa
-          openssl
           pango
-          vulkan-loader
           wayland
           zlib
           libice
@@ -201,6 +194,7 @@
         appDir = pkgs.runCommand "hearthstone-linux-AppDir"
           {
             nativeBuildInputs = with pkgs; [
+              binutils
               coreutils
               desktop-file-utils
               findutils
@@ -228,13 +222,40 @@
           ln -s usr/share/icons/hicolor/scalable/apps/io.github.hearthstone_linux.svg \
             $out/io.github.hearthstone_linux.svg
 
+          copy_lib() {
+            local lib="$1"
+            local name
+            name="$(basename "$lib")"
+            if [ -L "$lib" ]; then
+              local target target_name
+              target="$(readlink -f "$lib")"
+              target_name="$(basename "$target")"
+              if [ "$name" = "$target_name" ]; then
+                install -Dm755 "$target" "$out/usr/lib/$name"
+              elif [ ! -e "$out/usr/lib/$target_name" ]; then
+                install -Dm755 "$target" "$out/usr/lib/$target_name"
+                ln -sfn "$target_name" "$out/usr/lib/$name"
+              else
+                ln -sfn "$target_name" "$out/usr/lib/$name"
+              fi
+            else
+              install -Dm755 "$lib" "$out/usr/lib/$name"
+            fi
+          }
+
           IFS=: read -r -a lib_dirs <<< "${portableLibraryPath}"
           for dir in "''${lib_dirs[@]}"; do
             if [ -d "$dir" ]; then
               while IFS= read -r lib; do
-                install -Dm755 "$lib" "$out/usr/lib/$(basename "$lib")"
+                copy_lib "$lib"
               done < <(find "$dir" -maxdepth 1 \( -type f -o -type l \) -name '*.so*')
             fi
+          done
+          for lib in \
+            ${pkgs.stdenv.cc.cc.lib}/lib/libstdc++.so* \
+            ${pkgs.stdenv.cc.cc.lib}/lib/libgcc_s.so*; do
+            [ -e "$lib" ] || continue
+            copy_lib "$lib"
           done
 
           for input in ${pkgs.lib.concatStringsSep " " portableRuntimeInputs}; do
@@ -257,11 +278,6 @@
             if [ -d "$input/share/gsettings-schemas" ]; then
               find "$input/share/gsettings-schemas" -path '*/glib-2.0/schemas/*.xml' \
                 -exec cp -L {} $out/usr/share/glib-2.0/schemas/ \;
-            fi
-            if [ -d "$input/share/icons" ]; then
-              mkdir -p $out/usr/share/icons
-              cp -aL "$input"/share/icons/. $out/usr/share/icons/
-              chmod -R u+w $out/usr/share/icons
             fi
           done
 
@@ -287,17 +303,31 @@
             $out/usr/bin/hearthstone-linux
           patchelf --set-rpath '$ORIGIN:$ORIGIN/../../usr/lib:$ORIGIN/../../usr/lib/hearthstone-linux-runtime' \
             $out/usr/lib/hearthstone-linux-runtime/patchelf
+          find $out/usr/bin $out/usr/lib -type f -executable \
+            -exec strip --strip-unneeded {} + 2>/dev/null || true
         '';
         appImage = pkgs.runCommand "Hearthstone_Linux-x86_64.AppImage"
           {
             nativeBuildInputs = with pkgs; [
-              appimageTool
               coreutils
+              desktop-file-utils
+              patchelf
+              squashfsTools
             ];
           } ''
           mkdir -p $out
-          ARCH=x86_64 ${appimageTool}/usr/bin/appimagetool \
-            ${appDir} $out/Hearthstone_Linux-x86_64.AppImage
+          cp -a ${appimageTool} appimagetool
+          chmod -R u+w appimagetool
+          patchelf --set-interpreter ${pkgs.glibc.out}/lib/ld-linux-x86-64.so.2 \
+            --set-rpath ${pkgs.lib.makeLibraryPath [ pkgs.glibc pkgs.zlib pkgs.glib pkgs.libuuid ]}:$(pwd)/appimagetool/usr/lib \
+            appimagetool/usr/bin/appimagetool
+          patchelf --set-interpreter ${pkgs.glibc.out}/lib/ld-linux-x86-64.so.2 \
+            --set-rpath ${pkgs.lib.makeLibraryPath [ pkgs.glibc pkgs.zlib ]} \
+            appimagetool/usr/lib/appimagekit/mksquashfs
+          cp -a ${appDir} AppDir
+          chmod -R u+w AppDir
+          ARCH=x86_64 ./appimagetool/usr/bin/appimagetool \
+            AppDir $out/Hearthstone_Linux-x86_64.AppImage
         '';
         packageFromAppImage = packager: extension:
           pkgs.runCommand "hearthstone-linux-${extension}"

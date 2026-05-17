@@ -48,7 +48,7 @@ fn default_filter() -> EnvFilter {
     let app_filter = if cfg!(debug_assertions) {
         "hearthstone_linux=trace,CoreFoundation=trace,OSXWindowManagement=trace,blz_commerce_sdk_plugin=trace"
     } else {
-        "hearthstone_linux=debug"
+        "hearthstone_linux=info,CoreFoundation=info,OSXWindowManagement=info,blz_commerce_sdk_plugin=info"
     };
 
     match std::env::var("RUST_LOG") {
