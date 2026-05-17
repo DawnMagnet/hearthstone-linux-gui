@@ -1,0 +1,201 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-dist:
+    name: Build distribution artifacts
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            accept-flake-config = true
+
+      - name: Show release context
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "ref=${GITHUB_REF}"
+          echo "ref_name=${GITHUB_REF_NAME}"
+          echo "sha=${GITHUB_SHA}"
+          nix --version
+
+      - name: Prepare artifact names
+        id: names
+        shell: bash
+        run: |
+          set -euo pipefail
+          suffix="${GITHUB_REF_NAME//\//-}"
+          echo "artifact_suffix=${suffix}" >> "$GITHUB_OUTPUT"
+
+      - name: Validate tag matches Cargo version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_version="${GITHUB_REF_NAME#v}"
+          cargo_version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)"
+          if [ "$tag_version" != "$cargo_version" ]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match Cargo.toml version ${cargo_version}" >&2
+            exit 1
+          fi
+
+      - name: Build all distribution artifacts
+        id: build
+        shell: bash
+        run: |
+          set -euo pipefail
+          out_path="$(nix build .#AllDist --print-out-paths)"
+          echo "out_path=${out_path}" >> "$GITHUB_OUTPUT"
+          find -L "$out_path" -maxdepth 3 -type f -printf '%p %s bytes\n' | sort
+
+      - name: Stage release files
+        shell: bash
+        run: |
+          set -euo pipefail
+          out_path="${{ steps.build.outputs.out_path }}"
+          mkdir -p release-dist/appimage release-dist/deb release-dist/rpm
+
+          cp -L "$out_path"/appimage/*.AppImage release-dist/appimage/
+          cp -L "$out_path"/deb/*.deb release-dist/deb/
+          cp -L "$out_path"/rpm/*.rpm release-dist/rpm/
+          cp -L "$out_path"/README.txt release-dist/
+
+          (
+            cd release-dist
+            find . -type f ! -name SHA256SUMS.txt -print0 \
+              | sort -z \
+              | xargs -0 sha256sum
+          ) > release-dist/SHA256SUMS.txt
+
+          find release-dist -type f -printf '%p %s bytes\n' | sort
+
+      - name: Write build summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "## Hearthstone Linux artifacts"
+            echo
+            echo "| File | Size |"
+            echo "| --- | ---: |"
+            while IFS= read -r file; do
+              size="$(stat -c '%s' "$file")"
+              echo "| \`${file#release-dist/}\` | ${size} bytes |"
+            done < <(find release-dist -type f | sort)
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload AppImage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hearthstone-linux-${{ steps.names.outputs.artifact_suffix }}-appimage
+          path: release-dist/appimage/*.AppImage
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Upload Debian package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hearthstone-linux-${{ steps.names.outputs.artifact_suffix }}-deb
+          path: release-dist/deb/*.deb
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Upload RPM package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hearthstone-linux-${{ steps.names.outputs.artifact_suffix }}-rpm
+          path: release-dist/rpm/*.rpm
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Upload checksums artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hearthstone-linux-${{ steps.names.outputs.artifact_suffix }}-checksums
+          path: release-dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Upload complete distribution artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hearthstone-linux-${{ steps.names.outputs.artifact_suffix }}-all-dist
+          path: release-dist/**
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Create release notes
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > release-notes.md <<EOF
+          Automated release for ${GITHUB_REF_NAME}.
+
+          ## Downloads
+
+          - AppImage: portable x86_64 build for general Linux use.
+          - DEB: installs the AppImage payload and desktop integration on Debian/Ubuntu-style systems.
+          - RPM: installs the AppImage payload and desktop integration on Fedora/RHEL-style systems.
+
+          ## Verification
+
+          Download \`SHA256SUMS.txt\` from this release and verify with:
+
+          \`\`\`sh
+          sha256sum -c SHA256SUMS.txt
+          \`\`\`
+          EOF
+
+      - name: Publish GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          prerelease_args=()
+          if [[ "$tag" =~ (alpha|beta|rc) ]]; then
+            prerelease_args+=(--prerelease)
+          fi
+
+          mapfile -t assets < <(find release-dist -type f \
+            \( -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' -o -name 'SHA256SUMS.txt' -o -name 'README.txt' \) \
+            | sort)
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release edit "$tag" \
+              --title "$tag" \
+              --notes-file release-notes.md \
+              "${prerelease_args[@]}"
+            gh release upload "$tag" "${assets[@]}" --clobber
+          else
+            gh release create "$tag" "${assets[@]}" \
+              --title "$tag" \
+              --notes-file release-notes.md \
+              "${prerelease_args[@]}"
+          fi
