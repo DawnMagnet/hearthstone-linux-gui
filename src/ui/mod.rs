@@ -4,7 +4,6 @@ use libadwaita as adw;
 use adw::prelude::*;
 use gtk::{gio, glib};
 use hearthstone_linux::{
-    auth,
     config::{AppConfig, Locale, Region},
     install::{
         launcher,
@@ -14,6 +13,7 @@ use hearthstone_linux::{
 };
 use std::{
     cell::RefCell,
+    path::{Path, PathBuf},
     process::{Child, Command},
     rc::Rc,
     sync::{
@@ -634,23 +634,19 @@ fn begin_login(
         return;
     }
 
-    let server = match auth::start_local_callback_server((*paths).clone(), current.region) {
-        Ok(server) => server,
-        Err(error) => {
-            tracing::error!(error = %format!("{error:#}"), "failed to start local login callback");
-            status.set_text(&format!("Login setup failed: {error:#}"));
-            return;
-        }
-    };
-    let receiver = server.receiver;
-    let login_url = server.login_url;
+    let login_url = current.region.login_url().to_string();
     *login_session.borrow_mut() = Some(LoginSession {
-        cancel: server.cancel,
+        cancel: Arc::new(AtomicBool::new(false)),
     });
+
+    if let Err(error) = ensure_auth_scheme_handlers() {
+        tracing::warn!(error = %format!("{error:#}"), "failed to register auth URI handlers");
+        status.set_text("Login handler registration failed; continuing with browser login");
+    }
 
     set_login_waiting(&login_button);
     status.set_text("Complete login in browser");
-    tracing::info!(region = %current.region, "opening browser login with local callback");
+    tracing::info!(region = %current.region, "opening browser login with desktop callback handler");
 
     if let Err(error) = open_login_url(&login_url) {
         tracing::error!(
@@ -661,37 +657,26 @@ fn begin_login(
         status.set_text(&format!("Could not open browser. URL: {login_url}"));
     }
 
-    glib::timeout_add_local(std::time::Duration::from_millis(200), move || {
-        if login_session.borrow().is_none() {
+    glib::timeout_add_local(std::time::Duration::from_secs(1), move || {
+        let Some(session) = login_session.borrow().as_ref() else {
+            return glib::ControlFlow::Break;
+        };
+
+        if session.cancel.load(Ordering::Relaxed) {
             return glib::ControlFlow::Break;
         }
 
-        match receiver.try_recv() {
-            Ok(Ok(())) => {
-                tracing::info!("browser login completed");
-                *login_session.borrow_mut() = None;
-                sync_config_from_disk(&paths, &config);
-                status.set_text("Login complete");
-                update_status(&status, &version, &paths);
-                update_login_button(&login_button, &paths);
-                glib::ControlFlow::Break
-            }
-            Ok(Err(error)) => {
-                tracing::error!(error = %format!("{error:#}"), "browser login failed");
-                *login_session.borrow_mut() = None;
-                sync_config_from_disk(&paths, &config);
-                status.set_text(&format!("Login failed: {error:#}"));
-                update_login_button(&login_button, &paths);
-                glib::ControlFlow::Break
-            }
-            Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
-            Err(mpsc::TryRecvError::Disconnected) => {
-                *login_session.borrow_mut() = None;
-                status.set_text("Login cancelled");
-                update_login_button(&login_button, &paths);
-                glib::ControlFlow::Break
-            }
+        if paths.game_token().exists() {
+            tracing::info!("browser login completed");
+            *login_session.borrow_mut() = None;
+            sync_config_from_disk(&paths, &config);
+            status.set_text("Login complete");
+            update_status(&status, &version, &paths);
+            update_login_button(&login_button, &paths);
+            return glib::ControlFlow::Break;
         }
+
+        glib::ControlFlow::Continue
     });
 }
 
@@ -738,6 +723,60 @@ fn reconcile_status_config(paths: &AppPaths, token_exists: bool) -> AppConfig {
         let _ = config.save(&paths.config_file);
     }
     config
+}
+
+fn ensure_auth_scheme_handlers() -> std::io::Result<()> {
+    let exe = auth_handler_executable()?;
+    let Some(applications_dir) = std::env::var_os("XDG_DATA_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .map(std::path::PathBuf::from)
+                .map(|home| home.join(".local/share"))
+        })
+        .map(|data_home| data_home.join("applications"))
+    else {
+        return Ok(());
+    };
+    std::fs::create_dir_all(&applications_dir)?;
+
+    let desktop_id = "io.github.hearthstone_linux_gui.desktop";
+    let desktop_file = applications_dir.join(desktop_id);
+    std::fs::write(&desktop_file, user_desktop_entry(&exe))?;
+
+    let _ = std::process::Command::new("update-desktop-database")
+        .arg(&applications_dir)
+        .status();
+    for mime in [
+        "x-scheme-handler/wtcg",
+        "x-scheme-handler/blizzard-hearthstone",
+        "x-scheme-handler/hearthstone-linux",
+        "x-scheme-handler/hearthstone-linux-gui",
+    ] {
+        let _ = std::process::Command::new("xdg-mime")
+            .args(["default", desktop_id, mime])
+            .status();
+    }
+
+    Ok(())
+}
+
+fn user_desktop_entry(exe: &Path) -> String {
+    format!(
+        "[Desktop Entry]\nType=Application\nName=hearthstone-linux-gui\nExec={} --auth-callback %u\nIcon=io.github.hearthstone_linux_gui\nCategories=Game;\nMimeType=x-scheme-handler/wtcg;x-scheme-handler/blizzard-hearthstone;x-scheme-handler/hearthstone-linux;x-scheme-handler/hearthstone-linux-gui;\nStartupNotify=true\n",
+        shell_quote_path(exe)
+    )
+}
+
+fn auth_handler_executable() -> std::io::Result<PathBuf> {
+    if let Some(appimage) = std::env::var_os("APPIMAGE") {
+        let appimage = PathBuf::from(appimage);
+        if appimage.exists() {
+            return Ok(appimage);
+        }
+    }
+
+    std::env::current_exe()
 }
 
 fn open_login_url(url: &str) -> anyhow::Result<()> {
@@ -803,4 +842,10 @@ fn spawn_browser_shell(command: &str, url: &str) -> std::io::Result<()> {
         .args(["-c", &format!("exec {command} \"$1\""), "sh", url])
         .spawn()
         .map(|_| ())
+}
+
+fn shell_quote_path(path: &Path) -> String {
+    let value = path.to_string_lossy();
+    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("\"{escaped}\"")
 }
