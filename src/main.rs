@@ -48,8 +48,17 @@ fn main() -> Result<()> {
     if let Some(uri) = callback {
         tracing::info!("handling auth callback");
         let paths = hearthstone_linux::paths::AppPaths::discover()?;
-        hearthstone_linux::auth::handle_callback_uri(&paths, &uri)?;
-        println!("Login token written for {:?}", paths.game_dir);
+        match hearthstone_linux::auth::handle_callback_uri(&paths, &uri) {
+            Ok(()) => {
+                tracing::info!(game_dir = %paths.game_dir.display(), "auth callback handled");
+                println!("Login token written for {:?}", paths.game_token());
+            }
+            Err(error) => {
+                tracing::error!(error = %format!("{error:#}"), "auth callback failed");
+                eprintln!("Login callback failed: {error:#}");
+                return Err(error);
+            }
+        }
         return Ok(());
     }
 

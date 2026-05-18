@@ -83,7 +83,13 @@ pub fn handle_callback_uri(paths: &AppPaths, uri: &str) -> Result<()> {
     let mut config = AppConfig::load_or_default(&paths.config_file)?;
     let game_dir = config.game_dir.clone().unwrap_or(paths.game_dir.clone());
     let token = extract_token_from_uri(uri)?;
-    write_encrypted_token_for_current_user(&game_dir.join("token"), &token)?;
+    let token_path = game_dir.join("token");
+    tracing::info!(
+        game_dir = %game_dir.display(),
+        token_path = %token_path.display(),
+        "writing login token from auth callback"
+    );
+    write_encrypted_token_for_current_user(&token_path, &token)?;
     config.game_dir = Some(game_dir);
     config.logged_in = true;
     config.last_login_at = Some(
@@ -92,7 +98,9 @@ pub fn handle_callback_uri(paths: &AppPaths, uri: &str) -> Result<()> {
             .as_secs()
             .to_string(),
     );
-    config.save(&paths.config_file)
+    config.save(&paths.config_file)?;
+    tracing::info!(token_path = %token_path.display(), "login token written");
+    Ok(())
 }
 
 pub fn start_local_callback_server(paths: AppPaths, region: Region) -> Result<LocalCallbackServer> {
