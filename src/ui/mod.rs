@@ -4,6 +4,7 @@ use libadwaita as adw;
 use adw::prelude::*;
 use gtk::{gio, glib};
 use hearthstone_linux::{
+    auth,
     config::{AppConfig, Locale, Region},
     install::{
         launcher,
@@ -658,11 +659,14 @@ fn begin_login(
     }
 
     glib::timeout_add_local(std::time::Duration::from_secs(1), move || {
-        let Some(session) = login_session.borrow().as_ref() else {
+        let cancelled = login_session
+            .borrow()
+            .as_ref()
+            .map(|session| session.cancel.load(Ordering::Relaxed));
+        let Some(cancelled) = cancelled else {
             return glib::ControlFlow::Break;
         };
-
-        if session.cancel.load(Ordering::Relaxed) {
+        if cancelled {
             return glib::ControlFlow::Break;
         }
 
