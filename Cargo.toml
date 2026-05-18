@@ -63,5 +63,8 @@ libadwaita = { version = "0.8", optional = true }
 tempfile = "3"
 
 [profile.release]
-lto = "thin"
+lto = true
+codegen-units = 1
+opt-level = "z"
+panic = "abort"
 strip = "symbols"

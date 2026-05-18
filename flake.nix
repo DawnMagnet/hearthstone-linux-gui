@@ -209,9 +209,6 @@
           url = "https://github.com/AppImage/type2-runtime/releases/download/continuous/runtime-x86_64";
           sha256 = "sha256-okGdzkdWg5WuecAf+ppaNB3TOVgTUv8QTQc1J1Qxd+U=";
         };
-        portableRuntimeClosure = pkgs.closureInfo {
-          rootPaths = portableRuntimeInputs ++ [ pkgs.stdenv.cc.cc.lib ];
-        };
         appDir =
           pkgs.runCommand "hearthstone-linux-gui-AppDir"
             {
@@ -222,6 +219,7 @@
                 findutils
                 glib
                 patchelf
+                pax-utils
               ];
             }
             ''
@@ -264,30 +262,19 @@
                 fi
               }
 
-              while IFS= read -r input; do
-                lib_dir="$input/lib"
-                if [ ! -d "$lib_dir" ]; then
-                  continue
-                fi
-                while IFS= read -r lib; do
-                  copy_lib "$lib"
-                done < <(find "$lib_dir" -maxdepth 1 \( -type f -o -type l \) -name '*.so*')
+              copy_elf_deps() {
+                local elf="$1"
+                readelf -d "$elf" >/dev/null 2>&1 || return 0
+                while IFS= read -r dep; do
+                  case "$dep" in
+                    /nix/store/*/lib/*.so*)
+                      copy_lib "$dep"
+                      ;;
+                  esac
+                done < <(lddtree -l "$elf")
+              }
 
-                if [ -d "$lib_dir/libproxy" ]; then
-                  while IFS= read -r lib; do
-                    copy_lib "$lib"
-                  done < <(find "$lib_dir/libproxy" -maxdepth 1 \( -type f -o -type l \) -name '*.so*')
-                fi
-              done < ${portableRuntimeClosure}/store-paths
-
-              for lib_dir in \
-                ${pkgs.stdenv.cc.cc.lib}/lib \
-                ${pkgs.glibc.out}/lib; do
-                [ -d "$lib_dir" ] || continue
-                while IFS= read -r lib; do
-                  copy_lib "$lib"
-                done < <(find "$lib_dir" -maxdepth 1 \( -type f -o -type l \) -name '*.so*')
-              done
+              copy_elf_deps $out/usr/bin/hearthstone-linux-gui
 
               for input in ${pkgs.lib.concatStringsSep " " portableRuntimeInputs}; do
                 if [ -d "$input/lib/gio/modules" ]; then
@@ -312,6 +299,13 @@
                 fi
               done
 
+              for module_dir in $out/usr/lib/gio/modules $out/usr/lib/gdk-pixbuf-2.0; do
+                [ -d "$module_dir" ] || continue
+                while IFS= read -r -d "" module; do
+                  copy_elf_deps "$module"
+                done < <(find "$module_dir" -type f -name '*.so' -print0)
+              done
+
               if [ -d $out/usr/share/glib-2.0/schemas ]; then
                 glib-compile-schemas $out/usr/share/glib-2.0/schemas
               fi
@@ -329,6 +323,7 @@
                 "$appdir/usr/lib/hearthstone-linux-gui-runtime/patchelf" "$@"
               EOF
               chmod 755 $out/usr/bin/patchelf
+              copy_elf_deps $out/usr/lib/hearthstone-linux-gui-runtime/patchelf
 
               fix_portable_elf() {
                 local elf="$1"

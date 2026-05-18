@@ -13,8 +13,7 @@ use hearthstone_linux::{
     paths::AppPaths,
 };
 use std::{
-    cell::{Cell, RefCell},
-    path::{Path, PathBuf},
+    cell::RefCell,
     process::{Child, Command},
     rc::Rc,
     sync::{
@@ -22,6 +21,10 @@ use std::{
         mpsc, Arc,
     },
 };
+
+struct LoginSession {
+    cancel: Arc<AtomicBool>,
+}
 
 pub fn run() {
     tracing::debug!("creating GTK application");
@@ -153,7 +156,7 @@ fn build_window(app: &adw::Application) {
 
     update_status(&status, &version, &paths);
     update_login_button(&login, &paths);
-    let login_waiting = Rc::new(Cell::new(false));
+    let login_session = Rc::new(RefCell::new(None::<LoginSession>));
     let install_cancel = Rc::new(RefCell::new(None::<Arc<AtomicBool>>));
     let running_game = Rc::new(RefCell::new(None::<Child>));
 
@@ -302,11 +305,11 @@ fn build_window(app: &adw::Application) {
         let status = status.clone();
         let version = version.clone();
         let login_button = login.clone();
-        let login_waiting = login_waiting.clone();
+        let login_session = login_session.clone();
         login.connect_clicked(move |_| {
-            if login_waiting.get() {
+            if let Some(session) = login_session.borrow_mut().take() {
                 tracing::info!("login wait cancelled from UI");
-                login_waiting.set(false);
+                session.cancel.store(true, Ordering::Relaxed);
                 set_login_idle(&login_button, &paths);
                 status.set_text("Login cancelled");
                 return;
@@ -314,61 +317,26 @@ fn build_window(app: &adw::Application) {
 
             if paths.game_token().exists() {
                 tracing::debug!("login token already exists");
-                mark_logged_in(&paths, &config);
-                sync_config_from_disk(&paths, &config);
-                status.set_text("Already logged in");
-                update_status(&status, &version, &paths);
-                update_login_button(&login_button, &paths);
+                show_account_popover(
+                    &login_button,
+                    paths.clone(),
+                    config.clone(),
+                    status.clone(),
+                    version.clone(),
+                    login_button.clone(),
+                    login_session.clone(),
+                );
                 return;
             }
 
-            let mut current = config.borrow().clone();
-            preserve_install_metadata(&paths, &mut current);
-            current.game_dir = Some(paths.game_dir.clone());
-            let login_url = current.region.login_url();
-            let _ = current.save(&paths.config_file);
-            if let Err(error) = ensure_auth_scheme_handlers() {
-                tracing::warn!(error = %format!("{error:#}"), "failed to register auth URI handlers");
-            }
-
-            login_waiting.set(true);
-            set_login_waiting(&login_button);
-            status.set_text("Waiting for browser login");
-            tracing::info!(region = %current.region, "opening browser login");
-
-            if let Err(error) = open_login_url(login_url) {
-                tracing::error!(
-                    url = login_url,
-                    error = %format!("{error:#}"),
-                    "failed to open browser login"
-                );
-                status.set_text(&format!("Open this URL manually: {login_url}"));
-            }
-
-            let paths = paths.clone();
-            let config = config.clone();
-            let status = status.clone();
-            let version = version.clone();
-            let login_button = login_button.clone();
-            let login_waiting = login_waiting.clone();
-            glib::timeout_add_local(std::time::Duration::from_secs(1), move || {
-                if !login_waiting.get() {
-                    return glib::ControlFlow::Break;
-                }
-
-                if paths.game_token().exists() {
-                    tracing::info!("browser login completed");
-                    login_waiting.set(false);
-                    mark_logged_in(&paths, &config);
-                    sync_config_from_disk(&paths, &config);
-                    status.set_text("Login complete");
-                    update_status(&status, &version, &paths);
-                    update_login_button(&login_button, &paths);
-                    return glib::ControlFlow::Break;
-                }
-
-                glib::ControlFlow::Continue
-            });
+            begin_login(
+                paths.clone(),
+                config.clone(),
+                status.clone(),
+                version.clone(),
+                login_button.clone(),
+                login_session.clone(),
+            );
         });
     }
 
@@ -531,7 +499,7 @@ fn set_login_idle(button: &gtk::Button, _paths: &AppPaths) {
 }
 
 fn set_login_waiting(button: &gtk::Button) {
-    button.set_label("Stop");
+    button.set_label("Cancel Login");
     button.remove_css_class("suggested-action");
     button.add_css_class("destructive-action");
 }
@@ -557,16 +525,188 @@ fn set_launch_stopping(button: &gtk::Button) {
     button.set_sensitive(false);
 }
 
-fn mark_logged_in(paths: &AppPaths, config: &Rc<RefCell<AppConfig>>) {
+fn show_account_popover(
+    anchor: &gtk::Button,
+    paths: Rc<AppPaths>,
+    config: Rc<RefCell<AppConfig>>,
+    status: gtk::Label,
+    version: gtk::Label,
+    login_button: gtk::Button,
+    login_session: Rc<RefCell<Option<LoginSession>>>,
+) {
+    let popover = gtk::Popover::new();
+    popover.set_parent(anchor);
+
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    content.set_margin_top(10);
+    content.set_margin_bottom(10);
+    content.set_margin_start(10);
+    content.set_margin_end(10);
+
+    let switch_account = gtk::Button::with_label("Switch Account");
+    let logout = gtk::Button::with_label("Log Out");
+    logout.add_css_class("destructive-action");
+
+    content.append(&switch_account);
+    content.append(&logout);
+    popover.set_child(Some(&content));
+
+    {
+        let popover = popover.clone();
+        logout.connect_clicked(move |_| {
+            popover.popdown();
+        });
+    }
+    {
+        let paths = paths.clone();
+        let config = config.clone();
+        let status = status.clone();
+        let version = version.clone();
+        let login_button = login_button.clone();
+        logout.connect_clicked(move |_| match mark_logged_out(&paths, &config) {
+            Ok(()) => {
+                sync_config_from_disk(&paths, &config);
+                status.set_text("Logged out");
+                update_status(&status, &version, &paths);
+                update_login_button(&login_button, &paths);
+            }
+            Err(error) => {
+                tracing::error!(error = %format!("{error:#}"), "logout failed");
+                status.set_text(&format!("Logout failed: {error:#}"));
+            }
+        });
+    }
+
+    {
+        let popover = popover.clone();
+        switch_account.connect_clicked(move |_| {
+            popover.popdown();
+        });
+    }
+    {
+        let paths = paths.clone();
+        let config = config.clone();
+        let status = status.clone();
+        let version = version.clone();
+        let login_button = login_button.clone();
+        let login_session = login_session.clone();
+        switch_account.connect_clicked(move |_| match mark_logged_out(&paths, &config) {
+            Ok(()) => {
+                update_login_button(&login_button, &paths);
+                begin_login(
+                    paths.clone(),
+                    config.clone(),
+                    status.clone(),
+                    version.clone(),
+                    login_button.clone(),
+                    login_session.clone(),
+                );
+            }
+            Err(error) => {
+                tracing::error!(error = %format!("{error:#}"), "failed to clear previous login");
+                status.set_text(&format!("Switch account failed: {error:#}"));
+            }
+        });
+    }
+
+    popover.connect_closed(|popover| popover.unparent());
+    popover.popup();
+}
+
+fn begin_login(
+    paths: Rc<AppPaths>,
+    config: Rc<RefCell<AppConfig>>,
+    status: gtk::Label,
+    version: gtk::Label,
+    login_button: gtk::Button,
+    login_session: Rc<RefCell<Option<LoginSession>>>,
+) {
+    if let Some(session) = login_session.borrow_mut().take() {
+        session.cancel.store(true, Ordering::Relaxed);
+    }
+
+    let mut current = config.borrow().clone();
+    preserve_install_metadata(&paths, &mut current);
+    current.game_dir = Some(paths.game_dir.clone());
+    if let Err(error) = current.save(&paths.config_file) {
+        tracing::error!(error = %format!("{error:#}"), "failed to save login settings");
+        status.set_text(&format!("Login setup failed: {error:#}"));
+        return;
+    }
+
+    let server = match auth::start_local_callback_server((*paths).clone(), current.region) {
+        Ok(server) => server,
+        Err(error) => {
+            tracing::error!(error = %format!("{error:#}"), "failed to start local login callback");
+            status.set_text(&format!("Login setup failed: {error:#}"));
+            return;
+        }
+    };
+    let receiver = server.receiver;
+    let login_url = server.login_url;
+    *login_session.borrow_mut() = Some(LoginSession {
+        cancel: server.cancel,
+    });
+
+    set_login_waiting(&login_button);
+    status.set_text("Complete login in browser");
+    tracing::info!(region = %current.region, "opening browser login with local callback");
+
+    if let Err(error) = open_login_url(&login_url) {
+        tracing::error!(
+            url = login_url,
+            error = %format!("{error:#}"),
+            "failed to open browser login"
+        );
+        status.set_text(&format!("Could not open browser. URL: {login_url}"));
+    }
+
+    glib::timeout_add_local(std::time::Duration::from_millis(200), move || {
+        if login_session.borrow().is_none() {
+            return glib::ControlFlow::Break;
+        }
+
+        match receiver.try_recv() {
+            Ok(Ok(())) => {
+                tracing::info!("browser login completed");
+                *login_session.borrow_mut() = None;
+                sync_config_from_disk(&paths, &config);
+                status.set_text("Login complete");
+                update_status(&status, &version, &paths);
+                update_login_button(&login_button, &paths);
+                glib::ControlFlow::Break
+            }
+            Ok(Err(error)) => {
+                tracing::error!(error = %format!("{error:#}"), "browser login failed");
+                *login_session.borrow_mut() = None;
+                sync_config_from_disk(&paths, &config);
+                status.set_text(&format!("Login failed: {error:#}"));
+                update_login_button(&login_button, &paths);
+                glib::ControlFlow::Break
+            }
+            Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                *login_session.borrow_mut() = None;
+                status.set_text("Login cancelled");
+                update_login_button(&login_button, &paths);
+                glib::ControlFlow::Break
+            }
+        }
+    });
+}
+
+fn mark_logged_out(paths: &AppPaths, config: &Rc<RefCell<AppConfig>>) -> anyhow::Result<()> {
+    let token = paths.game_token();
+    if token.exists() {
+        std::fs::remove_file(&token)?;
+    }
+
     let mut current = config.borrow_mut();
     preserve_install_metadata(paths, &mut current);
     current.game_dir = Some(paths.game_dir.clone());
-    current.logged_in = true;
-    current.last_login_at = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()
-        .map(|duration| duration.as_secs().to_string());
-    let _ = current.save(&paths.config_file);
+    current.logged_in = false;
+    current.last_login_at = None;
+    current.save(&paths.config_file)
 }
 
 fn sync_config_from_disk(paths: &AppPaths, config: &Rc<RefCell<AppConfig>>) {
@@ -600,72 +740,12 @@ fn reconcile_status_config(paths: &AppPaths, token_exists: bool) -> AppConfig {
     config
 }
 
-fn ensure_auth_scheme_handlers() -> std::io::Result<()> {
-    let exe = auth_handler_executable()?;
-    let Some(applications_dir) = std::env::var_os("XDG_DATA_HOME")
-        .map(std::path::PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME")
-                .map(std::path::PathBuf::from)
-                .map(|home| home.join(".local/share"))
-        })
-        .map(|data_home| data_home.join("applications"))
-    else {
-        return Ok(());
-    };
-    std::fs::create_dir_all(&applications_dir)?;
-
-    let desktop_id = "io.github.hearthstone_linux_gui.desktop";
-    let desktop_file = applications_dir.join(desktop_id);
-    std::fs::write(&desktop_file, user_desktop_entry(&exe))?;
-
-    let _ = std::process::Command::new("update-desktop-database")
-        .arg(&applications_dir)
-        .status();
-    for mime in [
-        "x-scheme-handler/wtcg",
-        "x-scheme-handler/blizzard-hearthstone",
-        "x-scheme-handler/hearthstone-linux",
-        "x-scheme-handler/hearthstone-linux-gui",
-    ] {
-        let _ = std::process::Command::new("xdg-mime")
-            .args(["default", desktop_id, mime])
-            .status();
-    }
-
-    Ok(())
-}
-
-fn user_desktop_entry(exe: &Path) -> String {
-    format!(
-        "[Desktop Entry]\nType=Application\nName=hearthstone-linux-gui\nExec={} --auth-callback %u\nIcon=io.github.hearthstone_linux_gui\nCategories=Game;\nMimeType=x-scheme-handler/wtcg;x-scheme-handler/blizzard-hearthstone;x-scheme-handler/hearthstone-linux;x-scheme-handler/hearthstone-linux-gui;\nStartupNotify=true\n",
-        shell_quote_path(exe)
-    )
-}
-
-fn auth_handler_executable() -> std::io::Result<PathBuf> {
-    if let Some(appimage) = std::env::var_os("APPIMAGE") {
-        let appimage = PathBuf::from(appimage);
-        if appimage.exists() {
-            return Ok(appimage);
-        }
-    }
-
-    std::env::current_exe()
-}
-
 fn open_login_url(url: &str) -> anyhow::Result<()> {
     let mut errors = Vec::new();
-    if let Err(error) = spawn_browser_command("xdg-open", &[url]) {
-        errors.push(format!("xdg-open: {error}"));
-    } else {
-        return Ok(());
-    }
-
     if let Some(browser) = std::env::var_os("BROWSER") {
         let browser = browser.to_string_lossy();
         for command in browser.split(':').filter(|command| !command.is_empty()) {
-            if let Err(error) = spawn_browser_command(command, &[url]) {
+            if let Err(error) = spawn_browser_shell(command, url) {
                 errors.push(format!("{command}: {error}"));
             } else {
                 return Ok(());
@@ -673,7 +753,31 @@ fn open_login_url(url: &str) -> anyhow::Result<()> {
         }
     }
 
-    for command in ["firefox", "firefox-esr", "librewolf", "chromium", "google-chrome"] {
+    for (command, args) in [
+        ("xdg-open", vec![url]),
+        ("gio", vec!["open", url]),
+        ("kioclient", vec!["exec", url]),
+        ("kioclient5", vec!["exec", url]),
+        ("kde-open5", vec![url]),
+        ("kde-open", vec![url]),
+        ("exo-open", vec![url]),
+        ("gvfs-open", vec![url]),
+        ("sensible-browser", vec![url]),
+    ] {
+        if let Err(error) = spawn_browser_command(command, &args) {
+            errors.push(format!("{command}: {error}"));
+        } else {
+            return Ok(());
+        }
+    }
+
+    for command in [
+        "firefox",
+        "firefox-esr",
+        "librewolf",
+        "chromium",
+        "google-chrome",
+    ] {
         if let Err(error) = spawn_browser_command(command, &[url]) {
             errors.push(format!("{command}: {error}"));
         } else {
@@ -694,8 +798,9 @@ fn spawn_browser_command(command: &str, args: &[&str]) -> std::io::Result<()> {
     Command::new(command).args(args).spawn().map(|_| ())
 }
 
-fn shell_quote_path(path: &Path) -> String {
-    let value = path.to_string_lossy();
-    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
-    format!("\"{escaped}\"")
+fn spawn_browser_shell(command: &str, url: &str) -> std::io::Result<()> {
+    Command::new("sh")
+        .args(["-c", &format!("exec {command} \"$1\""), "sh", url])
+        .spawn()
+        .map(|_| ())
 }
