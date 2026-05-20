@@ -125,5 +125,9 @@ Linux player 运行这些官方游戏数据。
 
 ## 法律说明
 
-Hearthstone / 炉石传说版权归 Blizzard Entertainment, Inc. 所有。本项目是非官方兼容启动器，不由 Blizzard
-Entertainment 认可，也与其无隶属关系。本仓库不分发任何专有炉石传说游戏资产。
+Hearthstone / 炉石传说、Battle.net、Blizzard Entertainment 及相关名称、商标、游戏资产、服务和其他材料，均归
+Blizzard Entertainment, Inc. 或其关联方、许可方所有。
+
+本项目是非官方兼容启动器，不由 Blizzard Entertainment、Battle.net、Microsoft、Activision Blizzard 或其任何关联方制作、发布、赞助、批准、认可、维护或支持。本仓库和启动器发布包不保存或分发任何炉石传说专有游戏资产。
+
+完整法律信息、项目边界、用户责任和权利人请求流程见 [LEGAL.md](LEGAL.md)。

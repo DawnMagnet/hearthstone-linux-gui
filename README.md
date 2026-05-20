@@ -154,7 +154,15 @@ debugging locally.
 
 ## Legal Notice
 
-Hearthstone is (C) Blizzard Entertainment, Inc. This project is an unofficial
-compatibility launcher and is not endorsed by or affiliated with Blizzard
-Entertainment. No proprietary Hearthstone game assets are distributed in this
-repository.
+Hearthstone, Battle.net, Blizzard Entertainment, and related names, trademarks,
+game assets, services, and other materials are owned by Blizzard Entertainment,
+Inc. or its affiliates and licensors.
+
+This project is an unofficial compatibility launcher. It is not produced,
+published, sponsored, approved, endorsed, maintained, or supported by Blizzard
+Entertainment, Battle.net, Microsoft, Activision Blizzard, or any of their
+affiliates. No proprietary Hearthstone game assets are stored in this
+repository or shipped in the launcher packages.
+
+See [LEGAL.md](LEGAL.md) for the full legal information, project boundaries,
+user responsibilities, and rights-holder request process.
