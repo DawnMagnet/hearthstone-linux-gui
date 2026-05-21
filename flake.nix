@@ -187,6 +187,8 @@
               $out/share/applications/${desktopFile}
             install -Dm644 data/${appId}.metainfo.xml \
               $out/share/metainfo/${appId}.metainfo.xml
+            install -Dm644 ${./packaging/appimage/io.github.hearthstone_linux_gui.svg} \
+              $out/share/icons/hicolor/scalable/apps/${iconFile}
             install -Dm644 assets/client.config.in \
               $out/share/hearthstone-linux-gui/client.config.in
             install -Dm755 "$target_dir/libCoreFoundation.so" \
@@ -218,6 +220,7 @@
                 desktop-file-utils
                 findutils
                 glib
+                librsvg
                 patchelf
                 pax-utils
               ];
@@ -228,18 +231,24 @@
                 $out/usr/lib \
                 $out/usr/lib/hearthstone-linux-gui-runtime \
                 $out/usr/share/applications \
+                $out/usr/share/icons/hicolor/128x128/apps \
+                $out/usr/share/icons/hicolor/256x256/apps \
                 $out/usr/share/icons/hicolor/scalable/apps \
                 $out/usr/share/metainfo
 
               install -Dm755 ${hearthstonePackage}/bin/.hearthstone-linux-gui-wrapped \
                 $out/usr/bin/hearthstone-linux-gui
               cp -a ${hearthstonePackage}/share/. $out/usr/share/
-              install -Dm644 ${./packaging/appimage/io.github.hearthstone_linux_gui.svg} \
-                $out/usr/share/icons/hicolor/scalable/apps/${iconFile}
+              rsvg-convert -w 128 -h 128 ${./packaging/appimage/io.github.hearthstone_linux_gui.svg} \
+                -o $out/usr/share/icons/hicolor/128x128/apps/${appId}.png
+              rsvg-convert -w 256 -h 256 ${./packaging/appimage/io.github.hearthstone_linux_gui.svg} \
+                -o $out/usr/share/icons/hicolor/256x256/apps/${appId}.png
               install -Dm755 ${./packaging/appimage/AppRun} $out/AppRun
 
               ln -s usr/share/applications/${desktopFile} $out/${desktopFile}
               ln -s usr/share/icons/hicolor/scalable/apps/${iconFile} $out/${iconFile}
+              ln -s usr/share/icons/hicolor/256x256/apps/${appId}.png $out/${appId}.png
+              ln -s ${appId}.png $out/.DirIcon
 
               copy_lib() {
                 local lib="$1"
@@ -424,12 +433,17 @@
             {
               nativeBuildInputs = with pkgs; [
                 coreutils
+                librsvg
                 nfpm
               ];
             }
             ''
               mkdir -p root/opt/hearthstone-linux-gui root/usr/bin \
-                root/usr/share/applications root/usr/share/icons/hicolor/scalable/apps $out
+                root/usr/share/applications \
+                root/usr/share/icons/hicolor/128x128/apps \
+                root/usr/share/icons/hicolor/256x256/apps \
+                root/usr/share/icons/hicolor/scalable/apps \
+                $out
 
               install -Dm755 ${appImage}/${appImageFile} \
                 root/opt/hearthstone-linux-gui/${appImageFile}
@@ -437,6 +451,10 @@
                 root/usr/share/applications/${desktopFile}
               install -Dm644 ${./packaging/appimage/io.github.hearthstone_linux_gui.svg} \
                 root/usr/share/icons/hicolor/scalable/apps/${iconFile}
+              rsvg-convert -w 128 -h 128 ${./packaging/appimage/io.github.hearthstone_linux_gui.svg} \
+                -o root/usr/share/icons/hicolor/128x128/apps/${appId}.png
+              rsvg-convert -w 256 -h 256 ${./packaging/appimage/io.github.hearthstone_linux_gui.svg} \
+                -o root/usr/share/icons/hicolor/256x256/apps/${appId}.png
 
               cat > root/usr/bin/hearthstone-linux-gui <<'EOF'
               #!/usr/bin/env sh
@@ -468,6 +486,10 @@
                   dst: /usr/share/applications/${desktopFile}
                 - src: $(pwd)/root/usr/share/icons/hicolor/scalable/apps/${iconFile}
                   dst: /usr/share/icons/hicolor/scalable/apps/${iconFile}
+                - src: $(pwd)/root/usr/share/icons/hicolor/128x128/apps/${appId}.png
+                  dst: /usr/share/icons/hicolor/128x128/apps/${appId}.png
+                - src: $(pwd)/root/usr/share/icons/hicolor/256x256/apps/${appId}.png
+                  dst: /usr/share/icons/hicolor/256x256/apps/${appId}.png
               EOF
 
               nfpm package --config nfpm.yaml --packager ${packager} --target $out
