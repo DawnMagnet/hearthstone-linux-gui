@@ -15,6 +15,7 @@ members = [
     "crates/stubs/blz-commerce-sdk-plugin",
     "crates/stubs/commerce-http-client",
     "crates/stubs/core-foundation",
+    "crates/stubs/native-api-mac",
     "crates/stubs/osx-window-management",
 ]
 default-members = [
@@ -22,6 +23,7 @@ default-members = [
     "crates/stubs/blz-commerce-sdk-plugin",
     "crates/stubs/commerce-http-client",
     "crates/stubs/core-foundation",
+    "crates/stubs/native-api-mac",
     "crates/stubs/osx-window-management",
 ]
 resolver = "2"

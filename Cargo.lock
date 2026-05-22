@@ -918,6 +918,10 @@ name = "hearthstone-linux-gui-core-foundation-stub"
 version = "0.1.4"
 
 [[package]]
+name = "hearthstone-linux-gui-native-api-mac-stub"
+version = "0.1.4"
+
+[[package]]
 name = "hearthstone-linux-gui-osx-window-management-stub"
 version = "0.1.4"
 

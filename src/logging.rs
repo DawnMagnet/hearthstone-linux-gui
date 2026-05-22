@@ -46,9 +46,9 @@ pub fn init() -> Option<WorkerGuard> {
 
 fn default_filter() -> EnvFilter {
     let app_filter = if cfg!(debug_assertions) {
-        "hearthstone_linux=trace,CoreFoundation=trace,OSXWindowManagement=trace,blz_commerce_sdk_plugin=trace,commerce_http_client=trace"
+        "hearthstone_linux=trace,CoreFoundation=trace,OSXWindowManagement=trace,NativeApiMac=trace,blz_commerce_sdk_plugin=trace,commerce_http_client=trace"
     } else {
-        "hearthstone_linux=info,CoreFoundation=info,OSXWindowManagement=info,blz_commerce_sdk_plugin=info,commerce_http_client=info"
+        "hearthstone_linux=info,CoreFoundation=info,OSXWindowManagement=info,NativeApiMac=info,blz_commerce_sdk_plugin=info,commerce_http_client=info"
     };
 
     match std::env::var("RUST_LOG") {
@@ -64,6 +64,7 @@ fn mentions_app_filter(filter: &str) -> bool {
         "hearthstone_linux",
         "CoreFoundation",
         "OSXWindowManagement",
+        "NativeApiMac",
         "blz_commerce_sdk_plugin",
         "commerce_http_client",
     ]

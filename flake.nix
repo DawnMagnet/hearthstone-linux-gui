@@ -199,6 +199,8 @@
               $out/share/hearthstone-linux-gui/stubs/libblz_commerce_sdk_plugin.so
             install -Dm755 "$target_dir/libcommerce_http_client.so" \
               $out/share/hearthstone-linux-gui/stubs/libcommerce_http_client.so
+            install -Dm755 "$target_dir/libNativeApiMac.so" \
+              $out/share/hearthstone-linux-gui/stubs/libNativeApiMac.so
           '';
         };
         appimageTool = pkgs.appimageTools.extractType2 {
