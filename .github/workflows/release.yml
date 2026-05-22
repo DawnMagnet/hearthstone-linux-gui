@@ -75,18 +75,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          rm -rf native-dist
+          mkdir -p native-dist
           docker build \
             --target dist \
             --file packaging/native/Dockerfile \
-            --tag hearthstone-linux-gui-native-dist \
+            --output type=local,dest=native-dist \
             .
-
-          container_id="$(docker create hearthstone-linux-gui-native-dist)"
-          trap 'docker rm -f "$container_id" >/dev/null 2>&1 || true' EXIT
-          mkdir -p native-dist
-          docker cp "${container_id}:/." native-dist/
-          docker rm "$container_id"
-          trap - EXIT
 
           find native-dist -type f -printf '%p %s bytes\n' | sort
 
