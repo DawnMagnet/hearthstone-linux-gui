@@ -6,6 +6,9 @@ APPDIR="${APPDIR:-$(dirname "$(readlink -f "$0")")}"
 export PATH="$APPDIR/usr/bin:$PATH"
 export XDG_DATA_DIRS="$APPDIR/usr/share${XDG_DATA_DIRS:+:$XDG_DATA_DIRS}"
 export LD_LIBRARY_PATH="$APPDIR/usr/lib:$APPDIR/usr/lib/hearthstone-linux-gui-runtime${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+if [ -d "$APPDIR/usr/share/X11/xkb" ]; then
+  export XKB_CONFIG_ROOT="$APPDIR/usr/share/X11/xkb"
+fi
 
 prepend_existing_path() {
   var="$1"

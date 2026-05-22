@@ -74,6 +74,7 @@
             libglvnd
             libxkbcommon
             wayland
+            xkeyboard_config
           ]
           ++ x11RuntimeInputs;
         fhsRuntimeInputs =
@@ -243,6 +244,7 @@
               install -Dm755 ${hearthstonePackage}/bin/.hearthstone-linux-gui-wrapped \
                 $out/usr/bin/hearthstone-linux-gui
               cp -a ${hearthstonePackage}/share/. $out/usr/share/
+              chmod -R u+w $out/usr/share
               rsvg-convert -w 128 -h 128 ${./packaging/appimage/io.github.hearthstone_linux_gui.svg} \
                 -o $out/usr/share/icons/hicolor/128x128/apps/${appId}.png
               rsvg-convert -w 256 -h 256 ${./packaging/appimage/io.github.hearthstone_linux_gui.svg} \
@@ -309,6 +311,11 @@
                 if [ -d "$input/share/gsettings-schemas" ]; then
                   find "$input/share/gsettings-schemas" -path '*/glib-2.0/schemas/*.xml' \
                     -exec cp -L {} $out/usr/share/glib-2.0/schemas/ \;
+                fi
+                if [ -d "$input/share/X11/xkb" ]; then
+                  mkdir -p $out/usr/share/X11
+                  cp -aL "$input/share/X11/xkb" $out/usr/share/X11/
+                  chmod -R u+w $out/usr/share/X11/xkb
                 fi
               done
 
