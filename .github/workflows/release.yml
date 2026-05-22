@@ -17,7 +17,7 @@ jobs:
   build-dist:
     name: Build distribution artifacts
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 180
 
     steps:
       - name: Checkout repository
@@ -71,17 +71,60 @@ jobs:
           echo "out_path=${out_path}" >> "$GITHUB_OUTPUT"
           find -L "$out_path" -maxdepth 3 -type f -printf '%p %s bytes\n' | sort
 
+      - name: Build native package artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build \
+            --target dist \
+            --file packaging/native/Dockerfile \
+            --tag hearthstone-linux-gui-native-dist \
+            .
+
+          container_id="$(docker create hearthstone-linux-gui-native-dist)"
+          trap 'docker rm -f "$container_id" >/dev/null 2>&1 || true' EXIT
+          mkdir -p native-dist
+          docker cp "${container_id}:/." native-dist/
+          docker rm "$container_id"
+          trap - EXIT
+
+          find native-dist -type f -printf '%p %s bytes\n' | sort
+
       - name: Stage release files
         shell: bash
         run: |
           set -euo pipefail
           out_path="${{ steps.build.outputs.out_path }}"
-          mkdir -p release-dist/appimage release-dist/deb release-dist/rpm
+          mkdir -p \
+            release-dist/appimage \
+            release-dist/deb \
+            release-dist/rpm \
+            release-dist/native/deb \
+            release-dist/native/rpm \
+            release-dist/native/pacman
 
           cp -L "$out_path"/appimage/*.AppImage release-dist/appimage/
           cp -L "$out_path"/deb/*.deb release-dist/deb/
           cp -L "$out_path"/rpm/*.rpm release-dist/rpm/
           cp -L "$out_path"/README.txt release-dist/
+
+          for file in native-dist/*.deb; do
+            [ -e "$file" ] || continue
+            name="$(basename "$file")"
+            cp -L "$file" "release-dist/native/deb/${name%.deb}-native.deb"
+          done
+
+          for file in native-dist/*.rpm; do
+            [ -e "$file" ] || continue
+            name="$(basename "$file")"
+            cp -L "$file" "release-dist/native/rpm/${name%.rpm}-native.rpm"
+          done
+
+          for file in native-dist/*.pkg.tar.zst; do
+            [ -e "$file" ] || continue
+            name="$(basename "$file")"
+            cp -L "$file" "release-dist/native/pacman/${name%.pkg.tar.zst}-native.pkg.tar.zst"
+          done
 
           (
             cd release-dist
@@ -131,6 +174,30 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
+      - name: Upload native Debian package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hearthstone-linux-gui-${{ steps.names.outputs.artifact_suffix }}-native-deb
+          path: release-dist/native/deb/*.deb
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Upload native RPM package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hearthstone-linux-gui-${{ steps.names.outputs.artifact_suffix }}-native-rpm
+          path: release-dist/native/rpm/*.rpm
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Upload native pacman package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hearthstone-linux-gui-${{ steps.names.outputs.artifact_suffix }}-native-pacman
+          path: release-dist/native/pacman/*.pkg.tar.zst
+          if-no-files-found: error
+          retention-days: 90
+
       - name: Upload checksums artifact
         uses: actions/upload-artifact@v4
         with:
@@ -160,6 +227,7 @@ jobs:
           - AppImage: portable x86_64 build for general Linux use.
           - DEB: installs the AppImage payload and desktop integration on Debian/Ubuntu-style systems.
           - RPM: installs the AppImage payload and desktop integration on Fedora/RHEL-style systems.
+          - Native DEB/RPM/pacman: distro packages built directly from the native Dockerfile, marked with the \`-native\` filename suffix.
 
           ## Verification
 
@@ -184,7 +252,7 @@ jobs:
           fi
 
           mapfile -t assets < <(find release-dist -type f \
-            \( -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' -o -name 'SHA256SUMS.txt' -o -name 'README.txt' \) \
+            \( -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' -o -name '*.pkg.tar.zst' -o -name 'SHA256SUMS.txt' -o -name 'README.txt' \) \
             | sort)
 
           if gh release view "$tag" >/dev/null 2>&1; then
