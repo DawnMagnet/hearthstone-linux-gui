@@ -12,6 +12,7 @@ use crate::ui::{
 };
 use fltk::{app, button::Button, dialog, frame::Frame, menu::Choice, misc::Progress, prelude::*};
 use hearthstone_linux::{
+    auth::{start_local_callback_server, LocalCallbackServer},
     config::{AppConfig, Locale, Region},
     install::{
         launcher,
@@ -416,8 +417,20 @@ fn begin_login(
         return;
     }
 
-    let login_url = current.region.login_url().to_string();
-    *login_session.borrow_mut() = Some(LoginSession::new());
+    let callback: Rc<LocalCallbackServer> = match start_local_callback_server(
+        (*paths).clone(),
+        current.region,
+    ) {
+        Ok(callback) => Rc::new(callback),
+        Err(error) => {
+            tracing::error!(error = %format!("{error:#}"), "failed to start login callback server");
+            status.set_label(&format!("Login setup failed: {error:#}"));
+            return;
+        }
+    };
+
+    let login_url = callback.login_url.clone();
+    *login_session.borrow_mut() = Some(LoginSession::new(callback));
 
     if let Err(error) = ensure_auth_scheme_handlers() {
         tracing::warn!(error = %format!("{error:#}"), "failed to register auth URI handlers");
