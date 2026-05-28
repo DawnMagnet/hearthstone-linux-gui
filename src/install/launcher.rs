@@ -26,12 +26,15 @@ pub fn launch_game(game_dir: &Path) -> Result<Child> {
         game_dir.join("client.config").exists(),
         "client.config is missing"
     );
-    ensure_bundled_interpreter(&exe)?;
+    let runner = find_runtime_runner();
+    if runner.is_none() {
+        ensure_bundled_interpreter(&exe)?;
+    }
 
     info!(exe = %exe.display(), game_dir = %game_dir.display(), "launching Hearthstone");
-    let library_path = game_library_path(game_dir);
+    let library_path = game_library_path(game_dir, runner.is_none());
     debug!(ld_library_path = ?library_path, "configured game library path");
-    if let Some(runner) = find_runtime_runner() {
+    if let Some(runner) = runner {
         info!(runner = %runner.display(), "launching Hearthstone through runtime");
         return Command::new(&runner)
             .arg(&exe)
@@ -52,7 +55,7 @@ pub fn launch_game(game_dir: &Path) -> Result<Child> {
     Ok(child)
 }
 
-fn game_library_path(game_dir: &Path) -> OsString {
+fn game_library_path(game_dir: &Path, include_runtime: bool) -> OsString {
     let mut paths = Vec::from([
         game_dir.join("Bin"),
         game_dir.join("Bin/Hearthstone_Data/Plugins"),
@@ -61,7 +64,9 @@ fn game_library_path(game_dir: &Path) -> OsString {
         ),
         game_dir.join("Bin/Hearthstone_Data/MonoBleedingEdge/x86_64"),
     ]);
-    paths.extend(runtime_library_paths());
+    if include_runtime {
+        paths.extend(runtime_library_paths());
+    }
     push_existing(&mut paths, "/run/opengl-driver/lib");
     push_existing(&mut paths, "/run/current-system/sw/share/nix-ld/lib");
     push_existing(&mut paths, "/run/current-system/sw/lib");
@@ -162,18 +167,23 @@ fn ensure_bundled_interpreter(exe: &Path) -> Result<()> {
         interpreter = %interpreter.display(),
         "patching Unity player ELF interpreter"
     );
-    let status = Command::new(&patchelf)
+    let output = Command::new(&patchelf)
         .arg("--set-interpreter")
         .arg(&interpreter)
         .arg(exe)
-        .status()
+        .output()
         .with_context(|| format!("failed to run {}", patchelf.display()))?;
-    anyhow::ensure!(
-        status.success(),
-        "{} failed to patch {}",
-        patchelf.display(),
-        exe.display()
-    );
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        anyhow::bail!(
+            "{} failed to patch {}{}{}",
+            patchelf.display(),
+            exe.display(),
+            if stderr.is_empty() { "" } else { ": " },
+            if stderr.is_empty() { stdout } else { stderr }
+        );
+    }
     Ok(())
 }
 

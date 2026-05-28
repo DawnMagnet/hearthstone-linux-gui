@@ -1,9 +1,0 @@
-[package]
-name = "hearthstone-linux-gui-commerce-http-client-stub"
-version = "0.1.5"
-edition = "2021"
-license = "MIT"
-
-[lib]
-name = "commerce_http_client"
-crate-type = ["cdylib"]

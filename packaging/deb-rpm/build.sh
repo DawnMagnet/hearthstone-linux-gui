@@ -3,8 +3,13 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DIST="${DIST:-$ROOT/dist/packages}"
-OUT_LINK="${OUT_LINK:-$ROOT/result-all-dist}"
+BUILD_OUT="${BUILD_OUT:-$ROOT/dist/docker-build}"
 
-mkdir -p "$DIST"
-nix build "$ROOT#AllDist" --out-link "$OUT_LINK" "$@"
-cp -f "$OUT_LINK"/deb/*.deb "$OUT_LINK"/rpm/*.rpm "$DIST"/
+rm -rf "$BUILD_OUT"
+mkdir -p "$BUILD_OUT" "$DIST"
+docker build "$@" \
+  --target dist \
+  --file "$ROOT/packaging/native/Dockerfile" \
+  --output "type=local,dest=$BUILD_OUT" \
+  "$ROOT"
+cp -f "$BUILD_OUT"/*.deb "$BUILD_OUT"/*.rpm "$BUILD_OUT"/*.pkg.tar.zst "$DIST"/

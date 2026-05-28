@@ -12,12 +12,12 @@
 
 <p align="center">
   <img alt="Linux x86_64" src="https://img.shields.io/badge/Linux-x86__64-2f6f73?style=flat-square">
-  <img alt="GTK4" src="https://img.shields.io/badge/GTK-4-4a86cf?style=flat-square">
+  <img alt="FLTK" src="https://img.shields.io/badge/FLTK-bundled-4a86cf?style=flat-square">
   <img alt="Rust" src="https://img.shields.io/badge/Rust-native-b94700?style=flat-square">
   <img alt="Packages" src="https://img.shields.io/badge/AppImage%20%7C%20DEB%20%7C%20RPM%20%7C%20Nix-ready-6750a4?style=flat-square">
 </p>
 
-**hearthstone-linux-gui** 是一个原生 GTK4 桌面管理器，用于在 Linux 上安装、更新、登录并启动炉石传说。本项目从原始
+**hearthstone-linux-gui** 是一个原生 FLTK 桌面管理器，用于在 Linux 上安装、更新、登录并启动炉石传说。本项目从原始
 [`hearthstone-linux`](https://github.com/0xf4b1/hearthstone-linux)
 项目迁移而来，但已经不再采用旧的脚本式使用方式，而是重构为一个可打包、可发布、可图形化使用的 Rust 桌面应用。
 
@@ -29,12 +29,12 @@
 组合后在 Linux 上运行。本项目保留这个技术路线，但把使用方式升级为真正的桌面应用和标准发布包。
 
 <p align="center">
-  <img src="docs/images/readme-flow.svg" alt="从脚本流程迁移到 GTK4 桌面流程" width="860">
+  <img src="docs/images/readme-flow.svg" alt="从脚本流程迁移到桌面流程" width="860">
 </p>
 
 | 原始 `hearthstone-linux` | 当前项目 |
 | --- | --- |
-| 以脚本和手工步骤为主 | GTK4/libadwaita 原生桌面应用 |
+| 以脚本和手工步骤为主 | FLTK 原生桌面应用 |
 | 依赖命令行流程 | 安装、登录、更新、启动全部按钮化 |
 | 用户侧需要准备 Python/Bash 等环境 | 发布包自带运行环境，普通使用无需 Python 或 Bash 环境 |
 | 依赖外部 `keg` 下载流程 | Rust 原生 NGDP 下载器，支持缓存和校验 |
@@ -42,7 +42,7 @@
 
 ## 核心特性
 
-- **一键桌面体验**：安装、更新、登录、启动都在 GTK4 窗口中完成。
+- **一键桌面体验**：安装、更新、登录、启动都在原生 FLTK 窗口中完成。
 - **无需命令行操作**：发布版本面向图形化安装和日常使用。
 - **无需 Python/Bash 运行环境**：启动器是原生 Rust 程序，并随发布包携带所需运行库。
 - **跨 Linux 发行版**：面向 NixOS、Debian、Ubuntu、Fedora 以及其他 x86_64 Linux 桌面系统。
@@ -51,7 +51,7 @@
 - **DEB/RPM 安装包**：适合通过发行版的软件中心或包管理器安装。
 - **断点续传**：Unity runtime 下载中断后可以从未完成的部分继续。
 - **缓存复用**：NGDP 游戏数据会被缓存并校验，减少重复下载。
-- **不依赖 Steam**：AppImage 自带可移植 GTK/runtime 层，游戏启动由项目自身 runtime 处理，不需要 `steam-run`。
+- **不依赖 Steam**：AppImage 自带可移植 GUI/runtime 层，游戏启动由项目自身 runtime 处理，不需要 `steam-run`。
 
 ## 发布包选择
 
@@ -66,7 +66,7 @@
 | **RPM** | Fedora、RHEL 兼容系统以及 openSUSE 类工作流 | 双击后通过图形化软件中心安装 |
 | **Nix** | NixOS 和 Nix 用户 | 原生 Nix 包输出，包含桌面文件和启动器 |
 
-所有发布产物都来自统一的 Nix 构建流程，确保 AppImage、DEB、RPM 和 Nix 包使用同一份源码、同一个版本和同一套依赖图。
+Nix 构建现在只专注于原生 Nix 包。AppImage、DEB、RPM 和 pacman 发布产物由 Docker 打包流程生成。
 
 ## 普通用户如何安装
 

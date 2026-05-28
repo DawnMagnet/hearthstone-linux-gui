@@ -1,4 +1,4 @@
-FROM ustclug/debian:12 AS build
+FROM ustclug/debian:12
 
 ARG RUST_VERSION=1.90.0
 ARG NFPM_VERSION=2.43.1
@@ -8,26 +8,30 @@ ARG TARGETARCH=amd64
 ENV CARGO_HOME=/opt/cargo \
   RUSTUP_HOME=/opt/rustup \
   PATH=/opt/cargo/bin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-  DEBIAN_FRONTEND=noninteractive \
-  CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse
-
-WORKDIR /workspace
+  APPIMAGE_EXTRACT_AND_RUN=1 \
+  CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse \
+  DEBIAN_FRONTEND=noninteractive
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
   appstream \
+  bash-completion \
   binutils \
   ca-certificates \
   libcairo2-dev \
   cmake \
   curl \
+  dbus-x11 \
   desktop-file-utils \
   dpkg-dev \
   file \
+  fuse3 \
   gcc \
   g++ \
+  git \
+  less \
   libc6-dev \
   libfontconfig1-dev \
   libfreetype-dev \
@@ -45,9 +49,11 @@ RUN apt-get update \
   patchelf \
   pax-utils \
   pkg-config \
+  procps \
   rpm \
   shared-mime-info \
   squashfs-tools \
+  vim-tiny \
   xkb-data \
   xz-utils \
   zstd \
@@ -59,6 +65,7 @@ RUN case "$TARGETARCH" in \
   *) echo "unsupported TARGETARCH=$TARGETARCH" >&2; exit 1 ;; \
   esac \
   && curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain "$RUST_VERSION" --default-host "$rustup_arch" \
+  && rustup component add clippy rustfmt rust-src \
   && rustc --version \
   && cargo --version \
   && curl -fsSL "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}/nfpm_${NFPM_VERSION}_Linux_${nfpm_arch}.tar.gz" \
@@ -73,15 +80,4 @@ RUN case "$TARGETARCH" in \
   /opt/linuxdeploy/usr/bin/linuxdeploy --version; \
   fi
 
-COPY Cargo.toml Cargo.lock ./
-COPY assets ./assets
-COPY crates ./crates
-COPY data ./data
-COPY packaging ./packaging
-COPY src ./src
-
-RUN mkdir -p /pkgroot /dist && \
-  PKG_ROOT=/pkgroot DIST_DIR=/dist /bin/bash packaging/native/build-dist.sh
-
-FROM scratch AS dist
-COPY --from=build /dist /
+WORKDIR /workspace

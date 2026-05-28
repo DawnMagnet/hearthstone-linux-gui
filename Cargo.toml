@@ -1,9 +1,9 @@
 [package]
 name = "hearthstone-linux-gui"
-version = "0.1.5"
+version = "0.1.6"
 edition = "2021"
 license = "MIT"
-description = "Native GTK4 Linux GUI manager for crafting and launching Hearthstone"
+description = "Native FLTK Linux GUI manager for crafting and launching Hearthstone"
 
 [lib]
 name = "hearthstone_linux"
@@ -13,24 +13,21 @@ path = "src/lib.rs"
 members = [
     ".",
     "crates/stubs/blz-commerce-sdk-plugin",
-    "crates/stubs/commerce-http-client",
     "crates/stubs/core-foundation",
-    "crates/stubs/native-api-mac",
     "crates/stubs/osx-window-management",
 ]
 default-members = [
     ".",
     "crates/stubs/blz-commerce-sdk-plugin",
-    "crates/stubs/commerce-http-client",
     "crates/stubs/core-foundation",
-    "crates/stubs/native-api-mac",
     "crates/stubs/osx-window-management",
 ]
 resolver = "2"
 
 [features]
-default = ["gui"]
-gui = ["dep:gtk4", "dep:libadwaita"]
+default = ["gui", "fltk-bundled"]
+gui = ["dep:fltk"]
+fltk-bundled = ["fltk?/fltk-bundled"]
 
 [dependencies]
 aes = "0.8"
@@ -60,8 +57,7 @@ walkdir = "2"
 xz2 = "0.1"
 xdg = "3"
 
-gtk4 = { version = "0.10", optional = true }
-libadwaita = { version = "0.8", optional = true }
+fltk = { version = "1.5", optional = true }
 
 [dev-dependencies]
 tempfile = "3"

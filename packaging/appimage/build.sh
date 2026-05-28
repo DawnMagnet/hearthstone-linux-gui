@@ -3,8 +3,13 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DIST="${DIST:-$ROOT/dist}"
-OUT_LINK="${OUT_LINK:-$ROOT/result-appimage}"
+BUILD_OUT="${BUILD_OUT:-$ROOT/dist/docker-build}"
 
-mkdir -p "$DIST"
-nix build "$ROOT#AppImage" --out-link "$OUT_LINK" "$@"
-cp -f "$OUT_LINK"/hearthstone-linux-gui-*-x86_64.AppImage "$DIST"/
+rm -rf "$BUILD_OUT"
+mkdir -p "$BUILD_OUT" "$DIST"
+docker build "$@" \
+  --target dist \
+  --file "$ROOT/packaging/native/Dockerfile" \
+  --output "type=local,dest=$BUILD_OUT" \
+  "$ROOT"
+cp -f "$BUILD_OUT"/hearthstone-linux-gui-*-x86_64.AppImage "$DIST"/

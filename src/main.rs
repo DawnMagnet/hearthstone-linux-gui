@@ -20,7 +20,7 @@ struct Args {
     #[arg(long)]
     install: bool,
 
-    /// Run without GTK; useful for CI smoke checks.
+    /// Run without opening the GUI; useful for CI smoke checks.
     #[arg(long)]
     no_gui: bool,
 

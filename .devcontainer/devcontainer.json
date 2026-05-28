@@ -1,0 +1,25 @@
+{
+  "name": "hearthstone-linux packaging",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
+  "workspaceFolder": "/workspace",
+  "remoteUser": "root",
+  "containerEnv": {
+    "APPIMAGE_EXTRACT_AND_RUN": "1",
+    "CARGO_REGISTRIES_CRATES_IO_PROTOCOL": "sparse",
+    "DEBIAN_FRONTEND": "noninteractive"
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "rust-lang.rust-analyzer",
+        "vadimcn.vscode-lldb",
+        "tamasfe.even-better-toml"
+      ]
+    }
+  },
+  "postCreateCommand": "rustc --version && cargo --version && nfpm --version && /opt/linuxdeploy/usr/bin/linuxdeploy --version"
+}

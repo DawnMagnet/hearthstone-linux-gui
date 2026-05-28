@@ -12,12 +12,12 @@
 
 <p align="center">
   <img alt="Linux x86_64" src="https://img.shields.io/badge/Linux-x86__64-2f6f73?style=flat-square">
-  <img alt="GTK4" src="https://img.shields.io/badge/GTK-4-4a86cf?style=flat-square">
+  <img alt="FLTK" src="https://img.shields.io/badge/FLTK-bundled-4a86cf?style=flat-square">
   <img alt="Rust" src="https://img.shields.io/badge/Rust-native-b94700?style=flat-square">
   <img alt="Packages" src="https://img.shields.io/badge/AppImage%20%7C%20DEB%20%7C%20RPM%20%7C%20Nix-ready-6750a4?style=flat-square">
 </p>
 
-**hearthstone-linux-gui** is a native GTK4 desktop manager for installing,
+**hearthstone-linux-gui** is a native FLTK desktop manager for installing,
 updating, logging into, and launching Hearthstone on Linux. It is migrated from
 the original [`hearthstone-linux`](https://github.com/0xf4b1/hearthstone-linux)
 project, but the old script-driven workflow has been replaced by a packaged
@@ -35,12 +35,12 @@ project keeps that idea, but turns it into a desktop application that is easier
 to distribute and maintain.
 
 <p align="center">
-  <img src="docs/images/readme-flow.svg" alt="Old script workflow replaced by a GTK4 desktop workflow" width="860">
+  <img src="docs/images/readme-flow.svg" alt="Old script workflow replaced by a desktop workflow" width="860">
 </p>
 
 | Original `hearthstone-linux` | This project |
 | --- | --- |
-| Script-oriented setup | GTK4/libadwaita desktop application |
+| Script-oriented setup | Native FLTK desktop application |
 | Manual command-line flow | Button-driven install, login, update, and launch |
 | Python/Bash toolchain expected by users | Packaged runtime; no Python or Bash environment needed for normal use |
 | External `keg` downloader workflow | Native Rust NGDP downloader with cache and verification |
@@ -49,7 +49,7 @@ to distribute and maintain.
 ## Highlights
 
 - **One-click desktop experience**: install, update, login, and launch from a
-  GTK4 window.
+  native FLTK window.
 - **No command-line requirement**: release builds are meant for graphical
   installation and daily use.
 - **No Python/Bash runtime requirement**: the launcher is a native Rust binary
@@ -65,7 +65,7 @@ to distribute and maintain.
   file after interruption.
 - **Cached game data**: downloaded NGDP content is cached and verified to avoid
   unnecessary network work.
-- **No Steam dependency**: the AppImage carries the portable GTK/runtime layer;
+- **No Steam dependency**: the AppImage carries the portable GUI/runtime layer;
   the game itself is launched with the project's own runtime handling, not
   `steam-run`.
 
@@ -82,8 +82,8 @@ to distribute and maintain.
 | **RPM** | Fedora, RHEL-compatible, openSUSE-style workflows | Open with the graphical software installer |
 | **Nix** | NixOS and Nix package users | Native package output with desktop file and launcher |
 
-Release builds are produced from the unified Nix build pipeline so every format
-comes from the same source, version, and dependency graph.
+Nix builds focus on the native Nix package output. AppImage, DEB, RPM, and
+pacman release artifacts are produced by the Docker packaging pipeline.
 
 ## Installation For Users
 

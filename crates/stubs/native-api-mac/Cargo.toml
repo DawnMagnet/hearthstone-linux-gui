@@ -1,9 +1,0 @@
-[package]
-name = "hearthstone-linux-gui-native-api-mac-stub"
-version = "0.1.5"
-edition = "2021"
-license = "MIT"
-
-[lib]
-name = "NativeApiMac"
-crate-type = ["cdylib"]

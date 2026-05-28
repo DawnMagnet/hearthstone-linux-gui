@@ -26,13 +26,6 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
-      - name: Install Nix
-        uses: cachix/install-nix-action@v31
-        with:
-          extra_nix_config: |
-            experimental-features = nix-command flakes
-            accept-flake-config = true
-
       - name: Show release context
         shell: bash
         run: |
@@ -40,7 +33,6 @@ jobs:
           echo "ref=${GITHUB_REF}"
           echo "ref_name=${GITHUB_REF_NAME}"
           echo "sha=${GITHUB_SHA}"
-          nix --version
 
       - name: Prepare artifact names
         id: names
@@ -62,63 +54,46 @@ jobs:
             exit 1
           fi
 
-      - name: Build all distribution artifacts
-        id: build
+      - name: Build distribution artifacts
         shell: bash
         run: |
           set -euo pipefail
-          out_path="$(nix build .#AllDist --print-out-paths)"
-          echo "out_path=${out_path}" >> "$GITHUB_OUTPUT"
-          find -L "$out_path" -maxdepth 3 -type f -printf '%p %s bytes\n' | sort
-
-      - name: Build native package artifacts
-        shell: bash
-        run: |
-          set -euo pipefail
-          rm -rf native-dist
-          mkdir -p native-dist
+          rm -rf docker-dist
+          mkdir -p docker-dist
           docker build \
             --target dist \
             --file packaging/native/Dockerfile \
-            --output type=local,dest=native-dist \
+            --output type=local,dest=docker-dist \
             .
 
-          find native-dist -type f -printf '%p %s bytes\n' | sort
+          find docker-dist -type f -printf '%p %s bytes\n' | sort
 
       - name: Stage release files
         shell: bash
         run: |
           set -euo pipefail
-          out_path="${{ steps.build.outputs.out_path }}"
           mkdir -p \
             release-dist/appimage \
             release-dist/deb \
             release-dist/rpm \
-            release-dist/native/deb \
-            release-dist/native/rpm \
-            release-dist/native/pacman
+            release-dist/pacman
 
-          cp -L "$out_path"/appimage/*.AppImage release-dist/appimage/
-          cp -L "$out_path"/deb/*.deb release-dist/deb/
-          cp -L "$out_path"/rpm/*.rpm release-dist/rpm/
-          cp -L "$out_path"/README.txt release-dist/
+          cp -L docker-dist/*.AppImage release-dist/appimage/
+          cp -L docker-dist/README.txt release-dist/
 
-          for file in native-dist/*.deb; do
+          for file in docker-dist/*.deb; do
             [ -e "$file" ] || continue
-            name="$(basename "$file")"
-            cp -L "$file" "release-dist/native/deb/${name%.deb}-native.deb"
+            cp -L "$file" release-dist/deb/
           done
 
-          for file in native-dist/*.rpm; do
+          for file in docker-dist/*.rpm; do
             [ -e "$file" ] || continue
-            name="$(basename "$file")"
-            cp -L "$file" "release-dist/native/rpm/${name%.rpm}-native.rpm"
+            cp -L "$file" release-dist/rpm/
           done
 
-          for file in native-dist/*.pkg.tar.zst; do
+          for file in docker-dist/*.pkg.tar.zst; do
             [ -e "$file" ] || continue
-            name="$(basename "$file")"
-            cp -L "$file" "release-dist/native/pacman/${name%.pkg.tar.zst}-native.pkg.tar.zst"
+            cp -L "$file" release-dist/pacman/
           done
 
           (
@@ -169,27 +144,11 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
-      - name: Upload native Debian package artifact
+      - name: Upload pacman package artifact
         uses: actions/upload-artifact@v4
         with:
-          name: hearthstone-linux-gui-${{ steps.names.outputs.artifact_suffix }}-native-deb
-          path: release-dist/native/deb/*.deb
-          if-no-files-found: error
-          retention-days: 90
-
-      - name: Upload native RPM package artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: hearthstone-linux-gui-${{ steps.names.outputs.artifact_suffix }}-native-rpm
-          path: release-dist/native/rpm/*.rpm
-          if-no-files-found: error
-          retention-days: 90
-
-      - name: Upload native pacman package artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: hearthstone-linux-gui-${{ steps.names.outputs.artifact_suffix }}-native-pacman
-          path: release-dist/native/pacman/*.pkg.tar.zst
+          name: hearthstone-linux-gui-${{ steps.names.outputs.artifact_suffix }}-pacman
+          path: release-dist/pacman/*.pkg.tar.zst
           if-no-files-found: error
           retention-days: 90
 
@@ -220,9 +179,9 @@ jobs:
           ## Downloads
 
           - AppImage: portable x86_64 build for general Linux use.
-          - DEB: installs the AppImage payload and desktop integration on Debian/Ubuntu-style systems.
-          - RPM: installs the AppImage payload and desktop integration on Fedora/RHEL-style systems.
-          - Native DEB/RPM/pacman: distro packages built directly from the native Dockerfile, marked with the \`-native\` filename suffix.
+          - DEB: native FLTK package for Debian/Ubuntu-style systems.
+          - RPM: native FLTK package for Fedora/RHEL-style systems.
+          - pacman: native FLTK package for pacman-based systems.
 
           ## Verification
 

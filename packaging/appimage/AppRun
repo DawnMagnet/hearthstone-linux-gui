@@ -5,7 +5,7 @@ APPDIR="${APPDIR:-$(dirname "$(readlink -f "$0")")}"
 
 export PATH="$APPDIR/usr/bin:$PATH"
 export XDG_DATA_DIRS="$APPDIR/usr/share${XDG_DATA_DIRS:+:$XDG_DATA_DIRS}"
-export LD_LIBRARY_PATH="$APPDIR/usr/lib:$APPDIR/usr/lib/hearthstone-linux-gui-runtime${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export LD_LIBRARY_PATH="$APPDIR/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 if [ -d "$APPDIR/usr/share/X11/xkb" ]; then
   export XKB_CONFIG_ROOT="$APPDIR/usr/share/X11/xkb"
 fi
@@ -37,29 +37,11 @@ append_existing_path() {
 append_existing_path LD_LIBRARY_PATH /run/opengl-driver/lib
 append_existing_path LD_LIBRARY_PATH /run/current-system/sw/share/nix-ld/lib
 append_existing_path LD_LIBRARY_PATH /run/current-system/sw/lib
+prepend_existing_path LD_LIBRARY_PATH "$APPDIR/usr/lib/x86_64-linux-gnu"
 prepend_existing_path LIBGL_DRIVERS_PATH /run/opengl-driver/lib/dri
 prepend_existing_path __EGL_VENDOR_LIBRARY_DIRS /run/opengl-driver/share/glvnd/egl_vendor.d
 
-if [ -d "$APPDIR/usr/lib/girepository-1.0" ]; then
-  export GI_TYPELIB_PATH="$APPDIR/usr/lib/girepository-1.0${GI_TYPELIB_PATH:+:$GI_TYPELIB_PATH}"
-fi
-if [ -d "$APPDIR/usr/lib/gio/modules" ]; then
-  export GIO_MODULE_DIR="$APPDIR/usr/lib/gio/modules${GIO_MODULE_DIR:+:$GIO_MODULE_DIR}"
-fi
-if [ -f "$APPDIR/usr/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache" ]; then
-  export GDK_PIXBUF_MODULE_FILE="$APPDIR/usr/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache"
-fi
-
 export HEARTHSTONE_LINUX_RESOURCES="$APPDIR/usr/share/hearthstone-linux-gui"
 export HEARTHSTONE_LINUX_STUBS="$APPDIR/usr/share/hearthstone-linux-gui/stubs"
-export HEARTHSTONE_LINUX_RUNTIME_DIR="$APPDIR/usr/lib/hearthstone-linux-gui-runtime"
-export HEARTHSTONE_LINUX_PATCHELF="$APPDIR/usr/bin/patchelf"
-export HEARTHSTONE_LINUX_ELF_INTERPRETER="$APPDIR/usr/lib/hearthstone-linux-gui-runtime/ld-linux-x86-64.so.2"
-
-if [ -x "$HEARTHSTONE_LINUX_ELF_INTERPRETER" ]; then
-  exec "$HEARTHSTONE_LINUX_ELF_INTERPRETER" \
-    --library-path "$LD_LIBRARY_PATH" \
-    "$APPDIR/usr/bin/hearthstone-linux-gui" "$@"
-fi
 
 exec "$APPDIR/usr/bin/hearthstone-linux-gui" "$@"

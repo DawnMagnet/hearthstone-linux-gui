@@ -1,68 +1,49 @@
 # Packaging
 
-Nix is the single source of truth for release builds. The helper scripts in
-this directory are thin wrappers around flake targets; they do not duplicate
-packaging logic.
+The Debian 12 Dockerfile is the release packaging path. It uses apt for system
+dependencies, installs the Rust toolchain with rustup, builds the Rust FLTK
+application once, creates native package formats with nfpm, then builds the
+AppImage from the same executable with linuxdeploy.
 
-This project has three release tracks:
+This project has four release tracks:
 
-- `nix`: a native Nix package from `flake.nix`.
-- `appimage`: a self-contained x86_64 AppImage for general Linux use.
-- `deb-rpm`: `.deb` and `.rpm` packages that install the AppImage payload.
-
-The `.deb` and `.rpm` packages intentionally reuse the AppImage instead of
-linking the GTK/libadwaita launcher against each target distro. That keeps the
-package-format installers broad while the AppImage carries the portable runtime.
+- `deb`: native `.deb` package for Debian/Ubuntu-style systems.
+- `rpm`: native `.rpm` package for Fedora/RHEL-style systems.
+- `pacman`: native `.pkg.tar.zst` package for pacman-based systems.
+- `appimage`: self-contained x86_64 AppImage, built after the native packages.
 
 ## All Artifacts
 
 Build everything with one command:
 
 ```sh
-nix build .#AllDist
+docker build \
+  --target dist \
+  --file packaging/native/Dockerfile \
+  --output type=local,dest=dist/release \
+  .
 ```
 
 The output contains:
 
-- `nix/hearthstone-linux-gui`: native Nix package output.
-- `nix/hearthstone-linux-gui-runtime`: Nix runtime wrapper for the Unity player.
-- `appimage/*.AppImage`: portable x86_64 AppImage.
-- `deb/*.deb`: Debian package that installs the AppImage payload.
-- `rpm/*.rpm`: RPM package that installs the AppImage payload.
-
-## Nix
-
-Build the native package:
-
-```sh
-nix build .#default
-```
-
-Build only the Nix runtime wrapper used to launch the downloaded Unity player:
-
-```sh
-nix build .#runtime
-```
+- `*.deb`: Debian package.
+- `*.rpm`: RPM package.
+- `*.pkg.tar.zst`: pacman package.
+- `*.AppImage`: portable x86_64 AppImage.
+- `SHA256SUMS.txt`: checksums.
 
 ## AppImage
 
-Build only the AppImage:
+Build and copy only the AppImage to `dist/`:
 
 ```sh
-nix build .#AppImage
+packaging/appimage/build.sh
 ```
 
-`packaging/appimage/build.sh` is a convenience wrapper that copies this output
-to `dist/`.
+## Deb/RPM/pacman
 
-## Deb/RPM
-
-Build only one package format:
+Build and copy native package formats to `dist/packages/`:
 
 ```sh
-nix build .#Deb
-nix build .#Rpm
+packaging/deb-rpm/build.sh
 ```
-
-`packaging/deb-rpm/build.sh` is a convenience wrapper that copies both package
-formats from `.#AllDist` to `dist/packages/`.
