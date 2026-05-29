@@ -70,9 +70,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          mkdir -p release-dist/appimage
           out_path="$(nix build .#AppImage --print-out-paths)"
           echo "out_path=${out_path}" >> "$GITHUB_OUTPUT"
-          find -L "$out_path" -maxdepth 2 -type f -printf '%p %s bytes\n' | sort
+          mapfile -t appimages < <(find -L "$out_path" -maxdepth 2 -type f -name '*.AppImage' | sort)
+          if [ "${#appimages[@]}" -eq 0 ]; then
+            echo "No AppImage found in ${out_path}" >&2
+            exit 1
+          fi
+          cp -f "${appimages[@]}" release-dist/appimage/
+          (
+            cd release-dist/appimage
+            sha256sum *.AppImage > ../SHA256SUMS.txt
+          )
+          find -L release-dist -maxdepth 3 -type f -printf '%p %s bytes\n' | sort
 
       - name: Create release notes
         if: startsWith(github.ref, 'refs/tags/v')
