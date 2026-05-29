@@ -26,7 +26,8 @@ pub fn reconcile(paths: &AppPaths) -> (AppConfig, StatusSnapshot) {
     }
     .to_string();
 
-    (config.clone(), snapshot(headline, &config, token_exists))
+    let snapshot = snapshot(headline, &config, token_exists);
+    (config, snapshot)
 }
 
 pub fn snapshot(

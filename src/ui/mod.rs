@@ -1,6 +1,7 @@
 mod app;
 mod auth;
 mod browser;
+mod components;
 mod status;
 
 use relm4::gtk::prelude::*;
@@ -10,7 +11,6 @@ use relm4::{
         self,
         gio::{self, prelude::ApplicationExtManual},
     },
-    RelmApp,
 };
 
 use hearthstone_linux::{auth as core_auth, paths::AppPaths};
@@ -25,8 +25,7 @@ pub fn run() {
     gtk_app.connect_startup(|_| configure_color_scheme());
     gtk_app.connect_open(handle_open);
 
-    let relm_app = RelmApp::from_app(gtk_app);
-    relm_app.run::<app::MainWindow>(app::AppInit::load());
+    app::run(gtk_app);
 }
 
 fn handle_open(_app: &adw::Application, files: &[gio::File], _hint: &str) {

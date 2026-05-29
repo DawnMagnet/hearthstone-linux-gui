@@ -49,15 +49,6 @@ impl Region {
             _ => "https://battle.net/login/?app=wtcg",
         }
     }
-
-    pub fn login_url_with_callback(self, callback_url: &str) -> String {
-        match self {
-            Region::Cn => format!(
-                "https://account.battlenet.com.cn/login/zh/?ref={callback_url}&app=wtcg-and&showCredentials=true"
-            ),
-            _ => format!("https://battle.net/login/?ref={callback_url}&app=wtcg"),
-        }
-    }
 }
 
 impl fmt::Display for Region {

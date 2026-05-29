@@ -1,4 +1,3 @@
-use super::browser::shell_quote_path;
 use hearthstone_linux::{config::AppConfig, paths::AppPaths};
 use std::path::{Path, PathBuf};
 
@@ -103,20 +102,17 @@ fn install_auth_callback_helper(paths: &AppPaths, exe: &Path) -> std::io::Result
 
 fn user_desktop_entry(helper: &Path) -> String {
     format!(
-        "[Desktop Entry]\nType=Application\nName=hearthstone-linux-gui Login Callback\nExec=sh -c \"exec \\\"$1\\\" \\\"${{2:-}}\\\"\" hearthstone-linux-auth {} %u\nIcon=io.github.hearthstone_linux_gui\nCategories=Game;\nMimeType=x-scheme-handler/wtcg;x-scheme-handler/blizzard-hearthstone;x-scheme-handler/hearthstone-linux;x-scheme-handler/hearthstone-linux-gui;\nNoDisplay=true\nTerminal=false\nStartupNotify=false\n",
+        "[Desktop Entry]\nType=Application\nName=hearthstone-linux-gui Login Callback\nExec={} %u\nIcon=io.github.hearthstone_linux_gui\nCategories=Game;\nMimeType=x-scheme-handler/wtcg;x-scheme-handler/blizzard-hearthstone;x-scheme-handler/hearthstone-linux;x-scheme-handler/hearthstone-linux-gui;\nNoDisplay=true\nTerminal=false\nStartupNotify=false\n",
         desktop_exec_arg(helper)
     )
 }
 
 fn desktop_exec_arg(path: &Path) -> String {
-    let value = path.to_string_lossy();
-    if value
-        .chars()
-        .any(|ch| ch.is_whitespace() || matches!(ch, '"' | '\\' | '$' | '`'))
-    {
-        shell_quote_path(path)
+    let value = path.to_string_lossy().replace('%', "%%");
+    if value.chars().any(char::is_whitespace) {
+        format!("\"{value}\"")
     } else {
-        value.into_owned()
+        value
     }
 }
 
@@ -206,4 +202,10 @@ fn make_executable(path: &Path) -> std::io::Result<()> {
 #[cfg(not(unix))]
 fn make_executable(_path: &Path) -> std::io::Result<()> {
     Ok(())
+}
+
+fn shell_quote_path(path: &Path) -> String {
+    let value = path.to_string_lossy();
+    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("\"{escaped}\"")
 }

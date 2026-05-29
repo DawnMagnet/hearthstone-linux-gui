@@ -21,7 +21,7 @@
         pkgs = import nixpkgs { inherit system overlays; };
 
         pname = "hearthstone-linux-gui";
-        packageVersion = "0.1.5";
+        packageVersion = "0.1.6";
         appId = "io.github.hearthstone_linux_gui";
         desktopFile = "${appId}.desktop";
         iconFile = "${appId}.svg";
@@ -150,7 +150,7 @@
           inherit pname;
           version = packageVersion;
           src = rustSource;
-          cargoLock.lockFile = ./Cargo.lock;
+          cargoHash = "sha256-9zDUAJJ91LJ4Kfch8G9G4KqOr8e5eFcl+0izODd8Ams=";
           inherit nativeBuildInputs buildInputs;
           cargoBuildFlags = [ "--workspace" ];
           cargoTestFlags = [ "--workspace" ];

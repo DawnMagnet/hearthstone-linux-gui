@@ -1,7 +1,14 @@
-use super::{auth, browser, status};
+use super::{
+    auth, browser,
+    components::{
+        ActionBar, ActionBarInput, ActionBarOutput, ActionBarState, LaunchState, LoginState,
+        SettingsOutput, SettingsPanel, SettingsPanelInput, StatusPanel, StatusPanelInput,
+        StatusPanelState,
+    },
+    status,
+};
 use hearthstone_linux::{
-    auth::{start_local_callback_server, LocalCallbackServer},
-    config::{AppConfig, Locale, Region},
+    config::AppConfig,
     install::{
         launcher,
         manager::{InstallManager, TaskEvent},
@@ -9,10 +16,12 @@ use hearthstone_linux::{
     paths::AppPaths,
 };
 use relm4::adw::prelude::*;
-use relm4::{adw, gtk, gtk::glib, Component, ComponentParts, ComponentSender};
+use relm4::{
+    abstractions::Toaster, adw, gtk, gtk::glib, prelude::*, ComponentController, Controller,
+    RelmApp,
+};
 use std::{
     process::Child,
-    rc::Rc,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -20,7 +29,12 @@ use std::{
     time::Duration,
 };
 
-pub struct AppInit {
+pub(super) fn run(gtk_app: adw::Application) {
+    let relm_app = RelmApp::from_app(gtk_app);
+    relm_app.run::<MainWindow>(AppInit::load());
+}
+
+struct AppInit {
     paths: AppPaths,
     config: AppConfig,
     snapshot: status::StatusSnapshot,
@@ -38,35 +52,32 @@ impl AppInit {
     }
 }
 
-pub struct MainWindow {
+struct MainWindow {
     paths: AppPaths,
     config: AppConfig,
     status: status::StatusSnapshot,
+    progress: ProgressState,
     install_state: InstallState,
     install_cancel: Option<Arc<AtomicBool>>,
     login_session: Option<LoginSession>,
     game_session: Option<GameSession>,
-    progress: ProgressState,
+    status_panel: Controller<StatusPanel>,
+    settings_panel: Controller<SettingsPanel>,
+    actions: Controller<ActionBar>,
+    toaster: Toaster,
 }
 
 #[derive(Debug)]
 pub enum AppMsg {
-    RegionChanged(String),
-    LocaleChanged(String),
-    InstallPressed,
+    Settings(SettingsOutput),
+    Action(ActionBarOutput),
     InstallEvent(TaskEvent),
-    LoginPressed,
-    Logout,
-    SwitchAccount,
     LoginPoll,
-    LaunchPressed,
     GamePoll,
-    Refresh,
 }
 
 struct LoginSession {
     cancel: Arc<AtomicBool>,
-    callback: Rc<LocalCallbackServer>,
 }
 
 struct GameSession {
@@ -81,140 +92,138 @@ enum InstallState {
     Stopping,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum LoginState {
-    Idle,
-    Waiting,
-    LoggedIn,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum LaunchState {
-    Idle,
-    Running,
-    Stopping,
-}
-
 #[derive(Clone, Debug, Default)]
-struct ProgressState {
-    visible: bool,
-    fraction: Option<f64>,
-    text: Option<String>,
+pub struct ProgressState {
+    pub visible: bool,
+    pub fraction: Option<f64>,
+    pub text: Option<String>,
 }
 
-pub struct MainWidgets {
-    status: gtk::Label,
-    details: gtk::Label,
-    progress: gtk::ProgressBar,
-    region: gtk::ComboBoxText,
-    locale: gtk::ComboBoxText,
-    install: gtk::Button,
-    login: gtk::Button,
-    launch: gtk::Button,
-}
-
-impl Component for MainWindow {
-    type CommandOutput = ();
+#[relm4::component]
+impl SimpleComponent for MainWindow {
     type Init = AppInit;
     type Input = AppMsg;
     type Output = ();
-    type Root = adw::ApplicationWindow;
-    type Widgets = MainWidgets;
 
-    fn init_root() -> Self::Root {
-        adw::ApplicationWindow::builder()
-            .title("hearthstone-linux-gui")
-            .default_width(620)
-            .default_height(360)
-            .build()
+    view! {
+        main_window = adw::ApplicationWindow {
+            set_title: Some("hearthstone-linux-gui"),
+            set_default_size: (620, 360),
+
+            #[local_ref]
+            toast_overlay -> adw::ToastOverlay {
+                gtk::Box {
+                    set_orientation: gtk::Orientation::Vertical,
+
+                    adw::HeaderBar {
+                        #[wrap(Some)]
+                        set_title_widget = &adw::WindowTitle {
+                            set_title: "hearthstone-linux-gui",
+                        }
+                    },
+
+                    gtk::Box {
+                        set_orientation: gtk::Orientation::Vertical,
+                        set_spacing: 12,
+                        set_margin_top: 18,
+                        set_margin_bottom: 18,
+                        set_margin_start: 18,
+                        set_margin_end: 18,
+
+                        #[local_ref]
+                        status_panel -> gtk::Box {},
+
+                        #[local_ref]
+                        settings_panel -> gtk::Grid {},
+
+                        #[local_ref]
+                        actions -> gtk::Box {},
+                    }
+                }
+            }
+        }
     }
 
     fn init(
         init: Self::Init,
-        window: Self::Root,
+        _root: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
         tracing::debug!("building Relm4 main window");
+
+        let status_panel = StatusPanel::builder()
+            .launch(StatusPanelState {
+                snapshot: init.snapshot.clone(),
+                progress: ProgressState::default(),
+            })
+            .detach();
+        let settings_panel = SettingsPanel::builder()
+            .launch(init.config.clone())
+            .forward(sender.input_sender(), AppMsg::Settings);
+        let actions = ActionBar::builder()
+            .launch(ActionBarState::default())
+            .forward(sender.input_sender(), AppMsg::Action);
+        let toaster = Toaster::default();
+
         let model = MainWindow {
             paths: init.paths,
             config: init.config,
             status: init.snapshot,
+            progress: ProgressState::default(),
             install_state: InstallState::Idle,
             install_cancel: None,
             login_session: None,
             game_session: None,
-            progress: ProgressState::default(),
+            status_panel,
+            settings_panel,
+            actions,
+            toaster,
         };
 
-        let mut widgets = build_widgets(&window, &sender);
-        model.update_view(&mut widgets, sender);
+        let toast_overlay = model.toaster.overlay_widget();
+        let status_panel = model.status_panel.widget();
+        let settings_panel = model.settings_panel.widget();
+        let actions = model.actions.widget();
+
+        let widgets = view_output!();
+        model.render_children();
+
         ComponentParts { model, widgets }
     }
 
-    fn update_with_view(
-        &mut self,
-        widgets: &mut Self::Widgets,
-        message: Self::Input,
-        sender: ComponentSender<Self>,
-        _root: &Self::Root,
-    ) {
+    fn update(&mut self, message: Self::Input, sender: ComponentSender<Self>) {
         match message {
-            AppMsg::RegionChanged(value) => {
-                if let Ok(region) = value.parse() {
-                    self.config.region = region;
-                    self.refresh_details();
-                }
-            }
-            AppMsg::LocaleChanged(value) => {
-                if let Ok(locale) = value.parse() {
-                    self.config.locale = locale;
-                    self.refresh_details();
-                }
-            }
-            AppMsg::InstallPressed => self.handle_install_pressed(sender.clone()),
+            AppMsg::Settings(output) => self.handle_settings(output),
+            AppMsg::Action(output) => self.handle_action(output, sender),
             AppMsg::InstallEvent(event) => self.handle_install_event(event),
-            AppMsg::LoginPressed => self.handle_login_pressed(widgets, sender.clone()),
-            AppMsg::Logout => self.handle_logout(),
-            AppMsg::SwitchAccount => self.handle_switch_account(sender.clone()),
             AppMsg::LoginPoll => self.handle_login_poll(),
-            AppMsg::LaunchPressed => self.handle_launch_pressed(sender.clone()),
             AppMsg::GamePoll => self.handle_game_poll(),
-            AppMsg::Refresh => self.refresh_from_disk(),
         }
 
-        self.update_view(widgets, sender);
-    }
-
-    fn update_view(&self, widgets: &mut Self::Widgets, _sender: ComponentSender<Self>) {
-        widgets.status.set_text(&self.status.headline);
-        widgets.details.set_text(&self.status.details);
-
-        if widgets.region.active_id().as_deref() != Some(self.config.region.as_str()) {
-            widgets
-                .region
-                .set_active_id(Some(self.config.region.as_str()));
-        }
-        if widgets.locale.active_id().as_deref() != Some(self.config.locale.as_str()) {
-            widgets
-                .locale
-                .set_active_id(Some(self.config.locale.as_str()));
-        }
-
-        widgets.progress.set_visible(self.progress.visible);
-        match self.progress.fraction {
-            Some(fraction) => widgets.progress.set_fraction(fraction),
-            None if self.progress.visible => widgets.progress.pulse(),
-            None => widgets.progress.set_fraction(0.0),
-        }
-        widgets.progress.set_text(self.progress.text.as_deref());
-
-        apply_install_state(&widgets.install, &self.install_state);
-        apply_login_state(&widgets.login, self.login_state());
-        apply_launch_state(&widgets.launch, self.launch_state());
+        self.render_children();
     }
 }
 
 impl MainWindow {
+    fn handle_settings(&mut self, output: SettingsOutput) {
+        match output {
+            SettingsOutput::RegionChanged(region) => self.config.region = region,
+            SettingsOutput::LocaleChanged(locale) => self.config.locale = locale,
+        }
+        self.refresh_details();
+    }
+
+    fn handle_action(&mut self, output: ActionBarOutput, sender: ComponentSender<Self>) {
+        match output {
+            ActionBarOutput::Install => self.handle_install_pressed(sender),
+            ActionBarOutput::Login => self.handle_login_pressed(sender),
+            ActionBarOutput::Launch => self.handle_launch_pressed(sender),
+            ActionBarOutput::Refresh => self.refresh_from_disk(),
+            ActionBarOutput::Logout => self.handle_logout(),
+            ActionBarOutput::SwitchAccount => self.handle_switch_account(sender),
+        }
+    }
+
     fn handle_install_pressed(&mut self, sender: ComponentSender<Self>) {
         if let InstallState::Running { .. } = self.install_state {
             self.stop_install();
@@ -234,6 +243,7 @@ impl MainWindow {
         self.install_state = InstallState::Running {
             action: action.clone(),
         };
+        self.install_cancel = Some(cancel.clone());
         self.progress = ProgressState {
             visible: true,
             fraction: Some(0.0),
@@ -264,8 +274,6 @@ impl MainWindow {
                 input.emit(AppMsg::InstallEvent(event));
             }
         });
-
-        self.install_cancel = Some(cancel);
     }
 
     fn stop_install(&mut self) {
@@ -302,6 +310,7 @@ impl MainWindow {
                 };
                 auth::sync_config_from_disk(&self.paths, &mut self.config);
                 self.refresh_status_with_headline(message);
+                self.toast("Ready to play");
             }
             TaskEvent::Failed(message) => {
                 tracing::error!(error = %message, "install/update failed in UI");
@@ -310,6 +319,7 @@ impl MainWindow {
                 self.progress.visible = false;
                 self.status.headline = format!("Failed: {message}");
                 self.refresh_details();
+                self.toast("Install failed");
             }
             TaskEvent::Cancelled(message) => {
                 tracing::info!("install/update cancelled");
@@ -322,19 +332,17 @@ impl MainWindow {
         }
     }
 
-    fn handle_login_pressed(&mut self, widgets: &MainWidgets, sender: ComponentSender<Self>) {
+    fn handle_login_pressed(&mut self, sender: ComponentSender<Self>) {
         if let Some(session) = self.login_session.take() {
             tracing::info!("login wait cancelled from UI");
             session.cancel.store(true, Ordering::Relaxed);
-            session.callback.cancel.store(true, Ordering::Relaxed);
             self.status.headline = "Login cancelled".into();
             self.refresh_details();
             return;
         }
 
         if self.paths.game_token().exists() {
-            tracing::debug!("login token already exists");
-            show_account_popover(&widgets.login, sender);
+            self.actions.emit(ActionBarInput::ShowAccountMenu);
             return;
         }
 
@@ -369,7 +377,6 @@ impl MainWindow {
     fn begin_login(&mut self, sender: ComponentSender<Self>) {
         if let Some(session) = self.login_session.take() {
             session.cancel.store(true, Ordering::Relaxed);
-            session.callback.cancel.store(true, Ordering::Relaxed);
         }
 
         let mut current = self.config.clone();
@@ -382,20 +389,9 @@ impl MainWindow {
             return;
         }
 
-        let callback = match start_local_callback_server(self.paths.clone(), current.region) {
-            Ok(callback) => Rc::new(callback),
-            Err(error) => {
-                tracing::error!(error = %format!("{error:#}"), "failed to start auth callback server");
-                self.status.headline = format!("Login setup failed: {error:#}");
-                self.refresh_details();
-                return;
-            }
-        };
-
         let cancel = Arc::new(AtomicBool::new(false));
         self.login_session = Some(LoginSession {
             cancel: cancel.clone(),
-            callback,
         });
 
         if let Err(error) = auth::ensure_auth_scheme_handlers() {
@@ -408,7 +404,11 @@ impl MainWindow {
         self.refresh_details();
 
         let login_url = current.region.login_url().to_string();
-        tracing::info!(region = %current.region, "opening browser login with desktop callback handler");
+        tracing::info!(
+            region = %current.region,
+            url = %login_url,
+            "opening browser login with desktop callback handler"
+        );
         if let Err(error) = browser::open_login_url(&login_url) {
             tracing::error!(
                 url = login_url,
@@ -448,6 +448,7 @@ impl MainWindow {
             }
             auth::sync_config_from_disk(&self.paths, &mut self.config);
             self.refresh_status_with_headline("Login complete");
+            self.toast("Login complete");
         }
     }
 
@@ -542,6 +543,27 @@ impl MainWindow {
         self.refresh_status_with_headline(headline);
     }
 
+    fn render_children(&self) {
+        self.status_panel
+            .emit(StatusPanelInput::Render(StatusPanelState {
+                snapshot: self.status.clone(),
+                progress: self.progress.clone(),
+            }));
+        self.settings_panel
+            .emit(SettingsPanelInput::SetConfig(self.config.clone()));
+        self.actions.emit(ActionBarInput::Render(ActionBarState {
+            install: match &self.install_state {
+                InstallState::Idle => super::components::InstallState::Idle,
+                InstallState::Running { action } => {
+                    super::components::InstallState::Running(action.clone())
+                }
+                InstallState::Stopping => super::components::InstallState::Stopping,
+            },
+            login: self.login_state(),
+            launch: self.launch_state(),
+        }));
+    }
+
     fn login_state(&self) -> LoginState {
         if self.login_session.is_some() {
             LoginState::Waiting
@@ -559,222 +581,8 @@ impl MainWindow {
             _ => LaunchState::Idle,
         }
     }
-}
 
-fn build_widgets(
-    window: &adw::ApplicationWindow,
-    sender: &ComponentSender<MainWindow>,
-) -> MainWidgets {
-    let title = adw::WindowTitle::new("hearthstone-linux-gui", "");
-    let header = adw::HeaderBar::builder().title_widget(&title).build();
-
-    let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
-    content.set_margin_top(18);
-    content.set_margin_bottom(18);
-    content.set_margin_start(18);
-    content.set_margin_end(18);
-
-    let status = gtk::Label::new(None);
-    status.set_xalign(0.0);
-    status.set_selectable(true);
-    status.add_css_class("title-3");
-
-    let details = gtk::Label::new(None);
-    details.set_xalign(0.0);
-    details.add_css_class("dim-label");
-
-    let progress = gtk::ProgressBar::new();
-    progress.set_show_text(true);
-    progress.set_visible(false);
-
-    let region = gtk::ComboBoxText::new();
-    for item in Region::ALL {
-        region.append(Some(item.as_str()), item.as_str());
-    }
-    {
-        let input = sender.input_sender().clone();
-        region.connect_changed(move |combo| {
-            if let Some(value) = combo.active_id() {
-                input.emit(AppMsg::RegionChanged(value.to_string()));
-            }
-        });
-    }
-
-    let locale = gtk::ComboBoxText::new();
-    for item in Locale::ALL {
-        locale.append(Some(item.as_str()), item.as_str());
-    }
-    {
-        let input = sender.input_sender().clone();
-        locale.connect_changed(move |combo| {
-            if let Some(value) = combo.active_id() {
-                input.emit(AppMsg::LocaleChanged(value.to_string()));
-            }
-        });
-    }
-
-    let install = gtk::Button::with_label("Install / Update");
-    install.add_css_class("suggested-action");
-    {
-        let input = sender.input_sender().clone();
-        install.connect_clicked(move |_| input.emit(AppMsg::InstallPressed));
-    }
-
-    let login = gtk::Button::with_label("Login");
-    {
-        let input = sender.input_sender().clone();
-        login.connect_clicked(move |_| input.emit(AppMsg::LoginPressed));
-    }
-
-    let launch = gtk::Button::with_label("Play");
-    launch.add_css_class("suggested-action");
-    {
-        let input = sender.input_sender().clone();
-        launch.connect_clicked(move |_| input.emit(AppMsg::LaunchPressed));
-    }
-
-    let refresh = gtk::Button::with_label("Refresh");
-    {
-        let input = sender.input_sender().clone();
-        refresh.connect_clicked(move |_| input.emit(AppMsg::Refresh));
-    }
-
-    let settings = gtk::Grid::new();
-    settings.set_column_spacing(12);
-    settings.set_row_spacing(8);
-    settings.attach(&gtk::Label::new(Some("Region")), 0, 0, 1, 1);
-    settings.attach(&region, 1, 0, 1, 1);
-    settings.attach(&gtk::Label::new(Some("Locale")), 0, 1, 1, 1);
-    settings.attach(&locale, 1, 1, 1, 1);
-
-    let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    actions.append(&install);
-    actions.append(&login);
-    actions.append(&launch);
-    actions.append(&refresh);
-
-    content.append(&status);
-    content.append(&details);
-    content.append(&progress);
-    content.append(&settings);
-    content.append(&actions);
-    root.append(&header);
-    root.append(&content);
-    window.set_content(Some(&root));
-
-    MainWidgets {
-        status,
-        details,
-        progress,
-        region,
-        locale,
-        install,
-        login,
-        launch,
-    }
-}
-
-fn show_account_popover(anchor: &gtk::Button, sender: ComponentSender<MainWindow>) {
-    let popover = gtk::Popover::new();
-    popover.set_parent(anchor);
-
-    let content = gtk::Box::new(gtk::Orientation::Vertical, 8);
-    content.set_margin_top(10);
-    content.set_margin_bottom(10);
-    content.set_margin_start(10);
-    content.set_margin_end(10);
-
-    let switch_account = gtk::Button::with_label("Switch Account");
-    let logout = gtk::Button::with_label("Log Out");
-    logout.add_css_class("destructive-action");
-
-    {
-        let popover = popover.clone();
-        let input = sender.input_sender().clone();
-        switch_account.connect_clicked(move |_| {
-            popover.popdown();
-            input.emit(AppMsg::SwitchAccount);
-        });
-    }
-    {
-        let popover = popover.clone();
-        let input = sender.input_sender().clone();
-        logout.connect_clicked(move |_| {
-            popover.popdown();
-            input.emit(AppMsg::Logout);
-        });
-    }
-
-    content.append(&switch_account);
-    content.append(&logout);
-    popover.set_child(Some(&content));
-    popover.connect_closed(|popover| popover.unparent());
-    popover.popup();
-}
-
-fn apply_install_state(button: &gtk::Button, state: &InstallState) {
-    match state {
-        InstallState::Idle => {
-            button.set_sensitive(true);
-            button.set_label("Install / Update");
-            button.remove_css_class("destructive-action");
-            button.add_css_class("suggested-action");
-        }
-        InstallState::Running { action } => {
-            button.set_sensitive(true);
-            button.set_label(&format!("Stop {action}"));
-            button.remove_css_class("suggested-action");
-            button.add_css_class("destructive-action");
-        }
-        InstallState::Stopping => {
-            button.set_sensitive(false);
-            button.set_label("Stopping...");
-            button.remove_css_class("suggested-action");
-            button.add_css_class("destructive-action");
-        }
-    }
-}
-
-fn apply_login_state(button: &gtk::Button, state: LoginState) {
-    match state {
-        LoginState::Idle => {
-            button.set_label("Login");
-            button.remove_css_class("destructive-action");
-            button.remove_css_class("suggested-action");
-        }
-        LoginState::Waiting => {
-            button.set_label("Cancel Login");
-            button.remove_css_class("suggested-action");
-            button.add_css_class("destructive-action");
-        }
-        LoginState::LoggedIn => {
-            button.set_label("Logged In");
-            button.remove_css_class("destructive-action");
-            button.add_css_class("suggested-action");
-        }
-    }
-}
-
-fn apply_launch_state(button: &gtk::Button, state: LaunchState) {
-    match state {
-        LaunchState::Idle => {
-            button.set_sensitive(true);
-            button.set_label("Play");
-            button.remove_css_class("destructive-action");
-            button.add_css_class("suggested-action");
-        }
-        LaunchState::Running => {
-            button.set_sensitive(true);
-            button.set_label("Stop");
-            button.remove_css_class("suggested-action");
-            button.add_css_class("destructive-action");
-        }
-        LaunchState::Stopping => {
-            button.set_sensitive(false);
-            button.set_label("Stopping...");
-            button.remove_css_class("suggested-action");
-            button.add_css_class("destructive-action");
-        }
+    fn toast(&self, title: &str) {
+        self.toaster.add_toast(adw::Toast::new(title));
     }
 }

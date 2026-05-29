@@ -1,5 +1,5 @@
 use relm4::gtk::gio;
-use std::{path::Path, process::Command};
+use std::process::Command;
 
 pub fn open_login_url(url: &str) -> anyhow::Result<()> {
     let mut errors = Vec::new();
@@ -53,12 +53,6 @@ pub fn open_login_url(url: &str) -> anyhow::Result<()> {
     }
 
     anyhow::bail!("could not open a browser ({})", errors.join("; "))
-}
-
-pub fn shell_quote_path(path: &Path) -> String {
-    let value = path.to_string_lossy();
-    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
-    format!("\"{escaped}\"")
 }
 
 fn spawn_browser_command(command: &str, args: &[&str]) -> std::io::Result<()> {
