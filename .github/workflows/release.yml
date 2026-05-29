@@ -62,9 +62,6 @@ jobs:
             exit 1
           fi
 
-      # Note: native/deb/rpm/pacman packages are produced via separate
-      # Docker-based pipelines. This workflow only builds the AppImage via Nix.
-
       - name: Build AppImage
         id: appimage
         shell: bash
@@ -79,34 +76,48 @@ jobs:
             exit 1
           fi
           cp -f "${appimages[@]}" release-dist/appimage/
-          (
-            cd release-dist/appimage
-            sha256sum *.AppImage > ../SHA256SUMS.txt
-          )
           find -L release-dist -maxdepth 3 -type f -printf '%p %s bytes\n' | sort
 
-      - name: Create release notes
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Upload AppImage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hearthstone-linux-gui-${{ steps.names.outputs.artifact_suffix }}-appimage
+          path: release-dist/appimage/*.AppImage
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Build native packages via Docker
         shell: bash
         run: |
           set -euo pipefail
-          cat > release-notes.md <<EOF
-          Automated release for ${GITHUB_REF_NAME}.
+          mkdir -p release-dist/native
 
-          ## Downloads
+          docker build \
+            -f packaging/native/Dockerfile \
+            --target dist \
+            --output type=local,dest=release-dist/native \
+            .
 
-          - AppImage: portable x86_64 build for general Linux use (built by this workflow via Nix).
-          - Other native package formats (deb/rpm/pacman) are produced by separate Docker-based pipelines and are not attached to this release.
+          find -L release-dist -maxdepth 3 -type f -printf '%p %s bytes\n' | sort
 
-          ## Verification
+      - name: Upload native package artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: hearthstone-linux-gui-${{ steps.names.outputs.artifact_suffix }}-native-packages
+          path: |
+            release-dist/native/*.deb
+            release-dist/native/*.rpm
+            release-dist/native/*.pkg.tar.zst
+          if-no-files-found: error
+          retention-days: 90
 
-          Download `SHA256SUMS.txt` from this release and verify with:
-
-          ```sh
-          sha256sum -c SHA256SUMS.txt
-          ```
-          EOF
+      - name: Generate checksums
+        shell: bash
+        run: |
           set -euo pipefail
+          find release-dist -type f ! -name SHA256SUMS.txt -print0 \
+            | sort -z \
+            | xargs -0 sha256sum > release-dist/SHA256SUMS.txt
           {
             echo "## hearthstone-linux-gui artifacts"
             echo
@@ -118,80 +129,12 @@ jobs:
             done < <(find release-dist -type f | sort)
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload AppImage artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: hearthstone-linux-gui-${{ steps.names.outputs.artifact_suffix }}-appimage
-          path: release-dist/appimage/*.AppImage
-          if-no-files-found: error
-          retention-days: 90
-
       - name: Upload checksums artifact
         uses: actions/upload-artifact@v4
         with:
           name: hearthstone-linux-gui-${{ steps.names.outputs.artifact_suffix }}-checksums
           path: release-dist/SHA256SUMS.txt
           if-no-files-found: error
-          retention-days: 90
-
-      - name: Build native packages via Docker
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p release-dist/deb release-dist/rpm release-dist/pacman
-
-          # Debian (.deb)
-          if [ -f packaging/deb-rpm/deb.Dockerfile ]; then
-            docker build -f packaging/deb-rpm/deb.Dockerfile -t hearthstone-deb:latest .
-            docker run --rm -v "$PWD/release-dist/deb":/out hearthstone-deb:latest
-          elif [ -f packaging/deb-rpm/Dockerfile ]; then
-            docker build -f packaging/deb-rpm/Dockerfile -t hearthstone-deb:latest --target deb . || true
-            docker run --rm -v "$PWD/release-dist/deb":/out hearthstone-deb:latest || true
-          else
-            echo "No deb Dockerfile found; skipping deb"
-          fi
-
-          # RPM (.rpm)
-          if [ -f packaging/deb-rpm/rpm.Dockerfile ]; then
-            docker build -f packaging/deb-rpm/rpm.Dockerfile -t hearthstone-rpm:latest .
-            docker run --rm -v "$PWD/release-dist/rpm":/out hearthstone-rpm:latest
-          elif [ -f packaging/deb-rpm/Dockerfile ]; then
-            docker build -f packaging/deb-rpm/Dockerfile -t hearthstone-rpm:latest --target rpm . || true
-            docker run --rm -v "$PWD/release-dist/rpm":/out hearthstone-rpm:latest || true
-          else
-            echo "No rpm Dockerfile found; skipping rpm"
-          fi
-
-          # Pacman (.pkg.tar.zst)
-          if [ -f packaging/pacman/Dockerfile ]; then
-            docker build -f packaging/pacman/Dockerfile -t hearthstone-pacman:latest .
-            docker run --rm -v "$PWD/release-dist/pacman":/out hearthstone-pacman:latest
-          else
-            echo "No pacman Dockerfile found; skipping pacman"
-          fi
-
-      - name: Upload deb artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: hearthstone-linux-gui-${{ steps.names.outputs.artifact_suffix }}-deb
-          path: release-dist/deb/*
-          if-no-files-found: ignore
-          retention-days: 90
-
-      - name: Upload rpm artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: hearthstone-linux-gui-${{ steps.names.outputs.artifact_suffix }}-rpm
-          path: release-dist/rpm/*
-          if-no-files-found: ignore
-          retention-days: 90
-
-      - name: Upload pacman artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: hearthstone-linux-gui-${{ steps.names.outputs.artifact_suffix }}-pacman
-          path: release-dist/pacman/*
-          if-no-files-found: ignore
           retention-days: 90
 
       - name: Create release notes
@@ -205,6 +148,7 @@ jobs:
           ## Downloads
 
           - AppImage: portable x86_64 build for general Linux use.
+          - DEB/RPM/Pacman: native packages built by the Docker packaging pipeline.
           - Nix users can build the native package with \`nix build github:${GITHUB_REPOSITORY}/${GITHUB_REF_NAME}\`.
 
           ## Verification
@@ -230,7 +174,7 @@ jobs:
           fi
 
           mapfile -t assets < <(find release-dist -type f \
-            \( -name '*.AppImage' -o -name 'SHA256SUMS.txt' \) \
+            \( -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' -o -name '*.pkg.tar.zst' -o -name 'SHA256SUMS.txt' \) \
             | sort)
 
           if gh release view "$tag" >/dev/null 2>&1; then
