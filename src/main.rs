@@ -123,8 +123,9 @@ fn main() -> Result<()> {
         tracing::info!("launching game from command line");
         let paths = hearthstone_linux::paths::AppPaths::discover()?;
         let config = hearthstone_linux::AppConfig::load_or_default(&paths.config_file)?;
+        let use_discrete_gpu = config.use_discrete_gpu;
         let game_dir = config.game_dir.unwrap_or(paths.game_dir);
-        hearthstone_linux::install::launcher::launch_game(&game_dir)?;
+        hearthstone_linux::install::launcher::launch_game(&game_dir, use_discrete_gpu)?;
         return Ok(());
     }
 

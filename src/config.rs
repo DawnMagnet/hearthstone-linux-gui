@@ -173,6 +173,8 @@ pub struct AppConfig {
     pub logged_in: bool,
     #[serde(default)]
     pub last_login_at: Option<String>,
+    #[serde(default)]
+    pub use_discrete_gpu: bool,
 }
 
 impl Default for AppConfig {
@@ -185,6 +187,7 @@ impl Default for AppConfig {
             unity_version: None,
             logged_in: false,
             last_login_at: None,
+            use_discrete_gpu: false,
         }
     }
 }

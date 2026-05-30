@@ -1,6 +1,9 @@
 use anyhow::{Context, Result};
 use directories::ProjectDirs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use tracing::warn;
+
+const APP_DIR: &str = "hearthstone-linux-gui";
 
 #[derive(Clone, Debug)]
 pub struct AppPaths {
@@ -23,13 +26,14 @@ impl AppPaths {
             "hearthstone-linux-gui",
         )
         .context("could not resolve XDG project directories")?;
-        let config_dir = dirs.config_dir().to_path_buf();
-        let data_dir = dirs.data_dir().to_path_buf();
-        let cache_dir = dirs.cache_dir().to_path_buf();
-        let state_dir = dirs
-            .state_dir()
-            .unwrap_or_else(|| dirs.data_dir())
-            .to_path_buf();
+        let config_dir = writable_dir("config", dirs.config_dir(), fallback_config_dir())?;
+        let data_dir = writable_dir("data", dirs.data_dir(), fallback_data_dir())?;
+        let cache_dir = writable_dir("cache", dirs.cache_dir(), fallback_cache_dir())?;
+        let state_dir = writable_dir(
+            "state",
+            dirs.state_dir().unwrap_or_else(|| dirs.data_dir()),
+            fallback_state_dir().or_else(fallback_data_dir),
+        )?;
 
         Ok(Self {
             config_file: config_dir.join("config.toml"),
@@ -55,7 +59,7 @@ impl AppPaths {
             &self.unity_cache_dir,
             &self.log_dir,
         ] {
-            std::fs::create_dir_all(dir)?;
+            ensure_writable_dir(dir)?;
         }
         Ok(())
     }
@@ -63,4 +67,79 @@ impl AppPaths {
     pub fn game_token(&self) -> PathBuf {
         self.game_dir.join("token")
     }
+}
+
+fn writable_dir(kind: &str, preferred: &Path, fallback: Option<PathBuf>) -> Result<PathBuf> {
+    match ensure_writable_dir(preferred) {
+        Ok(()) => Ok(preferred.to_path_buf()),
+        Err(preferred_error) => {
+            let Some(fallback) = fallback else {
+                return Err(preferred_error).with_context(|| {
+                    format!(
+                        "{} directory is not writable: {}",
+                        kind,
+                        preferred.display()
+                    )
+                });
+            };
+            if fallback == preferred {
+                return Err(preferred_error).with_context(|| {
+                    format!(
+                        "{} directory is not writable: {}",
+                        kind,
+                        preferred.display()
+                    )
+                });
+            }
+
+            ensure_writable_dir(&fallback).with_context(|| {
+                format!(
+                    "{} directory is not writable: {}; fallback is also not writable: {}",
+                    kind,
+                    preferred.display(),
+                    fallback.display()
+                )
+            })?;
+            warn!(
+                kind,
+                preferred = %preferred.display(),
+                fallback = %fallback.display(),
+                error = %preferred_error,
+                "XDG directory is not writable; using fallback"
+            );
+            Ok(fallback)
+        }
+    }
+}
+
+fn ensure_writable_dir(path: &Path) -> Result<()> {
+    std::fs::create_dir_all(path)
+        .with_context(|| format!("failed to create directory {}", path.display()))?;
+
+    let probe = path.join(format!(".write-test-{}", std::process::id()));
+    std::fs::write(&probe, b"")
+        .with_context(|| format!("failed to write into directory {}", path.display()))?;
+    std::fs::remove_file(&probe)
+        .with_context(|| format!("failed to remove write probe {}", probe.display()))?;
+    Ok(())
+}
+
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME").map(PathBuf::from)
+}
+
+fn fallback_config_dir() -> Option<PathBuf> {
+    home_dir().map(|home| home.join(".config").join(APP_DIR))
+}
+
+fn fallback_data_dir() -> Option<PathBuf> {
+    home_dir().map(|home| home.join(".local/share").join(APP_DIR))
+}
+
+fn fallback_cache_dir() -> Option<PathBuf> {
+    home_dir().map(|home| home.join(".cache").join(APP_DIR))
+}
+
+fn fallback_state_dir() -> Option<PathBuf> {
+    home_dir().map(|home| home.join(".local/state").join(APP_DIR))
 }

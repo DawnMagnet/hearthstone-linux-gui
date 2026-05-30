@@ -29,6 +29,9 @@ use std::{
     time::Duration,
 };
 
+const PROJECT_URL: &str = "https://github.com/DawnMagnet/hearthstone-linux-gui";
+const COPYRIGHT_TEXT: &str = "Copyright (c) 2025 DawnMagnet";
+
 pub(super) fn run(gtk_app: adw::Application) {
     let relm_app = RelmApp::from_app(gtk_app);
     relm_app.run::<MainWindow>(AppInit::load());
@@ -138,6 +141,24 @@ impl SimpleComponent for MainWindow {
 
                         #[local_ref]
                         actions -> gtk::Box {},
+
+                        gtk::Box {
+                            set_orientation: gtk::Orientation::Vertical,
+                            set_spacing: 2,
+                            set_halign: gtk::Align::Center,
+                            set_margin_top: 4,
+
+                            gtk::Label {
+                                add_css_class: relm4::css::DIM_LABEL,
+                                set_label: COPYRIGHT_TEXT,
+                            },
+
+                            gtk::LinkButton {
+                                set_label: "github.com/DawnMagnet/hearthstone-linux-gui",
+                                set_uri: PROJECT_URL,
+                                set_tooltip_text: Some(PROJECT_URL),
+                            },
+                        },
                     }
                 }
             }
@@ -209,6 +230,13 @@ impl MainWindow {
         match output {
             SettingsOutput::RegionChanged(region) => self.config.region = region,
             SettingsOutput::LocaleChanged(locale) => self.config.locale = locale,
+            SettingsOutput::DiscreteGpuChanged(use_discrete_gpu) => {
+                self.config.use_discrete_gpu = use_discrete_gpu;
+            }
+        }
+        if let Err(error) = self.config.save(&self.paths.config_file) {
+            tracing::error!(error = %format!("{error:#}"), "failed to save settings");
+            self.status.headline = format!("Settings save failed: {error:#}");
         }
         self.refresh_details();
     }
@@ -475,7 +503,7 @@ impl MainWindow {
             .clone()
             .unwrap_or_else(|| self.paths.game_dir.clone());
         tracing::info!(game_dir = %game_dir.display(), "launch requested from UI");
-        match launcher::launch_game(&game_dir) {
+        match launcher::launch_game(&game_dir, self.config.use_discrete_gpu) {
             Ok(child) => {
                 let poll_cancel = Arc::new(AtomicBool::new(false));
                 self.game_session = Some(GameSession {

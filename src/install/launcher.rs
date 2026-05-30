@@ -8,7 +8,7 @@ use std::{
 };
 use tracing::{debug, info, warn};
 
-pub fn launch_game(game_dir: &Path) -> Result<Child> {
+pub fn launch_game(game_dir: &Path, use_discrete_gpu: bool) -> Result<Child> {
     let exe = game_dir.join("Bin/Hearthstone.x86_64");
     anyhow::ensure!(exe.exists(), "{} does not exist", exe.display());
     anyhow::ensure!(
@@ -28,8 +28,14 @@ pub fn launch_game(game_dir: &Path) -> Result<Child> {
     );
     ensure_bundled_interpreter(&exe)?;
 
-    info!(exe = %exe.display(), game_dir = %game_dir.display(), "launching Hearthstone");
+    info!(
+        exe = %exe.display(),
+        game_dir = %game_dir.display(),
+        use_discrete_gpu,
+        "launching Hearthstone"
+    );
     let library_path = game_library_path(game_dir);
+    let graphics_env = graphics_env(use_discrete_gpu);
     debug!(ld_library_path = ?library_path, "configured game library path");
     if let Some(runner) = find_runtime_runner() {
         info!(runner = %runner.display(), "launching Hearthstone through runtime");
@@ -37,7 +43,7 @@ pub fn launch_game(game_dir: &Path) -> Result<Child> {
             .arg(&exe)
             .current_dir(game_dir)
             .env("LD_LIBRARY_PATH", library_path)
-            .envs(graphics_env())
+            .envs(graphics_env)
             .spawn()
             .with_context(|| format!("failed to launch Hearthstone through {}", runner.display()));
     }
@@ -46,7 +52,7 @@ pub fn launch_game(game_dir: &Path) -> Result<Child> {
     let child = Command::new(exe)
         .current_dir(game_dir)
         .env("LD_LIBRARY_PATH", library_path)
-        .envs(graphics_env())
+        .envs(graphics_env)
         .spawn()
         .context("failed to launch Hearthstone")?;
     Ok(child)
@@ -200,7 +206,7 @@ fn find_in_path(command: &str) -> Option<PathBuf> {
     })
 }
 
-fn graphics_env() -> Vec<(&'static str, OsString)> {
+fn graphics_env(use_discrete_gpu: bool) -> Vec<(&'static str, OsString)> {
     let mut envs = Vec::new();
     push_env_path(
         &mut envs,
@@ -212,6 +218,14 @@ fn graphics_env() -> Vec<(&'static str, OsString)> {
         "__EGL_VENDOR_LIBRARY_DIRS",
         OsStr::new("/run/opengl-driver/share/glvnd/egl_vendor.d"),
     );
+    if use_discrete_gpu {
+        envs.extend([
+            ("DRI_PRIME", OsString::from("1")),
+            ("__NV_PRIME_RENDER_OFFLOAD", OsString::from("1")),
+            ("__GLX_VENDOR_LIBRARY_NAME", OsString::from("nvidia")),
+            ("__VK_LAYER_NV_optimus", OsString::from("NVIDIA_only")),
+        ]);
+    }
     envs
 }
 

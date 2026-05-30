@@ -90,12 +90,14 @@ pub enum SettingsPanelInput {
     SetConfig(AppConfig),
     RegionChanged(usize),
     LocaleChanged(usize),
+    DiscreteGpuChanged(bool),
 }
 
 #[derive(Clone, Copy, Debug)]
 pub enum SettingsOutput {
     RegionChanged(Region),
     LocaleChanged(Locale),
+    DiscreteGpuChanged(bool),
 }
 
 #[relm4::component(pub)]
@@ -127,6 +129,23 @@ impl SimpleComponent for SettingsPanel {
             attach[1, 1, 1, 1] = &gtk::Box {
                 #[local_ref]
                 locale -> gtk::ComboBoxText {},
+            },
+
+            attach[0, 2, 1, 1] = &gtk::Label {
+                set_label: "Graphics",
+                set_xalign: 0.0,
+            },
+
+            attach[1, 2, 1, 1] = &gtk::CheckButton {
+                set_label: Some("Discrete GPU"),
+                set_tooltip_text: Some("Launch with PRIME/DRI GPU offload environment variables"),
+
+                #[watch]
+                set_active: model.config.use_discrete_gpu,
+
+                connect_toggled[sender] => move |button| {
+                    sender.input(SettingsPanelInput::DiscreteGpuChanged(button.is_active()));
+                },
             },
         }
     }
@@ -187,6 +206,14 @@ impl SimpleComponent for SettingsPanel {
                 if let Some(locale) = Locale::ALL.get(idx).copied() {
                     self.config.locale = locale;
                     sender.output(SettingsOutput::LocaleChanged(locale)).ok();
+                }
+            }
+            SettingsPanelInput::DiscreteGpuChanged(use_discrete_gpu) => {
+                if self.config.use_discrete_gpu != use_discrete_gpu {
+                    self.config.use_discrete_gpu = use_discrete_gpu;
+                    sender
+                        .output(SettingsOutput::DiscreteGpuChanged(use_discrete_gpu))
+                        .ok();
                 }
             }
         }
