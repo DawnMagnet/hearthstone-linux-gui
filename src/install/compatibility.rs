@@ -1,7 +1,49 @@
-use crate::{Locale, Region};
-use anyhow::{Context, Result};
+use crate::{util, Locale, Region};
+use anyhow::Result;
 use std::path::{Path, PathBuf};
 use tracing::{debug, info};
+
+struct StubSpec {
+    installed_name: &'static str,
+    dev_name: &'static str,
+    targets: &'static [&'static str],
+}
+
+const STUBS: &[StubSpec] = &[
+    StubSpec {
+        installed_name: "CoreFoundation.so",
+        dev_name: "libCoreFoundation.so",
+        targets: &[
+            "Bin/Hearthstone_Data/Plugins/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation.so",
+        ],
+    },
+    StubSpec {
+        installed_name: "libOSXWindowManagement.so",
+        dev_name: "libOSXWindowManagement.so",
+        targets: &["Bin/Hearthstone_Data/Plugins/libOSXWindowManagement.so"],
+    },
+    StubSpec {
+        installed_name: "libblz_commerce_sdk_plugin.so",
+        dev_name: "libblz_commerce_sdk_plugin.so",
+        targets: &["Bin/Hearthstone_Data/Plugins/libblz_commerce_sdk_plugin.so"],
+    },
+    StubSpec {
+        installed_name: "libNativeApiMac.so",
+        dev_name: "libNativeApiMac.so",
+        targets: &[
+            "Bin/Hearthstone_Data/Plugins/libNativeApiMac.so",
+            "Bin/Hearthstone_Data/MonoBleedingEdge/x86_64/libNativeApiMac.so",
+        ],
+    },
+    StubSpec {
+        installed_name: "libcommerce_http_client.so",
+        dev_name: "libcommerce_http_client.so",
+        targets: &[
+            "Bin/Hearthstone_Data/Plugins/libcommerce_http_client.so",
+            "Bin/Hearthstone_Data/MonoBleedingEdge/x86_64/libcommerce_http_client.so",
+        ],
+    },
+];
 
 pub fn install_compatibility_files(game_dir: &Path, region: Region, locale: Locale) -> Result<()> {
     info!(
@@ -15,87 +57,38 @@ pub fn install_compatibility_files(game_dir: &Path, region: Region, locale: Loca
         .replace("{{locale}}", locale.as_str());
     std::fs::write(game_dir.join("client.config"), config)?;
 
-    let stubs = stub_files()?;
-    let frameworks = game_dir
-        .join("Bin/Hearthstone_Data/Plugins/System/Library/Frameworks/CoreFoundation.framework");
-    std::fs::create_dir_all(&frameworks)?;
-    copy_required(
-        &stubs.core_foundation,
-        &frameworks.join("CoreFoundation.so"),
-    )?;
-    copy_required(
-        &stubs.osx_window_management,
-        &game_dir.join("Bin/Hearthstone_Data/Plugins/libOSXWindowManagement.so"),
-    )?;
-    copy_required(
-        &stubs.blz_commerce_sdk_plugin,
-        &game_dir.join("Bin/Hearthstone_Data/Plugins/libblz_commerce_sdk_plugin.so"),
-    )?;
-    copy_required(
-        &stubs.native_api_mac,
-        &game_dir.join("Bin/Hearthstone_Data/Plugins/libNativeApiMac.so"),
-    )?;
-    copy_required(
-        &stubs.native_api_mac,
-        &game_dir.join("Bin/Hearthstone_Data/MonoBleedingEdge/x86_64/libNativeApiMac.so"),
-    )?;
-    copy_required(
-        &stubs.commerce_http_client,
-        &game_dir.join("Bin/Hearthstone_Data/Plugins/libcommerce_http_client.so"),
-    )?;
-    copy_required(
-        &stubs.commerce_http_client,
-        &game_dir.join("Bin/Hearthstone_Data/MonoBleedingEdge/x86_64/libcommerce_http_client.so"),
-    )?;
+    for stub in stub_files()? {
+        for target in stub.spec.targets {
+            copy_required(&stub.source, &game_dir.join(target))?;
+        }
+    }
     Ok(())
 }
 
-struct StubFiles {
-    core_foundation: PathBuf,
-    osx_window_management: PathBuf,
-    blz_commerce_sdk_plugin: PathBuf,
-    commerce_http_client: PathBuf,
-    native_api_mac: PathBuf,
+struct StubFile {
+    spec: &'static StubSpec,
+    source: PathBuf,
+}
+
+#[derive(Clone, Copy)]
+enum StubLayout {
+    Installed,
+    Dev,
+}
+
+impl StubSpec {
+    fn source_name(&self, layout: StubLayout) -> &'static str {
+        match layout {
+            StubLayout::Installed => self.installed_name,
+            StubLayout::Dev => self.dev_name,
+        }
+    }
 }
 
 fn copy_required(from: &Path, to: &Path) -> Result<()> {
     debug!(from = %from.display(), to = %to.display(), "copying compatibility file");
-    if let Some(parent) = to.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    if to
-        .try_exists()
-        .with_context(|| format!("failed to inspect {}", to.display()))?
-    {
-        std::fs::remove_file(to)
-            .with_context(|| format!("failed to remove existing {}", to.display()))?;
-    }
-    std::fs::copy(from, to)
-        .with_context(|| format!("failed to copy {} to {}", from.display(), to.display()))?;
-    make_user_writable(to)?;
-    Ok(())
-}
-
-#[cfg(unix)]
-fn make_user_writable(path: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-
-    let mut permissions = std::fs::metadata(path)?.permissions();
-    let mode = permissions.mode();
-    if mode & 0o200 == 0 {
-        permissions.set_mode(mode | 0o200);
-        std::fs::set_permissions(path, permissions)?;
-    }
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn make_user_writable(path: &Path) -> Result<()> {
-    let mut permissions = std::fs::metadata(path)?.permissions();
-    if permissions.readonly() {
-        permissions.set_readonly(false);
-        std::fs::set_permissions(path, permissions)?;
-    }
+    util::copy_file_replace(from, to)?;
+    util::make_user_writable(to)?;
     Ok(())
 }
 
@@ -117,17 +110,17 @@ fn resource_dir() -> Result<PathBuf> {
     anyhow::bail!("could not locate hearthstone-linux-gui resources")
 }
 
-fn stub_files() -> Result<StubFiles> {
+fn stub_files() -> Result<Vec<StubFile>> {
     if let Ok(path) = std::env::var("HEARTHSTONE_LINUX_STUBS") {
         debug!(path = %path, "using stubs from environment");
-        return stub_files_in(PathBuf::from(path));
+        return stub_files_in(PathBuf::from(path), StubLayout::Installed);
     }
 
     if let Ok(resources) = resource_dir() {
         let stubs = resources.join("stubs");
         if stubs.exists() {
             debug!(path = %stubs.display(), "using installed stubs");
-            return stub_files_in(stubs);
+            return stub_files_in(stubs, StubLayout::Installed);
         }
     }
 
@@ -139,46 +132,38 @@ fn stub_files() -> Result<StubFiles> {
     anyhow::bail!("could not locate hearthstone-linux-gui stub libraries")
 }
 
-fn stub_files_in(dir: PathBuf) -> Result<StubFiles> {
-    let files = StubFiles {
-        core_foundation: dir.join("CoreFoundation.so"),
-        osx_window_management: dir.join("libOSXWindowManagement.so"),
-        blz_commerce_sdk_plugin: dir.join("libblz_commerce_sdk_plugin.so"),
-        commerce_http_client: dir.join("libcommerce_http_client.so"),
-        native_api_mac: dir.join("libNativeApiMac.so"),
-    };
-    if files.core_foundation.exists()
-        && files.osx_window_management.exists()
-        && files.blz_commerce_sdk_plugin.exists()
-        && files.commerce_http_client.exists()
-        && files.native_api_mac.exists()
-    {
-        return Ok(files);
+fn stub_files_in(dir: PathBuf, layout: StubLayout) -> Result<Vec<StubFile>> {
+    let mut files = Vec::with_capacity(STUBS.len());
+    let mut missing = Vec::new();
+
+    for spec in STUBS {
+        let source = dir.join(spec.source_name(layout));
+        if source.exists() {
+            files.push(StubFile { spec, source });
+        } else {
+            missing.push(spec.source_name(layout));
+        }
     }
 
-    anyhow::bail!("stub libraries are missing from {}", dir.display())
+    if missing.is_empty() {
+        Ok(files)
+    } else {
+        anyhow::bail!(
+            "stub libraries are missing from {}: {}",
+            dir.display(),
+            missing.join(", ")
+        )
+    }
 }
 
-fn dev_stub_files() -> Result<Option<StubFiles>> {
+fn dev_stub_files() -> Result<Option<Vec<StubFile>>> {
     let exe = std::env::current_exe()?;
     let Some(profile_dir) = exe.parent() else {
         return Ok(None);
     };
 
-    for dir in [profile_dir, &profile_dir.join("deps")] {
-        let files = StubFiles {
-            core_foundation: dir.join("libCoreFoundation.so"),
-            osx_window_management: dir.join("libOSXWindowManagement.so"),
-            blz_commerce_sdk_plugin: dir.join("libblz_commerce_sdk_plugin.so"),
-            commerce_http_client: dir.join("libcommerce_http_client.so"),
-            native_api_mac: dir.join("libNativeApiMac.so"),
-        };
-        if files.core_foundation.exists()
-            && files.osx_window_management.exists()
-            && files.blz_commerce_sdk_plugin.exists()
-            && files.commerce_http_client.exists()
-            && files.native_api_mac.exists()
-        {
+    for dir in [profile_dir.to_path_buf(), profile_dir.join("deps")] {
+        if let Ok(files) = stub_files_in(dir, StubLayout::Dev) {
             return Ok(Some(files));
         }
     }

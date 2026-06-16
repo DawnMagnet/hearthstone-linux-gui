@@ -7,7 +7,7 @@ pub mod encoding;
 pub mod installfile;
 pub mod psv;
 
-use crate::{Locale, Region};
+use crate::{util, Locale, Region};
 use anyhow::{Context, Result};
 use cdn::RemoteCdn;
 use configfile::{BuildConfig, CdnConfig};
@@ -18,10 +18,7 @@ use std::{
     collections::{HashMap, HashSet},
     fs::Metadata,
     path::{Component, Path, PathBuf},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
+    sync::{atomic::AtomicBool, Arc},
     time::{Duration, Instant, UNIX_EPOCH},
 };
 use tokio::{sync::mpsc, task::JoinSet};
@@ -68,18 +65,11 @@ pub struct NgdpClient {
 }
 
 #[derive(Clone, Debug)]
-struct InstallWorkItem {
+struct InstallItem {
     entry: InstallEntry,
     encoding_key: String,
     target_path: String,
     has_archive: bool,
-}
-
-#[derive(Clone, Debug)]
-struct PendingInstallItem {
-    entry: InstallEntry,
-    encoding_key: String,
-    target_path: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -103,7 +93,7 @@ struct InstalledFileRecord {
 
 #[derive(Clone, Debug)]
 struct LocalInstallScan {
-    missing: Vec<PendingInstallItem>,
+    missing: Vec<InstallItem>,
     records: HashMap<String, InstalledFileRecord>,
     fast_hits: usize,
     verified_hits: usize,
@@ -329,10 +319,11 @@ impl NgdpClient {
                 encoding_key,
                 "resolved install entry encoding key"
             );
-            pending.push(PendingInstallItem {
+            pending.push(InstallItem {
                 encoding_key: encoding_key.to_string(),
                 target_path,
                 entry,
+                has_archive: false,
             });
         }
 
@@ -378,27 +369,18 @@ impl NgdpClient {
             .await?;
         check_cancelled(cancel.as_ref())?;
 
-        let work = install_scan
-            .missing
-            .into_iter()
-            .map(|item| {
-                let has_archive = archive_map.contains(&item.encoding_key);
-                trace!(
-                    path = %item.entry.path,
-                    target_path = %item.target_path,
-                    content_key = %item.entry.content_key,
-                    encoding_key = %item.encoding_key,
-                    in_archive = has_archive,
-                    "queued install entry"
-                );
-                InstallWorkItem {
-                    has_archive,
-                    encoding_key: item.encoding_key,
-                    target_path: item.target_path,
-                    entry: item.entry,
-                }
-            })
-            .collect::<Vec<_>>();
+        for item in &mut install_scan.missing {
+            item.has_archive = archive_map.contains(&item.encoding_key);
+            trace!(
+                path = %item.entry.path,
+                target_path = %item.target_path,
+                content_key = %item.entry.content_key,
+                encoding_key = %item.encoding_key,
+                in_archive = item.has_archive,
+                "queued install entry"
+            );
+        }
+        let work = std::mem::take(&mut install_scan.missing);
 
         let installed = Self::install_entries_parallel(
             cdn,
@@ -425,7 +407,7 @@ impl NgdpClient {
     async fn install_entries_parallel(
         cdn: RemoteCdn,
         archive_map: archive::ArchiveMap,
-        entries: Vec<InstallWorkItem>,
+        entries: Vec<InstallItem>,
         out_dir: &Path,
         verify: bool,
         progress: &mut (impl FnMut(ProgressUpdate) + Send),
@@ -538,7 +520,7 @@ fn emit_install_progress(
         .min(total_bytes);
     let fraction = visible_bytes as f64 / total_bytes as f64;
     let speed = if speed_bytes_per_second > 0.0 {
-        format!(" at {}/s", format_bytes(speed_bytes_per_second))
+        format!(" at {}/s", util::format_bytes(speed_bytes_per_second))
     } else {
         String::new()
     };
@@ -547,8 +529,8 @@ fn emit_install_progress(
             "Downloading Hearthstone: {}/{} files, {}/{}{speed}",
             completed_files,
             total_files,
-            format_bytes(visible_bytes as f64),
-            format_bytes(total_bytes as f64)
+            util::format_bytes(visible_bytes as f64),
+            util::format_bytes(total_bytes as f64)
         ),
         0.35 + fraction * 0.60,
     ));
@@ -557,7 +539,7 @@ fn emit_install_progress(
 async fn install_one_entry(
     cdn: RemoteCdn,
     archive_map: archive::ArchiveMap,
-    item: InstallWorkItem,
+    item: InstallItem,
     out_dir: PathBuf,
     verify: bool,
 ) -> Result<InstalledEntryResult> {
@@ -707,9 +689,9 @@ impl NgdpClient {
 }
 
 fn check_cancelled(cancel: Option<&Arc<AtomicBool>>) -> Result<()> {
-    if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
+    if let Err(error) = util::check_cancelled(cancel, "installation cancelled") {
         warn!("NGDP install cancelled");
-        anyhow::bail!("installation cancelled");
+        return Err(error);
     }
     Ok(())
 }
@@ -780,7 +762,7 @@ impl InstalledManifest {
 
 async fn scan_local_install(
     out_dir: &Path,
-    entries: Vec<PendingInstallItem>,
+    entries: Vec<InstallItem>,
     manifest: &InstalledManifest,
     verify: bool,
     cancel: Option<&Arc<AtomicBool>>,
@@ -1006,25 +988,6 @@ fn version_urls() -> Vec<String> {
         .collect()
 }
 
-fn format_bytes(bytes: f64) -> String {
-    const UNITS: [&str; 4] = ["B", "KiB", "MiB", "GiB"];
-    let mut value = bytes;
-    let mut unit = UNITS[0];
-    for candidate in UNITS.iter().skip(1) {
-        if value < 1024.0 {
-            break;
-        }
-        value /= 1024.0;
-        unit = candidate;
-    }
-
-    if unit == "B" {
-        format!("{value:.0} {unit}")
-    } else {
-        format!("{value:.1} {unit}")
-    }
-}
-
 pub(crate) fn verify_md5(name: &str, data: &[u8], expected: &str, verify: bool) -> Result<()> {
     if verify {
         let actual = format!("{:x}", md5::compute(data));
@@ -1109,10 +1072,11 @@ mod tests {
 
         let scan = scan_local_install(
             temp.path(),
-            vec![PendingInstallItem {
+            vec![InstallItem {
                 entry,
                 encoding_key: "encoding-key".to_string(),
                 target_path,
+                has_archive: false,
             }],
             &manifest,
             true,
@@ -1143,10 +1107,11 @@ mod tests {
         };
         let scan = scan_local_install(
             temp.path(),
-            vec![PendingInstallItem {
+            vec![InstallItem {
                 entry,
                 encoding_key: "encoding-key".to_string(),
                 target_path,
+                has_archive: false,
             }],
             &InstalledManifest::default(),
             true,

@@ -1,13 +1,10 @@
 use super::{partition_hash, verify_md5};
-use crate::download;
+use crate::{download, util};
 use anyhow::{Context, Result};
 use std::{
     io::{ErrorKind, SeekFrom},
     path::{Path, PathBuf},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
-    },
+    sync::{atomic::AtomicBool, Arc, Mutex},
     time::{Duration, Instant},
 };
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
@@ -81,7 +78,10 @@ impl RemoteCdn {
             return None;
         }
 
-        Some(format!("{}/s", format_bytes(stats.bytes as f64 / seconds)))
+        Some(format!(
+            "{}/s",
+            util::format_bytes(stats.bytes as f64 / seconds)
+        ))
     }
 
     pub async fn fetch_config(&self, key: &str, verify: bool) -> Result<Vec<u8>> {
@@ -477,13 +477,9 @@ impl RemoteCdn {
     }
 
     fn check_cancelled(&self) -> Result<()> {
-        if self
-            .cancel
-            .as_ref()
-            .is_some_and(|cancel| cancel.load(Ordering::Relaxed))
-        {
+        if let Err(error) = util::check_cancelled(self.cancel.as_ref(), "installation cancelled") {
             warn!("CDN fetch cancelled");
-            anyhow::bail!("installation cancelled");
+            return Err(error);
         }
         Ok(())
     }
@@ -508,25 +504,6 @@ fn temp_cache_path(path: &Path) -> PathBuf {
     let extension = format!("tmp-{}", std::process::id());
     temp.set_extension(extension);
     temp
-}
-
-fn format_bytes(bytes: f64) -> String {
-    const UNITS: [&str; 4] = ["B", "KiB", "MiB", "GiB"];
-    let mut value = bytes;
-    let mut unit = UNITS[0];
-    for candidate in UNITS.iter().skip(1) {
-        if value < 1024.0 {
-            break;
-        }
-        value /= 1024.0;
-        unit = candidate;
-    }
-
-    if unit == "B" {
-        format!("{value:.0} {unit}")
-    } else {
-        format!("{value:.1} {unit}")
-    }
 }
 
 #[cfg(test)]

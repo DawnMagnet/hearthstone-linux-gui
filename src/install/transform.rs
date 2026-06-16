@@ -1,3 +1,4 @@
+use crate::util;
 use anyhow::{Context, Result};
 use std::{io::ErrorKind, path::Path};
 use tracing::{debug, info};
@@ -35,7 +36,7 @@ fn rename_or_copy(from: &Path, to: &Path) -> Result<()> {
     match std::fs::rename(from, to) {
         Ok(()) => Ok(()),
         Err(_) if from.is_dir() => {
-            copy_dir(from, to)?;
+            util::copy_dir_all(from, to, false)?;
             std::fs::remove_dir_all(from)?;
             Ok(())
         }
@@ -51,23 +52,6 @@ fn rename_or_copy(from: &Path, to: &Path) -> Result<()> {
             Ok(())
         }
     }
-}
-
-fn copy_dir(from: &Path, to: &Path) -> Result<()> {
-    for entry in walkdir::WalkDir::new(from) {
-        let entry = entry?;
-        let relative = entry.path().strip_prefix(from)?;
-        let target = to.join(relative);
-        if entry.file_type().is_dir() {
-            std::fs::create_dir_all(&target)?;
-        } else {
-            if let Some(parent) = target.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            std::fs::copy(entry.path(), target)?;
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]

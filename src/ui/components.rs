@@ -279,7 +279,7 @@ pub enum ActionBarInput {
     ShowAccountMenu,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum ActionBarOutput {
     Install,
     Login,

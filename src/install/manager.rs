@@ -3,13 +3,11 @@ use crate::{
     config::AppConfig,
     ngdp::{InstallOptions, NgdpClient},
     paths::AppPaths,
+    util,
 };
 use anyhow::Result;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
-};
-use tracing::{debug, info, warn};
+use std::sync::{atomic::AtomicBool, Arc};
+use tracing::{debug, info};
 
 #[derive(Clone, Debug)]
 pub enum TaskEvent {
@@ -66,11 +64,11 @@ impl InstallManager {
             "starting install/update"
         );
         event(TaskEvent::Started("Preparing installation".into()));
-        check_cancelled(cancel.as_ref())?;
+        util::check_cancelled(cancel.as_ref(), "installation cancelled")?;
 
         cleanup_installation(&self.paths.game_dir).await?;
         debug!("old install payload cleaned");
-        check_cancelled(cancel.as_ref())?;
+        util::check_cancelled(cancel.as_ref(), "installation cancelled")?;
 
         let client = NgdpClient::new().with_cache_dir(self.paths.ngdp_dir.clone());
         let options = InstallOptions {
@@ -97,7 +95,7 @@ impl InstallManager {
             build_id = %version.build_id,
             "NGDP install finished"
         );
-        check_cancelled(cancel.as_ref())?;
+        util::check_cancelled(cancel.as_ref(), "installation cancelled")?;
 
         event(TaskEvent::Progress {
             message: "Transforming macOS layout".into(),
@@ -105,7 +103,7 @@ impl InstallManager {
         });
         debug!("transforming macOS layout");
         transform::transform_macos_installation(&self.paths.game_dir)?;
-        check_cancelled(cancel.as_ref())?;
+        util::check_cancelled(cancel.as_ref(), "installation cancelled")?;
 
         event(TaskEvent::Progress {
             message: "Installing Unity Linux player".into(),
@@ -125,7 +123,7 @@ impl InstallManager {
         )
         .await?;
         config.unity_version = Some(unity_version);
-        check_cancelled(cancel.as_ref())?;
+        util::check_cancelled(cancel.as_ref(), "installation cancelled")?;
 
         event(TaskEvent::Progress {
             message: "Installing compatibility files".into(),
@@ -146,14 +144,6 @@ impl InstallManager {
     }
 }
 
-fn check_cancelled(cancel: Option<&Arc<AtomicBool>>) -> Result<()> {
-    if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
-        warn!("install/update cancelled");
-        anyhow::bail!("installation cancelled");
-    }
-    Ok(())
-}
-
 fn preserve_login_metadata(config: &mut AppConfig, paths: &AppPaths) {
     let saved = AppConfig::load_or_default(&paths.config_file).ok();
     let token_exists = paths.game_token().exists();
@@ -169,9 +159,12 @@ fn format_unity_download_progress(progress: &unity::UnityDownloadProgress) -> St
         unity::UnityProgressPhase::Downloading => "Downloading Unity",
         unity::UnityProgressPhase::Extracting => "Extracting Unity",
     };
-    let downloaded = format_bytes(progress.downloaded as f64);
+    let downloaded = util::format_bytes(progress.downloaded as f64);
     let speed = if progress.speed_bytes_per_second > 0.0 {
-        format!(" at {}/s", format_bytes(progress.speed_bytes_per_second))
+        format!(
+            " at {}/s",
+            util::format_bytes(progress.speed_bytes_per_second)
+        )
     } else {
         String::new()
     };
@@ -179,28 +172,9 @@ fn format_unity_download_progress(progress: &unity::UnityDownloadProgress) -> St
     match progress.total {
         Some(total) if total > 0 => format!(
             "{action}: {downloaded}/{}{speed}",
-            format_bytes(total as f64)
+            util::format_bytes(total as f64)
         ),
         _ => format!("{action}: {downloaded}{speed}"),
-    }
-}
-
-fn format_bytes(bytes: f64) -> String {
-    const UNITS: [&str; 4] = ["B", "KiB", "MiB", "GiB"];
-    let mut value = bytes;
-    let mut unit = UNITS[0];
-    for candidate in UNITS.iter().skip(1) {
-        if value < 1024.0 {
-            break;
-        }
-        value /= 1024.0;
-        unit = candidate;
-    }
-
-    if unit == "B" {
-        format!("{value:.0} {unit}")
-    } else {
-        format!("{value:.1} {unit}")
     }
 }
 

@@ -1,3 +1,4 @@
+use crate::util;
 use anyhow::{Context, Result};
 use reqwest::{
     header::{ACCEPT_RANGES, CONTENT_LENGTH, CONTENT_RANGE, RANGE},
@@ -5,10 +6,7 @@ use reqwest::{
 };
 use std::{
     path::{Path, PathBuf},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
+    sync::{atomic::AtomicBool, Arc},
     time::{Duration, Instant},
 };
 use tokio::{
@@ -670,8 +668,5 @@ async fn file_len(path: &Path) -> Result<u64> {
 }
 
 fn check_cancelled(cancel: Option<&Arc<AtomicBool>>) -> Result<()> {
-    if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
-        anyhow::bail!("download cancelled");
-    }
-    Ok(())
+    util::check_cancelled(cancel, "download cancelled")
 }

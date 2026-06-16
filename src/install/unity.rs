@@ -1,4 +1,7 @@
-use crate::download::{self, DownloadProgress};
+use crate::{
+    download::{self, DownloadProgress},
+    util,
+};
 use anyhow::{Context, Result};
 use serde_json::json;
 use std::{
@@ -305,11 +308,12 @@ fn copy_unity_files(unity_root: &Path, game_dir: &Path) -> Result<()> {
         unity_root.join("UnityPlayer.so"),
         bin.join("UnityPlayer.so"),
     )?;
-    copy_dir(
+    util::copy_dir_all(
         &unity_root.join("Data/MonoBleedingEdge"),
         &data.join("MonoBleedingEdge"),
+        true,
     )?;
-    make_executable(&bin.join("Hearthstone.x86_64"))?;
+    util::make_executable(&bin.join("Hearthstone.x86_64"))?;
     Ok(())
 }
 
@@ -322,38 +326,4 @@ fn unity_player_files_exist(game_dir: &Path) -> bool {
             .join("MonoBleedingEdge/x86_64/libmonobdwgc-2.0.so")
             .exists()
         && data.join("MonoBleedingEdge/etc/mono/config").exists()
-}
-
-fn copy_dir(from: &Path, to: &Path) -> Result<()> {
-    if to.exists() {
-        std::fs::remove_dir_all(to)?;
-    }
-    for entry in walkdir::WalkDir::new(from) {
-        let entry = entry?;
-        let relative = entry.path().strip_prefix(from)?;
-        let target = to.join(relative);
-        if entry.file_type().is_dir() {
-            std::fs::create_dir_all(&target)?;
-        } else {
-            if let Some(parent) = target.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            std::fs::copy(entry.path(), target)?;
-        }
-    }
-    Ok(())
-}
-
-#[cfg(unix)]
-fn make_executable(path: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    let mut perms = std::fs::metadata(path)?.permissions();
-    perms.set_mode(perms.mode() | 0o755);
-    std::fs::set_permissions(path, perms)?;
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn make_executable(_path: &Path) -> Result<()> {
-    Ok(())
 }

@@ -1,9 +1,9 @@
 use super::{
     auth, browser,
     components::{
-        ActionBar, ActionBarInput, ActionBarOutput, ActionBarState, LaunchState, LoginState,
-        SettingsOutput, SettingsPanel, SettingsPanelInput, StatusPanel, StatusPanelInput,
-        StatusPanelState,
+        ActionBar, ActionBarInput, ActionBarOutput, ActionBarState, InstallState, LaunchState,
+        LoginState, SettingsOutput, SettingsPanel, SettingsPanelInput, StatusPanel,
+        StatusPanelInput, StatusPanelState,
     },
     status,
 };
@@ -70,7 +70,7 @@ struct MainWindow {
     toaster: Toaster,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum AppMsg {
     Settings(SettingsOutput),
     Action(ActionBarOutput),
@@ -86,13 +86,6 @@ struct LoginSession {
 struct GameSession {
     child: Child,
     poll_cancel: Arc<AtomicBool>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum InstallState {
-    Idle,
-    Running { action: String },
-    Stopping,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -253,7 +246,7 @@ impl MainWindow {
     }
 
     fn handle_install_pressed(&mut self, sender: ComponentSender<Self>) {
-        if let InstallState::Running { .. } = self.install_state {
+        if let InstallState::Running(_) = self.install_state {
             self.stop_install();
             return;
         }
@@ -268,9 +261,7 @@ impl MainWindow {
         }
         .to_string();
         let cancel = Arc::new(AtomicBool::new(false));
-        self.install_state = InstallState::Running {
-            action: action.clone(),
-        };
+        self.install_state = InstallState::Running(action.clone());
         self.install_cancel = Some(cancel.clone());
         self.progress = ProgressState {
             visible: true,
@@ -446,15 +437,7 @@ impl MainWindow {
             self.status.headline = format!("Could not open browser. URL: {login_url}");
         }
 
-        let input = sender.input_sender().clone();
-        glib::timeout_add_local(Duration::from_secs(1), move || {
-            if cancel.load(Ordering::Relaxed) {
-                glib::ControlFlow::Break
-            } else {
-                input.emit(AppMsg::LoginPoll);
-                glib::ControlFlow::Continue
-            }
-        });
+        Self::start_poll(&sender, AppMsg::LoginPoll, cancel);
     }
 
     fn handle_login_poll(&mut self) {
@@ -513,15 +496,7 @@ impl MainWindow {
                 self.status.headline = "Game running".into();
                 self.refresh_details();
 
-                let input = sender.input_sender().clone();
-                glib::timeout_add_local(Duration::from_secs(1), move || {
-                    if poll_cancel.load(Ordering::Relaxed) {
-                        glib::ControlFlow::Break
-                    } else {
-                        input.emit(AppMsg::GamePoll);
-                        glib::ControlFlow::Continue
-                    }
-                });
+                Self::start_poll(&sender, AppMsg::GamePoll, poll_cancel);
             }
             Err(error) => {
                 tracing::error!(error = %format!("{error:#}"), "launch failed");
@@ -580,13 +555,7 @@ impl MainWindow {
         self.settings_panel
             .emit(SettingsPanelInput::SetConfig(self.config.clone()));
         self.actions.emit(ActionBarInput::Render(ActionBarState {
-            install: match &self.install_state {
-                InstallState::Idle => super::components::InstallState::Idle,
-                InstallState::Running { action } => {
-                    super::components::InstallState::Running(action.clone())
-                }
-                InstallState::Stopping => super::components::InstallState::Stopping,
-            },
+            install: self.install_state.clone(),
             login: self.login_state(),
             launch: self.launch_state(),
         }));
@@ -612,5 +581,17 @@ impl MainWindow {
 
     fn toast(&self, title: &str) {
         self.toaster.add_toast(adw::Toast::new(title));
+    }
+
+    fn start_poll(sender: &ComponentSender<Self>, message: AppMsg, cancel: Arc<AtomicBool>) {
+        let input = sender.input_sender().clone();
+        glib::timeout_add_local(Duration::from_secs(1), move || {
+            if cancel.load(Ordering::Relaxed) {
+                glib::ControlFlow::Break
+            } else {
+                input.emit(message.clone());
+                glib::ControlFlow::Continue
+            }
+        });
     }
 }
