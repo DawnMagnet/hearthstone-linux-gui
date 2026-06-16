@@ -150,7 +150,7 @@
           inherit pname;
           version = packageVersion;
           src = rustSource;
-          cargoHash = "sha256-kKdNOPfFQxHk+UP8sAuEwOkN2euNHbJ2h4sdrc0w1ro=";
+          cargoHash = "sha256-c0L0X3G2UTlmC+0PKYgPbcYCZ8G0ZYFyfBQIReexws0=";
           inherit nativeBuildInputs buildInputs;
           cargoBuildFlags = [ "--workspace" ];
           cargoTestFlags = [ "--workspace" ];
