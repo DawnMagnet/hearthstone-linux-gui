@@ -1,14 +1,9 @@
 use anyhow::{Context, Result};
-use std::{
-    path::Path,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-};
+use std::path::Path;
+use tokio_util::sync::CancellationToken;
 
-pub fn check_cancelled(cancel: Option<&Arc<AtomicBool>>, message: &'static str) -> Result<()> {
-    if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
+pub fn check_cancelled(cancel: Option<&CancellationToken>, message: &'static str) -> Result<()> {
+    if cancel.is_some_and(CancellationToken::is_cancelled) {
         anyhow::bail!(message);
     }
     Ok(())

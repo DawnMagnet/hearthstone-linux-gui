@@ -20,14 +20,8 @@ use relm4::{
     abstractions::Toaster, adw, gtk, gtk::glib, prelude::*, ComponentController, Controller,
     RelmApp,
 };
-use std::{
-    process::Child,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-    time::Duration,
-};
+use std::{process::Child, time::Duration};
+use tokio_util::sync::CancellationToken;
 
 const PROJECT_URL: &str = "https://github.com/DawnMagnet/hearthstone-linux-gui";
 const COPYRIGHT_TEXT: &str = "Copyright (c) 2025 DawnMagnet";
@@ -61,7 +55,7 @@ struct MainWindow {
     status: status::StatusSnapshot,
     progress: ProgressState,
     install_state: InstallState,
-    install_cancel: Option<Arc<AtomicBool>>,
+    install_cancel: Option<CancellationToken>,
     login_session: Option<LoginSession>,
     game_session: Option<GameSession>,
     status_panel: Controller<StatusPanel>,
@@ -80,12 +74,12 @@ pub enum AppMsg {
 }
 
 struct LoginSession {
-    cancel: Arc<AtomicBool>,
+    cancel: CancellationToken,
 }
 
 struct GameSession {
     child: Child,
-    poll_cancel: Arc<AtomicBool>,
+    poll_cancel: CancellationToken,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -260,7 +254,7 @@ impl MainWindow {
             "Install"
         }
         .to_string();
-        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel = CancellationToken::new();
         self.install_state = InstallState::Running(action.clone());
         self.install_cancel = Some(cancel.clone());
         self.progress = ProgressState {
@@ -285,7 +279,7 @@ impl MainWindow {
             ));
             if let Err(error) = result {
                 tracing::error!(error = %format!("{error:#}"), "install/update failed");
-                let event = if cancel_for_thread.load(Ordering::Relaxed) {
+                let event = if cancel_for_thread.is_cancelled() {
                     TaskEvent::Cancelled("Installation cancelled".into())
                 } else {
                     TaskEvent::Failed(format!("{error:#}"))
@@ -298,7 +292,7 @@ impl MainWindow {
     fn stop_install(&mut self) {
         tracing::info!("install stop requested from UI");
         if let Some(cancel) = self.install_cancel.as_ref() {
-            cancel.store(true, Ordering::Relaxed);
+            cancel.cancel();
             self.install_state = InstallState::Stopping;
             self.status.headline = "Stopping installation".into();
         }
@@ -354,7 +348,7 @@ impl MainWindow {
     fn handle_login_pressed(&mut self, sender: ComponentSender<Self>) {
         if let Some(session) = self.login_session.take() {
             tracing::info!("login wait cancelled from UI");
-            session.cancel.store(true, Ordering::Relaxed);
+            session.cancel.cancel();
             self.status.headline = "Login cancelled".into();
             self.refresh_details();
             return;
@@ -395,7 +389,7 @@ impl MainWindow {
 
     fn begin_login(&mut self, sender: ComponentSender<Self>) {
         if let Some(session) = self.login_session.take() {
-            session.cancel.store(true, Ordering::Relaxed);
+            session.cancel.cancel();
         }
 
         let mut current = self.config.clone();
@@ -408,7 +402,7 @@ impl MainWindow {
             return;
         }
 
-        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel = CancellationToken::new();
         self.login_session = Some(LoginSession {
             cancel: cancel.clone(),
         });
@@ -444,7 +438,7 @@ impl MainWindow {
         let Some(session) = self.login_session.as_ref() else {
             return;
         };
-        if session.cancel.load(Ordering::Relaxed) {
+        if session.cancel.is_cancelled() {
             return;
         }
 
@@ -455,7 +449,7 @@ impl MainWindow {
         if token_exists || config_logged_in {
             tracing::info!("browser login completed");
             if let Some(session) = self.login_session.take() {
-                session.cancel.store(true, Ordering::Relaxed);
+                session.cancel.cancel();
             }
             auth::sync_config_from_disk(&self.paths, &mut self.config);
             self.refresh_status_with_headline("Login complete");
@@ -488,7 +482,7 @@ impl MainWindow {
         tracing::info!(game_dir = %game_dir.display(), "launch requested from UI");
         match launcher::launch_game(&game_dir, self.config.use_discrete_gpu) {
             Ok(child) => {
-                let poll_cancel = Arc::new(AtomicBool::new(false));
+                let poll_cancel = CancellationToken::new();
                 self.game_session = Some(GameSession {
                     child,
                     poll_cancel: poll_cancel.clone(),
@@ -514,7 +508,7 @@ impl MainWindow {
         match session.child.try_wait() {
             Ok(Some(exit)) => {
                 tracing::info!(status = %exit, "game exited");
-                session.poll_cancel.store(true, Ordering::Relaxed);
+                session.poll_cancel.cancel();
                 self.game_session = None;
                 self.status.headline = "Game stopped".into();
                 self.refresh_details();
@@ -522,7 +516,7 @@ impl MainWindow {
             Ok(None) => {}
             Err(error) => {
                 tracing::error!(error = %error, "failed to poll game process");
-                session.poll_cancel.store(true, Ordering::Relaxed);
+                session.poll_cancel.cancel();
                 self.game_session = None;
                 self.status.headline = format!("Game status error: {error}");
                 self.refresh_details();
@@ -583,10 +577,10 @@ impl MainWindow {
         self.toaster.add_toast(adw::Toast::new(title));
     }
 
-    fn start_poll(sender: &ComponentSender<Self>, message: AppMsg, cancel: Arc<AtomicBool>) {
+    fn start_poll(sender: &ComponentSender<Self>, message: AppMsg, cancel: CancellationToken) {
         let input = sender.input_sender().clone();
         glib::timeout_add_local(Duration::from_secs(1), move || {
-            if cancel.load(Ordering::Relaxed) {
+            if cancel.is_cancelled() {
                 glib::ControlFlow::Break
             } else {
                 input.emit(message.clone());

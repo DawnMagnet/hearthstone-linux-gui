@@ -21,9 +21,9 @@ use installfile::InstallFile;
 use local_manifest::{cleanup_stale_installed_files, scan_local_install, InstalledManifest};
 use std::{
     path::{Path, PathBuf},
-    sync::{atomic::AtomicBool, Arc},
     time::Duration,
 };
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, trace, warn};
 
 #[derive(Clone, Debug)]
@@ -157,7 +157,7 @@ impl NgdpClient {
         options: &InstallOptions,
         out_dir: &Path,
         mut progress: impl FnMut(ProgressUpdate) + Send,
-        cancel: Option<Arc<AtomicBool>>,
+        cancel: Option<CancellationToken>,
     ) -> Result<VersionInfo> {
         self.install_latest_with_cancel(options, out_dir, &mut progress, cancel)
             .await
@@ -168,7 +168,7 @@ impl NgdpClient {
         options: &InstallOptions,
         out_dir: &Path,
         progress: &mut (impl FnMut(ProgressUpdate) + Send),
-        cancel: Option<Arc<AtomicBool>>,
+        cancel: Option<CancellationToken>,
     ) -> Result<VersionInfo> {
         check_cancelled(cancel.as_ref())?;
         info!(
@@ -411,7 +411,7 @@ impl NgdpClient {
     }
 }
 
-fn check_cancelled(cancel: Option<&Arc<AtomicBool>>) -> Result<()> {
+fn check_cancelled(cancel: Option<&CancellationToken>) -> Result<()> {
     if let Err(error) = util::check_cancelled(cancel, "installation cancelled") {
         warn!("NGDP install cancelled");
         return Err(error);

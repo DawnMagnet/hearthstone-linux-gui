@@ -10,10 +10,11 @@ use crate::util;
 use anyhow::{Context, Result};
 use std::{
     path::{Path, PathBuf},
-    sync::{atomic::AtomicBool, Arc},
+    sync::Arc,
     time::{Duration, Instant},
 };
 use tokio::{sync::mpsc, task::JoinSet};
+use tokio_util::sync::CancellationToken;
 use tracing::{trace, warn};
 
 const INSTALL_FILE_CONCURRENCY: usize = 8;
@@ -32,7 +33,7 @@ pub(super) async fn install_entries_parallel(
     out_dir: &Path,
     verify: bool,
     progress: &mut (impl FnMut(ProgressUpdate) + Send),
-    cancel: Option<Arc<AtomicBool>>,
+    cancel: Option<CancellationToken>,
 ) -> Result<Vec<InstalledEntryResult>> {
     let total_files = entries.len();
     let total_bytes = entries

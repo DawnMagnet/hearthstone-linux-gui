@@ -21,7 +21,7 @@
         pkgs = import nixpkgs { inherit system overlays; };
 
         pname = "hearthstone-linux-gui";
-        packageVersion = "0.1.7";
+        packageVersion = "0.1.8";
         appId = "io.github.hearthstone_linux_gui";
         desktopFile = "${appId}.desktop";
         iconFile = "${appId}.svg";

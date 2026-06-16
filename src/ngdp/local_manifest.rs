@@ -10,9 +10,9 @@ use std::{
     collections::{HashMap, HashSet},
     fs::Metadata,
     path::{Path, PathBuf},
-    sync::{atomic::AtomicBool, Arc},
     time::UNIX_EPOCH,
 };
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 const INSTALLED_MANIFEST_NAME: &str = ".ngdp-installed.json";
@@ -114,7 +114,7 @@ pub(super) async fn scan_local_install(
     entries: Vec<InstallItem>,
     manifest: &InstalledManifest,
     verify: bool,
-    cancel: Option<&Arc<AtomicBool>>,
+    cancel: Option<&CancellationToken>,
 ) -> Result<LocalInstallScan> {
     let mut missing = Vec::new();
     let mut records = HashMap::with_capacity(entries.len());

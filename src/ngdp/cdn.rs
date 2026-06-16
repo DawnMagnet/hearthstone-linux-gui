@@ -4,10 +4,11 @@ use anyhow::{Context, Result};
 use std::{
     io::{ErrorKind, SeekFrom},
     path::{Path, PathBuf},
-    sync::{atomic::AtomicBool, Arc, Mutex},
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace, warn};
 use url::Url;
 
@@ -18,7 +19,7 @@ pub struct RemoteCdn {
     data_base: String,
     config_base: String,
     cache_dir: Option<PathBuf>,
-    cancel: Option<Arc<AtomicBool>>,
+    cancel: Option<CancellationToken>,
     progress: Option<Arc<dyn Fn(u64) + Send + Sync>>,
     last_transfer: Arc<Mutex<Option<TransferStats>>>,
 }
@@ -57,7 +58,7 @@ impl RemoteCdn {
         self
     }
 
-    pub fn with_cancel_token(mut self, cancel: Arc<AtomicBool>) -> Self {
+    pub fn with_cancel_token(mut self, cancel: CancellationToken) -> Self {
         self.cancel = Some(cancel);
         self
     }

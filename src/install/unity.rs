@@ -8,9 +8,9 @@ use std::{
     fs::File,
     io::{Read, Result as IoResult},
     path::Path,
-    sync::{atomic::AtomicBool, Arc},
     time::{Duration, Instant},
 };
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, info};
 
 const UNITY_ENGINE: &str =
@@ -52,7 +52,7 @@ impl UnityDownloadProgress {
 pub async fn ensure_unity_player_with_progress(
     game_dir: &Path,
     cache_dir: &Path,
-    cancel: Option<Arc<AtomicBool>>,
+    cancel: Option<CancellationToken>,
     mut progress: impl FnMut(UnityDownloadProgress) + Send,
 ) -> Result<String> {
     let unity_version = detect_unity_version(&game_dir.join("Bin/Hearthstone_Data/level0"))?;
@@ -113,7 +113,7 @@ fn looks_like_unity_version(value: &str) -> bool {
 async fn download_unity(
     version: &str,
     cache_dir: &Path,
-    cancel: Option<&Arc<AtomicBool>>,
+    cancel: Option<&CancellationToken>,
     progress: &mut (impl FnMut(UnityDownloadProgress) + Send),
 ) -> Result<()> {
     let hash = fetch_unity_archive_hash(version).await?;

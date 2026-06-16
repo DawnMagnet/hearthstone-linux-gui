@@ -1,9 +1,11 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::{fmt, path::PathBuf, str::FromStr};
+use std::path::PathBuf;
+use strum::{Display, EnumString};
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Display, EnumString, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
 pub enum Region {
     Eu,
     Us,
@@ -51,57 +53,52 @@ impl Region {
     }
 }
 
-impl fmt::Display for Region {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl FromStr for Region {
-    type Err = anyhow::Error;
-
-    fn from_str(value: &str) -> Result<Self> {
-        match value {
-            "eu" => Ok(Region::Eu),
-            "us" => Ok(Region::Us),
-            "kr" => Ok(Region::Kr),
-            "cn" => Ok(Region::Cn),
-            _ => anyhow::bail!("unsupported region `{value}`"),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Display, EnumString, Eq, PartialEq, Serialize)]
 pub enum Locale {
     #[serde(rename = "deDE")]
+    #[strum(serialize = "deDE")]
     DeDe,
     #[serde(rename = "enGB")]
+    #[strum(serialize = "enGB")]
     EnGb,
     #[serde(rename = "enUS")]
+    #[strum(serialize = "enUS")]
     EnUs,
     #[serde(rename = "esES")]
+    #[strum(serialize = "esES")]
     EsEs,
     #[serde(rename = "esMX")]
+    #[strum(serialize = "esMX")]
     EsMx,
     #[serde(rename = "frFR")]
+    #[strum(serialize = "frFR")]
     FrFr,
     #[serde(rename = "itIT")]
+    #[strum(serialize = "itIT")]
     ItIt,
     #[serde(rename = "jaJP")]
+    #[strum(serialize = "jaJP")]
     JaJp,
     #[serde(rename = "koKR")]
+    #[strum(serialize = "koKR")]
     KoKr,
     #[serde(rename = "plPL")]
+    #[strum(serialize = "plPL")]
     PlPl,
     #[serde(rename = "ptBR")]
+    #[strum(serialize = "ptBR")]
     PtBr,
     #[serde(rename = "ruRU")]
+    #[strum(serialize = "ruRU")]
     RuRu,
     #[serde(rename = "thTH")]
+    #[strum(serialize = "thTH")]
     ThTh,
     #[serde(rename = "zhCN")]
+    #[strum(serialize = "zhCN")]
     ZhCn,
     #[serde(rename = "zhTW")]
+    #[strum(serialize = "zhTW")]
     ZhTw,
 }
 
@@ -142,23 +139,6 @@ impl Locale {
             Locale::ZhCn => "zhCN",
             Locale::ZhTw => "zhTW",
         }
-    }
-}
-
-impl fmt::Display for Locale {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl FromStr for Locale {
-    type Err = anyhow::Error;
-
-    fn from_str(value: &str) -> Result<Self> {
-        Locale::ALL
-            .into_iter()
-            .find(|locale| locale.as_str() == value)
-            .with_context(|| format!("unsupported locale `{value}`"))
     }
 }
 
@@ -209,5 +189,24 @@ impl AppConfig {
         }
         let data = toml::to_string_pretty(self)?;
         std::fs::write(path, data).with_context(|| format!("failed to write {}", path.display()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Locale, Region};
+
+    #[test]
+    fn parses_and_displays_regions() {
+        assert_eq!("us".parse::<Region>().unwrap(), Region::Us);
+        assert_eq!(Region::Cn.to_string(), "cn");
+        assert!("tw".parse::<Region>().is_err());
+    }
+
+    #[test]
+    fn parses_and_displays_locales() {
+        assert_eq!("enUS".parse::<Locale>().unwrap(), Locale::EnUs);
+        assert_eq!(Locale::ZhTw.to_string(), "zhTW");
+        assert!("en-us".parse::<Locale>().is_err());
     }
 }

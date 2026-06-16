@@ -1,6 +1,6 @@
 [package]
 name = "hearthstone-linux-gui"
-version = "0.1.7"
+version = "0.1.8"
 edition = "2021"
 license = "MIT"
 description = "Native GTK4 Linux GUI manager for crafting and launching Hearthstone"
@@ -35,7 +35,6 @@ gui = ["dep:relm4", "dep:relm4-components"]
 [dependencies]
 aes = "0.8"
 anyhow = "1"
-async-channel = "2"
 bitvec = "1"
 cbc = { version = "0.1", features = ["alloc"] }
 clap = { version = "4", features = ["derive"] }
@@ -48,9 +47,10 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha1 = "0.10"
+strum = { version = "0.27", features = ["derive"] }
 tar = "0.4"
-thiserror = "2"
 tokio = { version = "1", features = ["fs", "io-util", "macros", "process", "rt-multi-thread", "sync", "time"] }
+tokio-util = "0.7"
 toml = "0.9"
 tracing = "0.1"
 tracing-appender = "0.2"
@@ -58,7 +58,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 url = "2"
 walkdir = "2"
 xz2 = "0.1"
-xdg = "3"
 
 relm4 = { version = "=0.10.0", features = ["libadwaita"], optional = true }
 relm4-components = { version = "=0.10.0", features = ["libadwaita"], optional = true }

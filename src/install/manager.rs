@@ -6,7 +6,7 @@ use crate::{
     util,
 };
 use anyhow::Result;
-use std::sync::{atomic::AtomicBool, Arc};
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, info};
 
 #[derive(Clone, Debug)]
@@ -43,7 +43,7 @@ impl InstallManager {
         &self,
         config: &mut AppConfig,
         mut event: impl FnMut(TaskEvent) + Send,
-        cancel: Arc<AtomicBool>,
+        cancel: CancellationToken,
     ) -> Result<()> {
         self.install_or_update_with_cancel(config, &mut event, Some(cancel))
             .await
@@ -53,7 +53,7 @@ impl InstallManager {
         &self,
         config: &mut AppConfig,
         event: &mut (impl FnMut(TaskEvent) + Send),
-        cancel: Option<Arc<AtomicBool>>,
+        cancel: Option<CancellationToken>,
     ) -> Result<()> {
         self.paths.ensure()?;
         info!(

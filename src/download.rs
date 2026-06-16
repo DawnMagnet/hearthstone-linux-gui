@@ -6,7 +6,7 @@ use reqwest::{
 };
 use std::{
     path::{Path, PathBuf},
-    sync::{atomic::AtomicBool, Arc},
+    sync::Arc,
     time::{Duration, Instant},
 };
 use tokio::{
@@ -14,6 +14,7 @@ use tokio::{
     sync::mpsc,
     task::JoinSet,
 };
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 const CHUNK_SIZE: u64 = 8 * 1024 * 1024;
@@ -61,7 +62,7 @@ struct ChunkResult {
 pub async fn download_to_vec(
     client: &reqwest::Client,
     url: Url,
-    cancel: Option<Arc<AtomicBool>>,
+    cancel: Option<CancellationToken>,
     progress: Option<Arc<dyn Fn(u64) + Send + Sync>>,
 ) -> Result<Vec<u8>> {
     check_cancelled(cancel.as_ref())?;
@@ -101,7 +102,7 @@ pub async fn download_range_to_vec(
     url: Url,
     offset: u64,
     size: u64,
-    cancel: Option<Arc<AtomicBool>>,
+    cancel: Option<CancellationToken>,
     progress: Option<Arc<dyn Fn(u64) + Send + Sync>>,
 ) -> Result<Vec<u8>> {
     check_cancelled(cancel.as_ref())?;
@@ -153,7 +154,7 @@ pub async fn download_file(
     client: &reqwest::Client,
     url: &str,
     destination: &Path,
-    cancel: Option<Arc<AtomicBool>>,
+    cancel: Option<CancellationToken>,
     mut progress: impl FnMut(DownloadProgress) + Send,
 ) -> Result<()> {
     check_cancelled(cancel.as_ref())?;
@@ -215,7 +216,7 @@ async fn download_to_vec_parallel(
     client: &reqwest::Client,
     url: Url,
     total: u64,
-    cancel: Option<Arc<AtomicBool>>,
+    cancel: Option<CancellationToken>,
     progress: Option<Arc<dyn Fn(u64) + Send + Sync>>,
 ) -> Result<Vec<u8>> {
     let chunks = chunks_for_total(total);
@@ -274,7 +275,7 @@ async fn download_to_vec_parallel(
 async fn download_to_vec_single(
     client: &reqwest::Client,
     url: Url,
-    cancel: Option<Arc<AtomicBool>>,
+    cancel: Option<CancellationToken>,
     progress: Option<Arc<dyn Fn(u64) + Send + Sync>>,
 ) -> Result<Vec<u8>> {
     let mut response = client.get(url.clone()).send().await?.error_for_status()?;
@@ -304,7 +305,7 @@ async fn download_file_parallel(
     url: Url,
     total: u64,
     destination: &Path,
-    cancel: Option<Arc<AtomicBool>>,
+    cancel: Option<CancellationToken>,
     mut progress: impl FnMut(DownloadProgress) + Send,
 ) -> Result<()> {
     let chunk_dir = chunk_download_dir(destination);
@@ -393,7 +394,7 @@ async fn download_file_single(
     url: Url,
     expected_total: Option<u64>,
     destination: &Path,
-    cancel: Option<Arc<AtomicBool>>,
+    cancel: Option<CancellationToken>,
     mut progress: impl FnMut(DownloadProgress) + Send,
 ) -> Result<()> {
     let partial = partial_download_path(destination);
@@ -518,7 +519,7 @@ async fn download_chunk_to_vec(
     client: &reqwest::Client,
     url: Url,
     chunk: &DownloadChunk,
-    cancel: Option<Arc<AtomicBool>>,
+    cancel: Option<CancellationToken>,
     progress: Option<Arc<dyn Fn(u64) + Send + Sync>>,
 ) -> Result<Vec<u8>> {
     download_range_to_vec(
@@ -537,7 +538,7 @@ async fn download_chunk_to_file(
     url: Url,
     chunk: &DownloadChunk,
     path: &Path,
-    cancel: Option<Arc<AtomicBool>>,
+    cancel: Option<CancellationToken>,
     progress: Option<Arc<dyn Fn(u64) + Send + Sync>>,
 ) -> Result<u64> {
     check_cancelled(cancel.as_ref())?;
@@ -667,6 +668,6 @@ async fn file_len(path: &Path) -> Result<u64> {
     }
 }
 
-fn check_cancelled(cancel: Option<&Arc<AtomicBool>>) -> Result<()> {
+fn check_cancelled(cancel: Option<&CancellationToken>) -> Result<()> {
     util::check_cancelled(cancel, "download cancelled")
 }
