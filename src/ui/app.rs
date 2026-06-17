@@ -24,7 +24,8 @@ use std::{process::Child, time::Duration};
 use tokio_util::sync::CancellationToken;
 
 const PROJECT_URL: &str = "https://github.com/DawnMagnet/hearthstone-linux-gui";
-const COPYRIGHT_TEXT: &str = "Copyright (c) 2025 DawnMagnet";
+const COPYRIGHT_TEXT: &str = "Copyright (c) 2026 DawnMagnet";
+const APP_VERSION_TEXT: &str = concat!("v", env!("CARGO_PKG_VERSION"));
 
 pub(super) fn run(gtk_app: adw::Application) {
     let relm_app = RelmApp::from_app(gtk_app);
@@ -135,9 +136,21 @@ impl SimpleComponent for MainWindow {
                             set_halign: gtk::Align::Center,
                             set_margin_top: 4,
 
-                            gtk::Label {
-                                add_css_class: relm4::css::DIM_LABEL,
-                                set_label: COPYRIGHT_TEXT,
+                            gtk::Box {
+                                set_orientation: gtk::Orientation::Horizontal,
+                                set_spacing: 8,
+                                set_halign: gtk::Align::Center,
+                                set_valign: gtk::Align::Center,
+
+                                gtk::Label {
+                                    add_css_class: relm4::css::DIM_LABEL,
+                                    set_label: COPYRIGHT_TEXT,
+                                },
+
+                                gtk::Label {
+                                    add_css_class: relm4::css::DIM_LABEL,
+                                    set_label: APP_VERSION_TEXT,
+                                },
                             },
 
                             gtk::LinkButton {

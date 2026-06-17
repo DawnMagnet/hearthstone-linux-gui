@@ -1,6 +1,6 @@
 [package]
 name = "hearthstone-linux-gui-native-api-mac-stub"
-version = "0.1.8"
+version.workspace = true
 edition = "2021"
 license = "MIT"
 

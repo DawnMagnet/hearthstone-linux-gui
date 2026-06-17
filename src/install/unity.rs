@@ -3,7 +3,7 @@ use crate::{
     util,
 };
 use anyhow::{Context, Result};
-use serde_json::json;
+use serde::Deserialize;
 use std::{
     fs::File,
     io::{Read, Result as IoResult},
@@ -153,33 +153,70 @@ impl From<DownloadProgress> for UnityDownloadProgress {
 
 async fn fetch_unity_archive_hash(version: &str) -> Result<String> {
     debug!(version = %version, "fetching Unity archive hash");
-    let body = json!({
-        "operationName": "GetRelease",
-        "variables": {
-            "version": version,
-            "limit": 300
-        },
-        "query": "query GetRelease($limit: Int, $skip: Int, $version: String!, $stream: [UnityReleaseStream!]) { getUnityReleases(limit: $limit skip: $skip stream: $stream version: $version entitlements: [XLTS]) { totalCount edges { node { version entitlements releaseDate unityHubDeepLink stream __typename } __typename } __typename } }"
-    });
     let text = reqwest::Client::new()
-        .post("https://services.unity.com/graphql")
-        .json(&body)
+        .get("https://services.api.unity.com/unity/editor/release/v1/releases")
+        .query(&[
+            ("version", version),
+            ("limit", "1"),
+            ("order", "RELEASE_DATE_DESC"),
+        ])
         .send()
         .await?
         .error_for_status()?
         .text()
         .await?;
+    unity_archive_hash_from_release_api(&text, version)
+}
+
+#[derive(Debug, Deserialize)]
+struct UnityReleaseApiResponse {
+    results: Vec<UnityRelease>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UnityRelease {
+    version: String,
+    short_revision: Option<String>,
+    unity_hub_deep_link: Option<String>,
+}
+
+fn unity_archive_hash_from_release_api(text: &str, version: &str) -> Result<String> {
+    let response: UnityReleaseApiResponse =
+        serde_json::from_str(text).context("Unity release API returned an unexpected response")?;
+    let release = response
+        .results
+        .into_iter()
+        .find(|release| release.version == version)
+        .with_context(|| format!("Unity {version} was not found in Unity release archive"))?;
+
+    if let Some(hash) = release.short_revision {
+        ensure_unity_archive_hash(&hash)?;
+        return Ok(hash);
+    }
+
     let needle = format!("unityhub://{version}/");
-    let start = text
-        .find(&needle)
-        .with_context(|| format!("Unity {version} was not found in Unity release archive"))?
-        + needle.len();
-    let hash: String = text[start..]
+    let deep_link = release
+        .unity_hub_deep_link
+        .with_context(|| format!("Unity {version} release did not include a download hash"))?;
+    let hash = deep_link
+        .strip_prefix(&needle)
+        .with_context(|| format!("Unity {version} release had an unexpected Hub link"))?;
+    let hash: String = hash
         .chars()
         .take_while(|ch| ch.is_ascii_alphanumeric())
         .collect();
-    anyhow::ensure!(!hash.is_empty(), "Unity archive hash was empty");
+    ensure_unity_archive_hash(&hash)?;
     Ok(hash)
+}
+
+fn ensure_unity_archive_hash(hash: &str) -> Result<()> {
+    anyhow::ensure!(!hash.is_empty(), "Unity archive hash was empty");
+    anyhow::ensure!(
+        hash.chars().all(|ch| ch.is_ascii_alphanumeric()),
+        "Unity archive hash contained unexpected characters"
+    );
+    Ok(())
 }
 
 fn extract_unity_archive_with_progress(
@@ -326,4 +363,64 @@ fn unity_player_files_exist(game_dir: &Path) -> bool {
             .join("MonoBleedingEdge/x86_64/libmonobdwgc-2.0.so")
             .exists()
         && data.join("MonoBleedingEdge/etc/mono/config").exists()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::unity_archive_hash_from_release_api;
+
+    #[test]
+    fn reads_unity_hash_from_short_revision() {
+        let response = r#"{
+            "results": [
+                {
+                    "version": "2022.3.62f2",
+                    "shortRevision": "7670c08855a9",
+                    "unityHubDeepLink": "unityhub://2022.3.62f2/7670c08855a9"
+                }
+            ]
+        }"#;
+
+        let hash = unity_archive_hash_from_release_api(response, "2022.3.62f2").unwrap();
+
+        assert_eq!(hash, "7670c08855a9");
+    }
+
+    #[test]
+    fn falls_back_to_unity_hub_deep_link() {
+        let response = r#"{
+            "results": [
+                {
+                    "version": "2022.3.62f2",
+                    "unityHubDeepLink": "unityhub://2022.3.62f2/7670c08855a9"
+                }
+            ]
+        }"#;
+
+        let hash = unity_archive_hash_from_release_api(response, "2022.3.62f2").unwrap();
+
+        assert_eq!(hash, "7670c08855a9");
+    }
+
+    #[test]
+    fn rejects_unexpected_unity_hash_characters() {
+        let response = r#"{
+            "results": [
+                {
+                    "version": "2022.3.62f2",
+                    "shortRevision": "7670c08855a9/"
+                }
+            ]
+        }"#;
+
+        let error = unity_archive_hash_from_release_api(response, "2022.3.62f2")
+            .expect_err("hash should be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("Unity archive hash contained unexpected characters"),
+            "{error:#}"
+        );
+    }
 }

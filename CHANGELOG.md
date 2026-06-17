@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.1.9 - 2026-06-17
+
+### Fixed
+
+- Switched Unity release lookup to the current Release API after the previous
+  GraphQL endpoint began returning 404 responses.
+- Updated the footer copyright year and displayed the application version.
+
+### Maintenance
+
+- Centralized the package version in the Cargo workspace metadata and reused it
+  from Nix packaging.
+
 ## v0.1.8 - 2026-06-16
 
 ### Changed
