@@ -1,7 +1,7 @@
 use super::{app::ProgressState, status::StatusSnapshot};
 use hearthstone_linux::config::{AppConfig, Locale, Region};
-use relm4::gtk::prelude::*;
-use relm4::{gtk, prelude::*, ComponentController, Controller, RelmWidgetExt, Sender};
+use relm4::adw::prelude::*;
+use relm4::{adw, gtk, prelude::*, ComponentController, Controller, RelmWidgetExt, Sender};
 use relm4_components::simple_combo_box::{SimpleComboBox, SimpleComboBoxMsg};
 
 #[derive(Clone, Debug)]
@@ -235,6 +235,7 @@ pub enum InstallState {
     Idle,
     Running(String),
     Stopping,
+    Uninstalling,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -254,6 +255,7 @@ pub enum LaunchState {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ActionBarState {
     pub install: InstallState,
+    pub installed: bool,
     pub login: LoginState,
     pub launch: LaunchState,
 }
@@ -262,6 +264,7 @@ impl Default for ActionBarState {
     fn default() -> Self {
         Self {
             install: InstallState::Idle,
+            installed: false,
             login: LoginState::Idle,
             launch: LaunchState::Idle,
         }
@@ -270,22 +273,24 @@ impl Default for ActionBarState {
 
 pub struct ActionBar {
     state: ActionBarState,
-    account_popover: Option<gtk::Popover>,
+    install_popover: Option<gtk::Popover>,
+    login_popover: Option<gtk::Popover>,
+    uninstall_button: Option<gtk::Button>,
+    switch_account_button: Option<gtk::Button>,
 }
 
 #[derive(Debug)]
 pub enum ActionBarInput {
     Render(ActionBarState),
-    ShowAccountMenu,
 }
 
 #[derive(Clone, Copy, Debug)]
 pub enum ActionBarOutput {
     Install,
+    Uninstall,
     Login,
     Launch,
     Refresh,
-    Logout,
     SwitchAccount,
 }
 
@@ -300,11 +305,13 @@ impl SimpleComponent for ActionBar {
             set_orientation: gtk::Orientation::Horizontal,
             set_spacing: 8,
 
-            gtk::Button {
+            #[name(install_button)]
+            adw::SplitButton {
+                set_tooltip_text: Some("Install actions"),
                 #[watch]
                 set_label: &model.install_label(),
                 #[watch]
-                set_sensitive: model.state.install != InstallState::Stopping,
+                set_sensitive: model.install_button_sensitive(),
                 #[watch]
                 set_class_active: (relm4::css::SUGGESTED_ACTION, model.state.install == InstallState::Idle),
                 #[watch]
@@ -315,14 +322,12 @@ impl SimpleComponent for ActionBar {
             },
 
             #[name(login_button)]
-            gtk::Button {
+            adw::SplitButton {
+                set_tooltip_text: Some("Account actions"),
                 #[watch]
                 set_label: model.login_label(),
                 #[watch]
-                set_class_active: (relm4::css::SUGGESTED_ACTION, model.state.login == LoginState::LoggedIn),
-                #[watch]
                 set_class_active: (relm4::css::DESTRUCTIVE_ACTION, model.state.login == LoginState::Waiting),
-
                 connect_clicked[sender] => move |_| {
                     sender.output(ActionBarOutput::Login).ok();
                 },
@@ -358,27 +363,43 @@ impl SimpleComponent for ActionBar {
     ) -> ComponentParts<Self> {
         let mut model = ActionBar {
             state,
-            account_popover: None,
+            install_popover: None,
+            login_popover: None,
+            uninstall_button: None,
+            switch_account_button: None,
         };
         let widgets = view_output!();
-        model.account_popover = Some(account_popover(&widgets.login_button, sender.clone()));
+        let install_menu = install_popover(sender.clone());
+        widgets
+            .install_button
+            .set_popover(Some(&install_menu.popover));
+        model.uninstall_button = Some(install_menu.button);
+        model.install_popover = Some(install_menu.popover);
+
+        let login_menu = login_popover(sender.clone());
+        widgets.login_button.set_popover(Some(&login_menu.popover));
+        model.switch_account_button = Some(login_menu.button);
+        model.login_popover = Some(login_menu.popover);
+        model.render_menu_items();
 
         ComponentParts { model, widgets }
     }
 
     fn update(&mut self, input: Self::Input, _sender: ComponentSender<Self>) {
         match input {
-            ActionBarInput::Render(state) => self.state = state,
-            ActionBarInput::ShowAccountMenu => {
-                if let Some(popover) = self.account_popover.as_ref() {
-                    popover.popup();
-                }
+            ActionBarInput::Render(state) => {
+                self.state = state;
+                self.render_menu_items();
             }
         }
     }
 
     fn shutdown(&mut self, _widgets: &mut Self::Widgets, _output: Sender<Self::Output>) {
-        if let Some(popover) = self.account_popover.take() {
+        if let Some(popover) = self.install_popover.take() {
+            popover.popdown();
+            popover.unparent();
+        }
+        if let Some(popover) = self.login_popover.take() {
             popover.popdown();
             popover.unparent();
         }
@@ -391,6 +412,29 @@ impl ActionBar {
             InstallState::Idle => "Install / Update".into(),
             InstallState::Running(action) => format!("Stop {action}"),
             InstallState::Stopping => "Stopping...".into(),
+            InstallState::Uninstalling => "Uninstalling...".into(),
+        }
+    }
+
+    fn install_button_sensitive(&self) -> bool {
+        matches!(
+            &self.state.install,
+            InstallState::Idle | InstallState::Running(_)
+        )
+    }
+
+    fn install_menu_sensitive(&self) -> bool {
+        self.state.installed
+            && self.state.install == InstallState::Idle
+            && self.state.launch == LaunchState::Idle
+    }
+
+    fn render_menu_items(&self) {
+        if let Some(button) = self.uninstall_button.as_ref() {
+            button.set_sensitive(self.install_menu_sensitive());
+        }
+        if let Some(button) = self.switch_account_button.as_ref() {
+            button.set_sensitive(self.state.login == LoginState::LoggedIn);
         }
     }
 
@@ -398,7 +442,7 @@ impl ActionBar {
         match self.state.login {
             LoginState::Idle => "Login",
             LoginState::Waiting => "Cancel Login",
-            LoginState::LoggedIn => "Logged In",
+            LoginState::LoggedIn => "Log Out",
         }
     }
 
@@ -415,9 +459,41 @@ fn index_of<T: Copy + Eq>(items: &[T], value: T) -> Option<usize> {
     items.iter().position(|item| *item == value)
 }
 
-fn account_popover(anchor: &gtk::Button, sender: ComponentSender<ActionBar>) -> gtk::Popover {
+struct PopoverButton {
+    popover: gtk::Popover,
+    button: gtk::Button,
+}
+
+fn install_popover(sender: ComponentSender<ActionBar>) -> PopoverButton {
     let popover = gtk::Popover::new();
-    popover.set_parent(anchor);
+
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    content.set_margin_top(10);
+    content.set_margin_bottom(10);
+    content.set_margin_start(10);
+    content.set_margin_end(10);
+
+    let uninstall = gtk::Button::with_label("Uninstall");
+    uninstall.add_css_class(relm4::css::DESTRUCTIVE_ACTION);
+    {
+        let popover = popover.clone();
+        let output = sender.output_sender().clone();
+        uninstall.connect_clicked(move |_| {
+            popover.popdown();
+            output.emit(ActionBarOutput::Uninstall);
+        });
+    }
+
+    content.append(&uninstall);
+    popover.set_child(Some(&content));
+    PopoverButton {
+        popover,
+        button: uninstall,
+    }
+}
+
+fn login_popover(sender: ComponentSender<ActionBar>) -> PopoverButton {
+    let popover = gtk::Popover::new();
 
     let content = gtk::Box::new(gtk::Orientation::Vertical, 8);
     content.set_margin_top(10);
@@ -435,19 +511,10 @@ fn account_popover(anchor: &gtk::Button, sender: ComponentSender<ActionBar>) -> 
         });
     }
 
-    let logout = gtk::Button::with_label("Log Out");
-    logout.add_css_class(relm4::css::DESTRUCTIVE_ACTION);
-    {
-        let popover = popover.clone();
-        let output = sender.output_sender().clone();
-        logout.connect_clicked(move |_| {
-            popover.popdown();
-            output.emit(ActionBarOutput::Logout);
-        });
-    }
-
     content.append(&switch_account);
-    content.append(&logout);
     popover.set_child(Some(&content));
-    popover
+    PopoverButton {
+        popover,
+        button: switch_account,
+    }
 }

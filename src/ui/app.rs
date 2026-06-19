@@ -70,6 +70,7 @@ pub enum AppMsg {
     Settings(SettingsOutput),
     Action(ActionBarOutput),
     InstallEvent(TaskEvent),
+    UninstallFinished(Result<(), String>),
     LoginPoll,
     GamePoll,
 }
@@ -217,6 +218,7 @@ impl SimpleComponent for MainWindow {
             AppMsg::Settings(output) => self.handle_settings(output),
             AppMsg::Action(output) => self.handle_action(output, sender),
             AppMsg::InstallEvent(event) => self.handle_install_event(event),
+            AppMsg::UninstallFinished(result) => self.handle_uninstall_finished(result),
             AppMsg::LoginPoll => self.handle_login_poll(),
             AppMsg::GamePoll => self.handle_game_poll(),
         }
@@ -244,10 +246,10 @@ impl MainWindow {
     fn handle_action(&mut self, output: ActionBarOutput, sender: ComponentSender<Self>) {
         match output {
             ActionBarOutput::Install => self.handle_install_pressed(sender),
+            ActionBarOutput::Uninstall => self.handle_uninstall_pressed(sender),
             ActionBarOutput::Login => self.handle_login_pressed(sender),
             ActionBarOutput::Launch => self.handle_launch_pressed(sender),
             ActionBarOutput::Refresh => self.refresh_from_disk(),
-            ActionBarOutput::Logout => self.handle_logout(),
             ActionBarOutput::SwitchAccount => self.handle_switch_account(sender),
         }
     }
@@ -311,6 +313,57 @@ impl MainWindow {
         }
     }
 
+    fn handle_uninstall_pressed(&mut self, sender: ComponentSender<Self>) {
+        if self.game_session.is_some() {
+            self.status.headline = "Stop the game before uninstalling".into();
+            self.refresh_details();
+            return;
+        }
+        if self.install_state != InstallState::Idle || !self.is_installed() {
+            return;
+        }
+
+        self.install_state = InstallState::Uninstalling;
+        self.progress = ProgressState {
+            visible: true,
+            fraction: None,
+            text: Some("Removing game files".into()),
+        };
+        self.status.headline = "Uninstalling".into();
+
+        tracing::info!("uninstall requested from UI");
+        let paths = self.paths.clone();
+        let mut config = self.config.clone();
+        let input = sender.input_sender().clone();
+        std::thread::spawn(move || {
+            let manager = InstallManager::new(paths);
+            let result = manager
+                .uninstall(&mut config)
+                .map_err(|error| format!("{error:#}"));
+            input.emit(AppMsg::UninstallFinished(result));
+        });
+    }
+
+    fn handle_uninstall_finished(&mut self, result: Result<(), String>) {
+        self.install_state = InstallState::Idle;
+        self.install_cancel = None;
+        self.progress.visible = false;
+
+        match result {
+            Ok(()) => {
+                auth::sync_config_from_disk(&self.paths, &mut self.config);
+                self.refresh_status_with_headline("Uninstalled");
+                self.toast("Uninstalled");
+            }
+            Err(message) => {
+                tracing::error!(error = %message, "uninstall failed in UI");
+                self.status.headline = format!("Uninstall failed: {message}");
+                self.refresh_details();
+                self.toast("Uninstall failed");
+            }
+        }
+    }
+
     fn handle_install_event(&mut self, event: TaskEvent) {
         match event {
             TaskEvent::Started(message) => {
@@ -368,7 +421,7 @@ impl MainWindow {
         }
 
         if self.paths.game_token().exists() {
-            self.actions.emit(ActionBarInput::ShowAccountMenu);
+            self.handle_logout();
             return;
         }
 
@@ -563,9 +616,14 @@ impl MainWindow {
             .emit(SettingsPanelInput::SetConfig(self.config.clone()));
         self.actions.emit(ActionBarInput::Render(ActionBarState {
             install: self.install_state.clone(),
+            installed: self.is_installed(),
             login: self.login_state(),
             launch: self.launch_state(),
         }));
+    }
+
+    fn is_installed(&self) -> bool {
+        self.paths.game_dir.join("Bin/Hearthstone.x86_64").exists()
     }
 
     fn login_state(&self) -> LoginState {

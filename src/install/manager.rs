@@ -5,7 +5,7 @@ use crate::{
     paths::AppPaths,
     util,
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info};
 
@@ -47,6 +47,24 @@ impl InstallManager {
     ) -> Result<()> {
         self.install_or_update_with_cancel(config, &mut event, Some(cancel))
             .await
+    }
+
+    pub fn uninstall(&self, config: &mut AppConfig) -> Result<()> {
+        info!(
+            game_dir = %self.paths.game_dir.display(),
+            "uninstalling managed game files"
+        );
+        if self.paths.game_dir.exists() {
+            std::fs::remove_dir_all(&self.paths.game_dir)
+                .with_context(|| format!("failed to remove {}", self.paths.game_dir.display()))?;
+        }
+
+        config.game_dir = Some(self.paths.game_dir.clone());
+        config.installed_version = None;
+        config.unity_version = None;
+        config.logged_in = false;
+        config.last_login_at = None;
+        config.save(&self.paths.config_file)
     }
 
     async fn install_or_update_with_cancel(

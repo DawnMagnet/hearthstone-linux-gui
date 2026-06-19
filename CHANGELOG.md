@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.2.0 - 2026-06-19
+
+### Added
+
+- Added a managed uninstall action for the installed game files.
+
+### Changed
+
+- Reworked install and account actions to use libadwaita split buttons, keeping
+  common actions on the main button and less frequent actions in the dropdown.
+
+### Maintenance
+
+- Refreshed the Nix Cargo vendor hash for the 0.2.0 workspace version.
+
 ## v0.1.9 - 2026-06-17
 
 ### Fixed
