@@ -108,6 +108,7 @@
             openssl
             pango
             vulkan-loader
+            zlib
           ]
           ++ graphicsRuntimeInputs;
 
