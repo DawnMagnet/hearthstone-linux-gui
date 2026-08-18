@@ -1,7 +1,7 @@
 use crate::{util, Locale, Region};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 struct StubSpec {
     installed_name: &'static str,
@@ -62,6 +62,69 @@ pub fn install_compatibility_files(game_dir: &Path, region: Region, locale: Loca
             copy_required(&stub.source, &game_dir.join(target))?;
         }
     }
+
+    patch_mono_dllmap_config(game_dir)?;
+    Ok(())
+}
+
+/// Recent Hearthstone builds P/Invoke CoreFoundation via the literal macOS
+/// framework path instead of a bare library name. `dlopen()` treats any name
+/// containing '/' as a filesystem path and skips `LD_LIBRARY_PATH` lookup
+/// entirely, so the stub copied into Plugins/.../CoreFoundation.framework/
+/// is never found that way anymore.
+///
+/// We patch a `<dllmap>` directly into Unity's bundled Mono config
+/// (`MonoBleedingEdge/etc/mono/config`), which Mono already loads by
+/// default, rather than pointing `MONO_CONFIG` at a separate file: that env
+/// var replaces the default config wholesale instead of layering on top of
+/// it, which would silently drop Blizzard's own entries (BTLS, System.Native,
+/// MonoPosixHelper, ...) that other parts of the game depend on.
+///
+/// The patch is idempotent (safe to call on every install/update) and a
+/// no-op if the bundled config is missing or already patched.
+fn patch_mono_dllmap_config(game_dir: &Path) -> Result<()> {
+    const DLL_NAME: &str = "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation";
+
+    let config_path = game_dir.join("Bin/Hearthstone_Data/MonoBleedingEdge/etc/mono/config");
+    if !config_path.exists() {
+        warn!(
+            path = %config_path.display(),
+            "bundled mono config not found, skipping CoreFoundation dllmap patch"
+        );
+        return Ok(());
+    }
+
+    let contents = std::fs::read_to_string(&config_path)
+        .with_context(|| format!("failed to read {}", config_path.display()))?;
+    if contents.contains(DLL_NAME) {
+        debug!(path = %config_path.display(), "mono dllmap already patched");
+        return Ok(());
+    }
+
+    let cf_stub = game_dir.join(
+        "Bin/Hearthstone_Data/Plugins/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation.so",
+    );
+    let cf_stub = cf_stub.canonicalize().unwrap_or(cf_stub);
+    let entry = format!(
+        "\t<dllmap dll=\"{DLL_NAME}\" target=\"{}\" os=\"!osx\"/>\n",
+        cf_stub.display()
+    );
+
+    let Some(insert_at) = contents.rfind("</configuration>") else {
+        anyhow::bail!(
+            "{} has no </configuration> closing tag",
+            config_path.display()
+        );
+    };
+
+    let mut patched = String::with_capacity(contents.len() + entry.len());
+    patched.push_str(&contents[..insert_at]);
+    patched.push_str(&entry);
+    patched.push_str(&contents[insert_at..]);
+
+    std::fs::write(&config_path, patched)
+        .with_context(|| format!("failed to write {}", config_path.display()))?;
+    info!(path = %config_path.display(), "patched mono dllmap for CoreFoundation");
     Ok(())
 }
 

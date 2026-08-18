@@ -27,27 +27,69 @@ pub fn extract_token_from_uri(uri: &str) -> Result<String> {
     find_token_candidate(uri).context("no Hearthstone login token found in callback URI")
 }
 
+// Token shape: <2-char region>-<32-char session key>-<account id>
+// The account id used to be hardcoded at 9 digits (total length 45), but
+// older Blizzard accounts have shorter numeric ids (e.g. 8 digits), which
+// made `looks_like_token` reject perfectly valid tokens. The head (region +
+// dash + session key + dash) is always exactly 36 bytes; only the trailing
+// account id segment varies in length.
+const TOKEN_HEAD_LEN: usize = 36;
+const TOKEN_TAIL_MIN: usize = 6;
+// Must stay <= 11: with TOKEN_HEAD_LEN = 36, a total token length above 47
+// pushes AES-CBC/PKCS7 padding into an extra 16-byte block, which would
+// break the `TOKEN_CIPHERTEXT_LEN == 0x30` check in `encrypt_token_for_user`.
+const TOKEN_TAIL_MAX: usize = 11;
+
 pub fn looks_like_token(value: &str) -> bool {
-    let bytes = value.as_bytes();
-    bytes.len() == 45
-        && bytes[2] == b'-'
-        && bytes[35] == b'-'
-        && bytes
-            .iter()
-            .enumerate()
-            .all(|(idx, byte)| idx == 2 || idx == 35 || byte.is_ascii_alphanumeric())
+    token_match_len(value.as_bytes()) == Some(value.len())
+}
+
+/// Returns the length of a token if `bytes` starts with one, or `None`.
+fn token_match_len(bytes: &[u8]) -> Option<usize> {
+    if bytes.len() < TOKEN_HEAD_LEN + TOKEN_TAIL_MIN {
+        return None;
+    }
+    if bytes[2] != b'-' || bytes[35] != b'-' {
+        return None;
+    }
+    let is_alnum = |range: std::ops::Range<usize>| {
+        bytes[range].iter().all(u8::is_ascii_alphanumeric)
+    };
+    if !is_alnum(0..2) || !is_alnum(3..35) {
+        return None;
+    }
+
+    let mut tail_len = 0;
+    while tail_len < TOKEN_TAIL_MAX
+        && bytes.get(TOKEN_HEAD_LEN + tail_len).is_some_and(u8::is_ascii_alphanumeric)
+    {
+        tail_len += 1;
+    }
+    if tail_len < TOKEN_TAIL_MIN {
+        return None;
+    }
+
+    // Don't stop in the middle of a longer alphanumeric run than we allow,
+    // otherwise a coincidental match could swallow only part of a longer id.
+    if bytes
+        .get(TOKEN_HEAD_LEN + tail_len)
+        .is_some_and(u8::is_ascii_alphanumeric)
+    {
+        return None;
+    }
+
+    Some(TOKEN_HEAD_LEN + tail_len)
 }
 
 fn find_token_candidate(input: &str) -> Option<String> {
     let bytes = input.as_bytes();
-    if bytes.len() < 45 {
+    if bytes.len() < TOKEN_HEAD_LEN + TOKEN_TAIL_MIN {
         return None;
     }
 
-    for start in 0..=(bytes.len() - 45) {
-        let candidate = &input[start..start + 45];
-        if looks_like_token(candidate) {
-            return Some(candidate.to_string());
+    for start in 0..bytes.len() {
+        if let Some(len) = token_match_len(&bytes[start..]) {
+            return Some(input[start..start + len].to_string());
         }
     }
     None
@@ -148,5 +190,28 @@ mod tests {
         let token = "AB-0123456789ABCDEFGHIJKLMNOPQRSTUV-123456789";
         let encrypted = encrypt_token_for_user(token, "sgct").unwrap();
         assert_eq!(encrypted.len(), TOKEN_CIPHERTEXT_LEN);
+    }
+
+    #[test]
+    fn accepts_short_eight_digit_account_id() {
+        // Regression test: older accounts can have an 8-digit id instead of
+        // 9, which used to fail the old `len() == 45` check entirely.
+        let token = "AB-0123456789ABCDEFGHIJKLMNOPQRSTUV-12345678";
+        assert!(looks_like_token(token));
+        assert_eq!(
+            extract_token_from_uri(&format!("wtcg://login?ST={token}")).unwrap(),
+            token
+        );
+        let encrypted = encrypt_token_for_user(token, "sgct").unwrap();
+        assert_eq!(encrypted.len(), TOKEN_CIPHERTEXT_LEN);
+    }
+
+    #[test]
+    fn does_not_truncate_a_longer_trailing_id_into_a_false_match() {
+        // If the account id segment were, say, 13 digits (beyond our
+        // accepted range), we should not silently accept the first 11 as a
+        // "token" and leave 2 stray digits dangling.
+        let too_long = "AB-0123456789ABCDEFGHIJKLMNOPQRSTUV-1234567890123";
+        assert!(!looks_like_token(too_long));
     }
 }
