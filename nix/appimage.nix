@@ -90,10 +90,17 @@ let
   # non-Nix systems. Use a statically-linked official release instead: it
   # sidesteps the bug (newer patchelf) and the whole class of problem (no
   # dynamic loader indirection needed at all for a static binary).
-  patchelfStatic = pkgs.fetchzip {
-    url = "https://github.com/NixOS/patchelf/releases/download/0.18.0/patchelf-0.18.0-x86_64.tar.gz";
-    hash = "sha256-zoTyRH+3qGeeWLxUog3CsBs3tYAuEsV+7OdypvFL8/A=";
-  };
+  patchelfStatic = pkgs.runCommand "patchelf-0.18.0-x86_64" {
+    nativeBuildInputs = [ pkgs.gnutar pkgs.gzip ];
+  } ''
+    mkdir -p $out
+    tar -xzf ${
+      pkgs.fetchurl {
+        url = "https://github.com/NixOS/patchelf/releases/download/0.18.0/patchelf-0.18.0-x86_64.tar.gz";
+        sha256 = "sha256-zoTyRH+3qGeeWLxUog3CsBs3tYAuEsV+7OdypvFL8/A=";
+      }
+    } -C $out
+  '';
 
   appDir =
     pkgs.runCommand "hearthstone-linux-gui-AppDir"
