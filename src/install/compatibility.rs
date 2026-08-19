@@ -3,6 +3,10 @@ use anyhow::Result;
 use std::path::{Path, PathBuf};
 use tracing::{debug, info};
 
+const MACOS_COREFOUNDATION_IMPORT: &[u8] =
+    b"/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation";
+const LINUX_COREFOUNDATION_IMPORT: &[u8] = b"CoreFoundation.so";
+
 struct StubSpec {
     installed_name: &'static str,
     dev_name: &'static str,
@@ -62,7 +66,60 @@ pub fn install_compatibility_files(game_dir: &Path, region: Region, locale: Loca
             copy_required(&stub.source, &game_dir.join(target))?;
         }
     }
+    patch_corefoundation_imports(game_dir)?;
     Ok(())
+}
+
+/// Rewrite the game's absolute macOS P/Invoke name to a normal Linux library
+/// name.  This keeps launch independent of Nix, FHS wrappers, and mount
+/// namespace tools.  Unity's managed string heap is NUL-terminated, so the
+/// shorter replacement can safely occupy the original byte span.
+pub fn patch_corefoundation_imports(game_dir: &Path) -> Result<usize> {
+    let managed_dir = game_dir.join("Bin/Hearthstone_Data/Managed");
+    if !managed_dir.is_dir() {
+        return Ok(0);
+    }
+
+    let mut patched = 0;
+    for entry in std::fs::read_dir(&managed_dir)? {
+        let path = entry?.path();
+        if path.extension().and_then(|extension| extension.to_str()) != Some("dll") {
+            continue;
+        }
+        let mut data = std::fs::read(&path)?;
+        let count = patch_corefoundation_import_bytes(&mut data);
+        if count == 0 {
+            continue;
+        }
+        util::make_user_writable(&path)?;
+        std::fs::write(&path, data)?;
+        patched += count;
+        debug!(path = %path.display(), count, "patched macOS CoreFoundation imports");
+    }
+    if patched > 0 {
+        info!(
+            count = patched,
+            "patched managed CoreFoundation imports for Linux"
+        );
+    }
+    Ok(patched)
+}
+
+fn patch_corefoundation_import_bytes(data: &mut [u8]) -> usize {
+    let mut count = 0;
+    let mut offset = 0;
+    while let Some(relative) = data[offset..]
+        .windows(MACOS_COREFOUNDATION_IMPORT.len())
+        .position(|window| window == MACOS_COREFOUNDATION_IMPORT)
+    {
+        let start = offset + relative;
+        data[start..start + MACOS_COREFOUNDATION_IMPORT.len()].fill(0);
+        data[start..start + LINUX_COREFOUNDATION_IMPORT.len()]
+            .copy_from_slice(LINUX_COREFOUNDATION_IMPORT);
+        count += 1;
+        offset = start + LINUX_COREFOUNDATION_IMPORT.len();
+    }
+    count
 }
 
 struct StubFile {
@@ -173,7 +230,24 @@ fn dev_stub_files() -> Result<Option<Vec<StubFile>>> {
 
 #[cfg(test)]
 mod tests {
-    use super::copy_required;
+    use super::{copy_required, patch_corefoundation_import_bytes};
+
+    #[test]
+    fn patches_absolute_corefoundation_import_to_linux_name() {
+        let mut data =
+            b"prefix\0/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation\0suffix"
+                .to_vec();
+
+        assert_eq!(patch_corefoundation_import_bytes(&mut data), 1);
+        assert!(data
+            .windows(b"CoreFoundation.so".len())
+            .any(|window| { window == b"CoreFoundation.so" }));
+        assert!(!data
+            .windows(b"/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation".len())
+            .any(|window| {
+                window == b"/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation"
+            }));
+    }
 
     #[cfg(unix)]
     #[test]

@@ -1,3 +1,4 @@
+use super::compatibility;
 use anyhow::{Context, Result};
 use std::{
     collections::HashSet,
@@ -26,6 +27,7 @@ pub fn launch_game(game_dir: &Path, use_discrete_gpu: bool) -> Result<Child> {
         game_dir.join("client.config").exists(),
         "client.config is missing"
     );
+    compatibility::patch_corefoundation_imports(game_dir)?;
     ensure_bundled_interpreter(&exe)?;
 
     info!(
@@ -39,23 +41,24 @@ pub fn launch_game(game_dir: &Path, use_discrete_gpu: bool) -> Result<Child> {
     debug!(ld_library_path = ?library_path, "configured game library path");
     if let Some(runner) = find_runtime_runner() {
         info!(runner = %runner.display(), "launching Hearthstone through runtime");
-        return Command::new(&runner)
+        let mut command = Command::new(&runner);
+        command
             .arg(&exe)
             .current_dir(game_dir)
             .env("LD_LIBRARY_PATH", library_path)
-            .envs(graphics_env)
+            .envs(graphics_env);
+        return command
             .spawn()
             .with_context(|| format!("failed to launch Hearthstone through {}", runner.display()));
     }
 
     debug!("no runtime runner configured; launching directly");
-    let child = Command::new(exe)
+    let mut command = Command::new(exe);
+    command
         .current_dir(game_dir)
         .env("LD_LIBRARY_PATH", library_path)
-        .envs(graphics_env)
-        .spawn()
-        .context("failed to launch Hearthstone")?;
-    Ok(child)
+        .envs(graphics_env);
+    command.spawn().context("failed to launch Hearthstone")
 }
 
 fn game_library_path(game_dir: &Path) -> OsString {

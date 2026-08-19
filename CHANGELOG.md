@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.2.1 - 2026-08-19
+
+### Fixed
+
+- Fixed the Unity black-screen startup failure caused by macOS's absolute
+  CoreFoundation import path not resolving on Linux.
+- Reworked the compatibility fix to patch managed assemblies to use the
+  standard Linux library name, avoiding a dependency on NixOS, FHS wrappers,
+  or bubblewrap mount namespaces.
+- Kept patched managed assemblies user-writable so future launches and updates
+  remain repeatable.
+
+### Maintenance
+
+- Added regression coverage for rewriting the CoreFoundation import.
+
 ## v0.2.0 - 2026-06-19
 
 ### Added

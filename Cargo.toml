@@ -29,7 +29,7 @@ default-members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.2.0"
+version = "0.2.1"
 
 [features]
 default = ["gui"]
@@ -69,8 +69,14 @@ relm4-components = { version = "=0.10.0", features = ["libadwaita"], optional = 
 tempfile = "3"
 
 [profile.release]
+lto = false
+codegen-units = 16
+opt-level = 2
+panic = "abort"
+strip = "symbols"
+
+[profile.dist]
+inherits = "release"
 lto = true
 codegen-units = 1
 opt-level = "z"
-panic = "abort"
-strip = "symbols"
