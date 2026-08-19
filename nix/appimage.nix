@@ -81,6 +81,20 @@ let
     sha256 = "sha256-HMSbzx4szVk8N5rbF8n4WjbWGQiCllBN6VsdBiFa678=";
   };
 
+  # The nixpkgs-pinned patchelf (0.15.2 as of writing; patchelf is pinned
+  # very conservatively in nixpkgs because of its role in stdenv's own
+  # bootstrap) reproducibly hits `*** stack smashing detected ***` on
+  # `--set-interpreter` against the Hearthstone Unity player binary, when
+  # run at AppImage runtime through the manual `ld.so --library-path`
+  # invocation needed to make a dynamically-linked Nix binary portable to
+  # non-Nix systems. Use a statically-linked official release instead: it
+  # sidesteps the bug (newer patchelf) and the whole class of problem (no
+  # dynamic loader indirection needed at all for a static binary).
+  patchelfStatic = pkgs.fetchzip {
+    url = "https://github.com/NixOS/patchelf/releases/download/0.18.0/patchelf-0.18.0-x86_64.tar.gz";
+    hash = "sha256-zoTyRH+3qGeeWLxUog3CsBs3tYAuEsV+7OdypvFL8/A=";
+  };
+
   appDir =
     pkgs.runCommand "hearthstone-linux-gui-AppDir"
       {
@@ -197,18 +211,8 @@ let
 
         install -Dm755 ${pkgs.glibc.out}/lib/ld-linux-x86-64.so.2 \
           $out/usr/lib/hearthstone-linux-gui-runtime/ld-linux-x86-64.so.2
-        install -Dm755 ${pkgs.patchelf}/bin/patchelf \
-          $out/usr/lib/hearthstone-linux-gui-runtime/patchelf
-        cat > $out/usr/bin/patchelf <<'EOF'
-        #!/usr/bin/env sh
-        appdir="$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)"
-        lib_path="$appdir/usr/lib:$appdir/usr/lib/hearthstone-linux-gui-runtime''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-        exec "$appdir/usr/lib/hearthstone-linux-gui-runtime/ld-linux-x86-64.so.2" \
-          --library-path "$lib_path" \
-          "$appdir/usr/lib/hearthstone-linux-gui-runtime/patchelf" "$@"
-        EOF
-        chmod 755 $out/usr/bin/patchelf
-        copy_elf_deps $out/usr/lib/hearthstone-linux-gui-runtime/patchelf
+        install -Dm755 ${patchelfStatic}/bin/patchelf \
+          $out/usr/bin/patchelf
 
         fix_portable_elf() {
           local elf="$1"
@@ -237,12 +241,10 @@ let
 
         patchelf --set-rpath '$ORIGIN/../lib:$ORIGIN/../lib/hearthstone-linux-gui-runtime' \
           $out/usr/bin/hearthstone-linux-gui
-        patchelf --set-rpath '$ORIGIN:$ORIGIN/../../usr/lib:$ORIGIN/../../usr/lib/hearthstone-linux-gui-runtime' \
-          $out/usr/lib/hearthstone-linux-gui-runtime/patchelf
         while IFS= read -r -d "" elf; do
           readelf -d "$elf" >/dev/null 2>&1 || continue
           case "$elf" in
-            $out/usr/bin/* | $out/usr/lib/hearthstone-linux-gui-runtime/patchelf)
+            $out/usr/bin/*)
               ;;
             */ld-*.so* | */ld-linux*.so*)
               ;;
