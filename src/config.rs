@@ -48,7 +48,7 @@ impl Region {
     pub fn login_url(self) -> &'static str {
         match self {
             Region::Cn => "https://account.battlenet.com.cn/login/zh/?ref=blizzard-hearthstone://localhost:0/&app=wtcg-and&showCredentials=true",
-            _ => "https://battle.net/login/?app=wtcg",
+            _ => "https://battle.net/login/?ref=blizzard-hearthstone://localhost:0/&app=wtcg",
         }
     }
 }
