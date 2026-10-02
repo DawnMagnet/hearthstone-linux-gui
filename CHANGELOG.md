@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.2.2 - 2026-10-02
+
+### Fixed
+
+- Registered the `blizzard-hearthstone://` login callback for all regions, so
+  the browser hands the login token back to the launcher automatically instead
+  of redirecting to `localhost:0`, which browsers block (#12, #14).
+- Accepted login tokens with any account id length instead of hard-coding 45
+  characters, which rejected valid tokens from accounts with shorter ids
+  (#10).
+- Made ELF interpreter patching best-effort: a broken or missing `patchelf`
+  no longer aborts the launch, the system `patchelf` is used as a fallback
+  when the bundled one crashes, and the game starts with its existing
+  interpreter otherwise (#9).
+- Added `zlib` to the Nix FHS runtime so the bundled Mono runtime can load on
+  NixOS (#8).
+
+### Maintenance
+
+- Expanded the troubleshooting documentation in both READMEs, covering the
+  browser login flow and its manual fallback, TLS certificate setup on
+  rolling distributions, and the known white-screen shader limitation on
+  some AMD GPUs (#9, #13).
+- Refreshed the AppImage runtime hash after the upstream continuous artifact
+  was updated.
+
 ## v0.2.1 - 2026-08-19
 
 ### Fixed
