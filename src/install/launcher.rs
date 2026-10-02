@@ -28,7 +28,7 @@ pub fn launch_game(game_dir: &Path, use_discrete_gpu: bool) -> Result<Child> {
         "client.config is missing"
     );
     compatibility::patch_corefoundation_imports(game_dir)?;
-    ensure_bundled_interpreter(&exe)?;
+    ensure_bundled_interpreter(&exe);
 
     info!(
         exe = %exe.display(),
@@ -122,37 +122,36 @@ fn find_runtime_runner() -> Option<PathBuf> {
     find_in_path("hearthstone-linux-gui-runtime")
 }
 
-fn ensure_bundled_interpreter(exe: &Path) -> Result<()> {
+/// Points the game binary at the bundled ELF interpreter when its current one
+/// cannot work on this system.
+///
+/// Patching is best-effort by design: a broken or missing `patchelf` (for
+/// example the bundled Nix build aborting with a stack smash on some hosts,
+/// issue #9) must never prevent the game from launching, because the binary's
+/// existing interpreter is usually fine.  When inspection fails, system
+/// `patchelf` is preferred over the bundled one, which is only tried first
+/// because it is known to match the bundled runtime.
+fn ensure_bundled_interpreter(exe: &Path) {
     let Some(interpreter) = bundled_interpreter() else {
-        return Ok(());
+        return;
     };
     if !interpreter.exists() {
         warn!(
             interpreter = %interpreter.display(),
             "bundled ELF interpreter was configured but does not exist"
         );
-        return Ok(());
+        return;
     }
 
-    let Some(patchelf) = find_patchelf() else {
+    let candidates = patchelf_candidates();
+    if candidates.is_empty() {
         warn!("bundled ELF interpreter was configured but patchelf was not found");
-        return Ok(());
-    };
+        return;
+    }
 
-    let current = Command::new(&patchelf)
-        .arg("--print-interpreter")
-        .arg(exe)
-        .output()
-        .with_context(|| {
-            format!(
-                "failed to inspect ELF interpreter with {}",
-                patchelf.display()
-            )
-        })?;
-    if current.status.success() {
-        let current = String::from_utf8_lossy(&current.stdout).trim().to_string();
+    if let Some(current) = print_interpreter(&candidates, exe) {
         if current == interpreter.to_string_lossy() {
-            return Ok(());
+            return;
         }
         if env::var_os("HEARTHSTONE_LINUX_FORCE_BUNDLED_INTERPRETER").is_none()
             && Path::new(&current).exists()
@@ -162,8 +161,14 @@ fn ensure_bundled_interpreter(exe: &Path) -> Result<()> {
                 interpreter = %current,
                 "Unity player ELF interpreter exists on this system"
             );
-            return Ok(());
+            return;
         }
+    } else {
+        warn!(
+            exe = %exe.display(),
+            "could not inspect the game binary's ELF interpreter; \
+             attempting to set the bundled interpreter anyway"
+        );
     }
 
     info!(
@@ -171,19 +176,30 @@ fn ensure_bundled_interpreter(exe: &Path) -> Result<()> {
         interpreter = %interpreter.display(),
         "patching Unity player ELF interpreter"
     );
-    let status = Command::new(&patchelf)
-        .arg("--set-interpreter")
-        .arg(&interpreter)
-        .arg(exe)
-        .status()
-        .with_context(|| format!("failed to run {}", patchelf.display()))?;
-    anyhow::ensure!(
-        status.success(),
-        "{} failed to patch {}",
-        patchelf.display(),
-        exe.display()
+    for patchelf in &candidates {
+        match Command::new(patchelf)
+            .arg("--set-interpreter")
+            .arg(&interpreter)
+            .arg(exe)
+            .status()
+        {
+            Ok(status) if status.success() => return,
+            Ok(status) => warn!(
+                patchelf = %patchelf.display(),
+                %status,
+                "patchelf failed to set the interpreter"
+            ),
+            Err(error) => warn!(
+                patchelf = %patchelf.display(),
+                %error,
+                "failed to run patchelf"
+            ),
+        }
+    }
+    warn!(
+        exe = %exe.display(),
+        "could not rewrite the ELF interpreter; launching with the existing one"
     );
-    Ok(())
 }
 
 fn bundled_interpreter() -> Option<PathBuf> {
@@ -195,11 +211,56 @@ fn bundled_interpreter() -> Option<PathBuf> {
         })
 }
 
-fn find_patchelf() -> Option<PathBuf> {
-    env::var_os("HEARTHSTONE_LINUX_PATCHELF")
-        .map(PathBuf::from)
-        .filter(|path| path.exists())
-        .or_else(|| find_in_path("patchelf"))
+/// patchelf binaries to try, most preferred first: the configured one (the
+/// AppImage ships one matching its bundled runtime), then any system one.
+fn patchelf_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(path) = env::var_os("HEARTHSTONE_LINUX_PATCHELF") {
+        let path = PathBuf::from(path);
+        if path.exists() {
+            candidates.push(path);
+        }
+    }
+    if let Some(path) = find_in_path("patchelf") {
+        if !candidates.contains(&path) {
+            candidates.push(path);
+        }
+    }
+    candidates
+}
+
+/// Returns the interpreter reported by the first patchelf candidate that can
+/// inspect the binary, or `None` when every candidate fails.
+fn print_interpreter(candidates: &[PathBuf], exe: &Path) -> Option<String> {
+    for patchelf in candidates {
+        match Command::new(patchelf)
+            .arg("--print-interpreter")
+            .arg(exe)
+            .output()
+        {
+            Ok(output) if output.status.success() => {
+                let interpreter = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !interpreter.is_empty() {
+                    return Some(interpreter);
+                }
+                debug!(
+                    patchelf = %patchelf.display(),
+                    "patchelf printed no ELF interpreter"
+                );
+            }
+            Ok(output) => debug!(
+                patchelf = %patchelf.display(),
+                status = %output.status,
+                "patchelf could not inspect the interpreter"
+            ),
+            Err(error) => debug!(
+                patchelf = %patchelf.display(),
+                %error,
+                "failed to run patchelf"
+            ),
+        }
+    }
+    None
 }
 
 fn find_in_path(command: &str) -> Option<PathBuf> {
