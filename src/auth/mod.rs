@@ -15,6 +15,11 @@ const ENTROPY: [u8; 16] = [
 const SALT: &[u8] = b"someSalt";
 const ITERATIONS: u32 = 1000;
 const TOKEN_CIPHERTEXT_LEN: usize = 0x30;
+/// "XX-" + 32 payload characters + "-" + at least one account digit.
+const TOKEN_MIN_LEN: usize = 37;
+/// PKCS7 padding must keep the ciphertext at 0x30 bytes, so the plaintext
+/// cannot exceed 47 characters.
+const TOKEN_MAX_LEN: usize = 47;
 pub fn extract_token_from_uri(uri: &str) -> Result<String> {
     if let Ok(url) = Url::parse(uri) {
         for (_, value) in url.query_pairs() {
@@ -28,26 +33,42 @@ pub fn extract_token_from_uri(uri: &str) -> Result<String> {
 }
 
 pub fn looks_like_token(value: &str) -> bool {
-    let bytes = value.as_bytes();
-    bytes.len() == 45
+    looks_like_token_bytes(value.as_bytes())
+}
+
+fn looks_like_token_bytes(bytes: &[u8]) -> bool {
+    bytes.len() >= TOKEN_MIN_LEN
+        && bytes.len() <= TOKEN_MAX_LEN
+        && is_token_prefix(bytes)
+        && bytes[36..].iter().all(|byte| byte.is_ascii_digit())
+}
+
+/// Validates the fixed-width "XX-<32 characters>-" prefix of a token.
+fn is_token_prefix(bytes: &[u8]) -> bool {
+    bytes.len() >= 36
         && bytes[2] == b'-'
         && bytes[35] == b'-'
-        && bytes
-            .iter()
-            .enumerate()
-            .all(|(idx, byte)| idx == 2 || idx == 35 || byte.is_ascii_alphanumeric())
+        && bytes[..2].iter().all(|byte| byte.is_ascii_alphanumeric())
+        && bytes[3..35].iter().all(|byte| byte.is_ascii_alphanumeric())
 }
 
 fn find_token_candidate(input: &str) -> Option<String> {
     let bytes = input.as_bytes();
-    if bytes.len() < 45 {
+    if bytes.len() < TOKEN_MIN_LEN {
         return None;
     }
 
-    for start in 0..=(bytes.len() - 45) {
-        let candidate = &input[start..start + 45];
-        if looks_like_token(candidate) {
-            return Some(candidate.to_string());
+    for start in 0..=(bytes.len() - TOKEN_MIN_LEN) {
+        if !is_token_prefix(&bytes[start..start + 36]) {
+            continue;
+        }
+        let mut end = start + 36;
+        while end < bytes.len() && bytes[end].is_ascii_digit() && end - start < TOKEN_MAX_LEN {
+            end += 1;
+        }
+        let candidate = &bytes[start..end];
+        if looks_like_token_bytes(candidate) {
+            return Some(String::from_utf8_lossy(candidate).into_owned());
         }
     }
     None
@@ -87,7 +108,13 @@ pub fn handle_callback_uri(paths: &AppPaths, uri: &str) -> Result<()> {
 }
 
 pub fn encrypt_token_for_user(token: &str, username: &str) -> Result<Vec<u8>> {
-    anyhow::ensure!(looks_like_token(token), "token format is invalid");
+    anyhow::ensure!(
+        looks_like_token(token),
+        "token format is invalid: expected two-character region, a dash, 32 alphanumeric \
+         characters, a dash, and the numeric account id (for example \
+         `US-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx-1234567`); got {} characters",
+        token.len()
+    );
 
     let key = encryption_key_for_user(username);
     let iv = [0u8; 16];
@@ -144,9 +171,78 @@ mod tests {
     }
 
     #[test]
+    fn accepts_tokens_with_varying_account_id_lengths() {
+        // 8-digit account id (44 characters, as reported in issue #10).
+        assert!(looks_like_token(
+            "AB-0123456789ABCDEFGHIJKLMNOPQRSTUV-12345678"
+        ));
+        // 7-digit account id (43 characters).
+        assert!(looks_like_token(
+            "AB-0123456789ABCDEFGHIJKLMNOPQRSTUV-1234567"
+        ));
+        // 9-digit account id (45 characters, the previously hard-coded length).
+        assert!(looks_like_token(
+            "AB-0123456789ABCDEFGHIJKLMNOPQRSTUV-123456789"
+        ));
+        // 10-digit account id (46 characters).
+        assert!(looks_like_token(
+            "AB-0123456789ABCDEFGHIJKLMNOPQRSTUV-1234567890"
+        ));
+    }
+
+    #[test]
+    fn rejects_malformed_tokens() {
+        // Missing the account id entirely.
+        assert!(!looks_like_token("AB-0123456789ABCDEFGHIJKLMNOPQRSTUV"));
+        // Missing the region prefix.
+        assert!(!looks_like_token(
+            "0123456789ABCDEFGHIJKLMNOPQRSTUV-12345678"
+        ));
+        // Dashes in the wrong places.
+        assert!(!looks_like_token(
+            "AB-0123456789ABCDEFGHIJKLMNOPQR-UV-12345678"
+        ));
+        // Non-alphanumeric payload character.
+        assert!(!looks_like_token(
+            "AB-0123456789ABCDEFGHIJKLMNOPQRSTU!-12345678"
+        ));
+        // Non-digit account id.
+        assert!(!looks_like_token(
+            "AB-0123456789ABCDEFGHIJKLMNOPQRSTUV-1234567A"
+        ));
+        // Longer than the encrypted token file can hold.
+        assert!(!looks_like_token(
+            "AB-0123456789ABCDEFGHIJKLMNOPQRSTUV-123456789012"
+        ));
+    }
+
+    #[test]
+    fn extracts_tokens_with_short_account_ids_from_text() {
+        let token = "AB-0123456789ABCDEFGHIJKLMNOPQRSTUV-12345678";
+        assert_eq!(extract_token_from_uri(token).unwrap(), token);
+        assert_eq!(
+            extract_token_from_uri(&format!("http://localhost:0/?ST={token}")).unwrap(),
+            token
+        );
+    }
+
+    #[test]
     fn encrypts_to_game_expected_length() {
         let token = "AB-0123456789ABCDEFGHIJKLMNOPQRSTUV-123456789";
         let encrypted = encrypt_token_for_user(token, "sgct").unwrap();
         assert_eq!(encrypted.len(), TOKEN_CIPHERTEXT_LEN);
+    }
+
+    #[test]
+    fn encrypts_short_account_id_tokens_to_game_expected_length() {
+        let token = "AB-0123456789ABCDEFGHIJKLMNOPQRSTUV-12345678";
+        let encrypted = encrypt_token_for_user(token, "sgct").unwrap();
+        assert_eq!(encrypted.len(), TOKEN_CIPHERTEXT_LEN);
+    }
+
+    #[test]
+    fn rejects_tokens_that_do_not_fit_the_encrypted_layout() {
+        let token = "AB-0123456789ABCDEFGHIJKLMNOPQRSTUV-123456789012";
+        assert!(encrypt_token_for_user(token, "sgct").is_err());
     }
 }
