@@ -235,10 +235,80 @@ upstream distribution endpoints during installation.
 
 | Symptom | What to try |
 | --- | --- |
-| The app says **Login Required** | Click **Login** again and finish the browser flow. |
+| The app says **Login Required** | Click **Login** again and finish the browser flow (see [Browser login](#browser-login)). |
+| `--write-token` says the token format is invalid | Keep the region prefix and both dashes (`XX-<32 characters>-<account id>`); the account id length varies between accounts. |
+| The game closes the Battle.net connection with TLS errors | See [Certificate failures on rolling distros](#certificate-failures-on-rolling-distros). |
+| The game window is solid white / flickers at launch | See [White screen on some AMD GPUs](#white-screen-on-some-amd-gpus). |
 | Install was interrupted | Click **Install / Update** again; resumable and cached downloads will be reused. |
 | The game does not launch after an update | Click **Install / Update** once to repair Unity/runtime files. |
+| The game exits immediately with `Unable to load mono library` (NixOS flake) | Update the flake; the FHS environment now ships `zlib`, which the bundled Mono runtime requires. |
 | A package opens but does not start on an unusual distro | Try the AppImage release, which carries the widest runtime set. |
+
+### Browser login
+
+Clicking **Login** registers the launcher as the system handler for the
+`blizzard-hearthstone://` URL scheme and opens the Battle.net sign-in page.
+After you sign in, the browser redirects to that scheme and the launcher
+writes the login token automatically — no copy-paste needed. The token is
+stored encrypted at `<game dir>/token`.
+
+If the browser instead shows `http://localhost:0/...` failing with
+`ERR_UNSAFE_PORT` (Chrome) or `NS_ERROR_PORT_ACCESS_NOT_ALLOWED`
+(Firefox), the handler was not registered or your release predates the
+callback fix. You can finish the login manually:
+
+1. Copy the value of the `ST=` parameter from the blocked URL (everything
+   after `ST=` up to the next `&`).
+2. Run:
+   ```sh
+   hearthstone-linux-gui --write-token 'US-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx-1234567'
+   ```
+   With the AppImage: `./hearthstone-linux-gui_*.AppImage --write-token '...'`.
+   Passing the whole failed URL to `--auth-callback` also works.
+
+A valid token is a two-character region prefix, a dash, 32 alphanumeric
+characters, a dash, and your numeric account id. If the command still rejects
+the value, check that the region prefix was not stripped while copying.
+
+### Certificate failures on rolling distros
+
+If the game starts but cannot sign in to Battle.net, and
+`~/.config/unity3d/Blizzard Entertainment/Hearthstone/Player.log` or
+`<game dir>/Logs/**/BattleNet.log` contains
+`Curl error 35 ... UnityTls error code: 7` or
+`Ssl error ... CERTIFICATE_VERIFY_FAILED` / `ERROR_SDK_SOCKET_CLOSED (1901)`,
+the game cannot find the system certificate store. The Unity player hard-codes
+Debian/RHEL CA bundle paths that do not exist on openSUSE and some other
+rolling distros. Related upstream discussion:
+[0xf4b1/hearthstone-linux#108](https://github.com/0xf4b1/hearthstone-linux/issues/108).
+
+On openSUSE Tumbleweed:
+
+```sh
+# 1) Provide the CA bundle paths the Unity player expects (once, needs root)
+sudo ln -sf /var/lib/ca-certificates/ca-bundle.pem /etc/ssl/certs/ca-bundle.crt
+sudo ln -sf /var/lib/ca-certificates/ca-bundle.pem /etc/ssl/certs/ca-certificates.crt
+
+# 2) Import the system roots into Mono's user trust store
+#    (cert-sync comes with the distro mono-core package)
+cert-sync --user /etc/ssl/certs/ca-bundle.crt
+```
+
+If `BattleNet.log` still reports a missing `libmono-btls-shared.so`, copy that
+library from your distro's `mono-core` package into
+`<game dir>/Bin/Hearthstone_Data/MonoBleedingEdge/x86_64/` and launch with
+`MONO_TLS_PROVIDER=btls`.
+
+### White screen on some AMD GPUs
+
+On some AMD integrated GPUs (for example Rembrandt / Radeon 680M), the game
+window renders solid white and flickers, while `Player.log` shows
+`ERROR: Shader Hidden/Universal Render Pipeline/DBufferClear shader is not
+supported on this GPU`. The Linux-repackaged game data is missing the shader
+variants these feature levels need; this cannot be fixed from the launcher at
+runtime and is tracked in [#13](https://github.com/DawnMagnet/hearthstone-linux-gui/issues/13).
+Forcing a different renderer (`-force-glcore`, `-force-vulkan`) does not help,
+but enabling **Use discrete GPU** in the launcher may.
 
 Release builds default to INFO-level logging. Detailed diagnostic logs can be
 enabled by developers with the standard `RUST_LOG` environment variable when

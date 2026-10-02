@@ -206,10 +206,75 @@ Linux player 运行这些官方游戏数据。
 
 | 现象 | 建议 |
 | --- | --- |
-| 应用显示 **Login Required** | 再次点击 **Login** 并完成浏览器登录流程。 |
-| 安装过程中断 | 重新点击 **Install / Update**，断点续传和缓存会继续发挥作用。 |
-| 更新后游戏无法启动 | 点击一次 **Install / Update**，修复 Unity/runtime 文件。 |
-| 某些发行版上安装包打开后不能启动 | 优先尝试 AppImage，它携带的运行环境最完整。 |
+| 应用显示 **Login Required** | 再次点击 **Login** 并完成浏览器登录流程(见[浏览器登录](#浏览器登录))。 |
+| `--write-token` 提示 token 格式无效 | 保留区域前缀和两个短横线(`XX-<32 位字符>-<账号 ID>`);账号 ID 的位数因账号而异。 |
+| 游戏可以启动但无法登录 Battle.net,报 TLS 错误 | 见[滚动发行版上的证书问题](#滚动发行版上的证书问题)。 |
+| 游戏窗口启动后白屏 / 闪烁 | 见[部分 AMD GPU 白屏](#部分-amd-gpu-白屏)。 |
+| 安装过程中断 | 重新点击 **Install / Update**,断点续传和缓存会继续发挥作用。 |
+| 更新后游戏无法启动 | 点击一次 **Install / Update**,修复 Unity/runtime 文件。 |
+| 游戏立即退出并提示 `Unable to load mono library`(NixOS flake) | 更新 flake;FHS 环境现已包含内置 Mono 运行时所需的 `zlib`。 |
+| 某些发行版上安装包打开后不能启动 | 优先尝试 AppImage,它携带的运行环境最完整。 |
+
+### 浏览器登录
+
+点击 **Login** 后,启动器会把自身注册为系统里 `blizzard-hearthstone://` URL
+scheme 的处理程序,并打开 Battle.net 登录页面。登录完成后,浏览器会重定向到
+该 scheme,启动器自动写入登录令牌,无需手动复制粘贴。令牌加密保存在
+`<游戏目录>/token`。
+
+如果浏览器反而跳转到 `http://localhost:0/...` 并显示 `ERR_UNSAFE_PORT`
+(Chrome)或 `NS_ERROR_PORT_ACCESS_NOT_ALLOWED`(Firefox),说明回调处理程序
+没有注册成功,或者所用版本早于回调修复。此时可以手动完成登录:
+
+1. 从被拦截的 URL 中复制 `ST=` 参数的值(`ST=` 之后、下一个 `&` 之前的内容)。
+2. 执行:
+   ```sh
+   hearthstone-linux-gui --write-token 'US-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx-1234567'
+   ```
+   AppImage 版本为 `./hearthstone-linux-gui_*.AppImage --write-token '...'`。
+   把整个失败的 URL 传给 `--auth-callback` 也可以。
+
+合法的令牌格式为:两位区域前缀 + 短横线 + 32 位字母数字 + 短横线 + 数字账号
+ID。如果命令仍然拒绝,请检查复制时是否丢失了区域前缀。
+
+### 滚动发行版上的证书问题
+
+如果游戏可以启动但无法登录 Battle.net,且
+`~/.config/unity3d/Blizzard Entertainment/Hearthstone/Player.log` 或
+`<游戏目录>/Logs/**/BattleNet.log` 中出现
+`Curl error 35 ... UnityTls error code: 7` 或
+`Ssl error ... CERTIFICATE_VERIFY_FAILED` / `ERROR_SDK_SOCKET_CLOSED (1901)`,
+说明游戏找不到系统证书库。Unity 播放器硬编码了 Debian/RHEL 的 CA 证书路径,
+在 openSUSE 等滚动发行版上并不存在。上游相关讨论:
+[0xf4b1/hearthstone-linux#108](https://github.com/0xf4b1/hearthstone-linux/issues/108)。
+
+在 openSUSE Tumbleweed 上:
+
+```sh
+# 1) 补齐 Unity 播放器期望的 CA 证书路径(只需一次,需要 root)
+sudo ln -sf /var/lib/ca-certificates/ca-bundle.pem /etc/ssl/certs/ca-bundle.crt
+sudo ln -sf /var/lib/ca-certificates/ca-bundle.pem /etc/ssl/certs/ca-certificates.crt
+
+# 2) 把系统根证书导入 Mono 的用户信任库
+#    (cert-sync 随发行版的 mono-core 包提供)
+cert-sync --user /etc/ssl/certs/ca-bundle.crt
+```
+
+如果 `BattleNet.log` 仍然提示缺少 `libmono-btls-shared.so`,请从发行版的
+`mono-core` 包中复制该库到
+`<游戏目录>/Bin/Hearthstone_Data/MonoBleedingEdge/x86_64/`,并以
+`MONO_TLS_PROVIDER=btls` 启动游戏。
+
+### 部分 AMD GPU 白屏
+
+在部分 AMD 集成显卡(例如 Rembrandt / Radeon 680M)上,游戏窗口白屏并持续
+闪烁,`Player.log` 中出现
+`ERROR: Shader Hidden/Universal Render Pipeline/DBufferClear shader is not
+supported on this GPU`。这是 Linux 重打包游戏数据缺少对应 feature level 的
+shader 变体导致的,无法在启动器运行时修复,详见
+[#13](https://github.com/DawnMagnet/hearthstone-linux-gui/issues/13)。
+强制切换渲染后端(`-force-glcore`、`-force-vulkan`)无效,但开启启动器中的
+**Use discrete GPU** 可能有效。
 
 发布版本默认只输出 INFO 级别及以上日志。开发者本地排障时，可以使用标准 `RUST_LOG` 环境变量开启更详细日志。
 
