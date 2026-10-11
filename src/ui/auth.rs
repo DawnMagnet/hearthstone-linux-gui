@@ -1,4 +1,4 @@
-use hearthstone_linux::{config::AppConfig, paths::AppPaths};
+use hearthstone_linux::{config::AppConfig, host_env, paths::AppPaths};
 use std::path::{Path, PathBuf};
 
 pub fn mark_logged_out(paths: &AppPaths, config: &mut AppConfig) -> anyhow::Result<()> {
@@ -54,7 +54,7 @@ pub fn ensure_auth_scheme_handlers() -> std::io::Result<()> {
     std::fs::write(&desktop_file, user_desktop_entry(&helper))?;
     make_executable(&desktop_file)?;
 
-    let _ = std::process::Command::new("update-desktop-database")
+    let _ = host_env::host_command("update-desktop-database")
         .arg(&applications_dir)
         .status();
     for mime in [
@@ -63,10 +63,10 @@ pub fn ensure_auth_scheme_handlers() -> std::io::Result<()> {
         "x-scheme-handler/hearthstone-linux",
         "x-scheme-handler/hearthstone-linux-gui",
     ] {
-        let _ = std::process::Command::new("xdg-mime")
+        let _ = host_env::host_command("xdg-mime")
             .args(["default", desktop_id, mime])
             .status();
-        let _ = std::process::Command::new("gio")
+        let _ = host_env::host_command("gio")
             .args(["mime", mime, desktop_id])
             .status();
     }

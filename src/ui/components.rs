@@ -8,6 +8,9 @@ use relm4_components::simple_combo_box::{SimpleComboBox, SimpleComboBoxMsg};
 pub struct StatusPanelState {
     pub snapshot: StatusSnapshot,
     pub progress: ProgressState,
+    /// Login page URL, shown while a browser login is pending so it can be
+    /// copied when no browser opened (or the wrong one did).
+    pub login_url: Option<String>,
 }
 
 pub struct StatusPanel {
@@ -17,6 +20,7 @@ pub struct StatusPanel {
 #[derive(Debug)]
 pub enum StatusPanelInput {
     Render(StatusPanelState),
+    CopyLoginUrl,
 }
 
 #[relm4::component(pub)]
@@ -46,6 +50,41 @@ impl SimpleComponent for StatusPanel {
                 set_label: &model.state.snapshot.details,
             },
 
+            gtk::Box {
+                set_orientation: gtk::Orientation::Vertical,
+                set_spacing: 4,
+
+                #[watch]
+                set_visible: model.state.login_url.is_some(),
+
+                gtk::Label {
+                    set_xalign: 0.0,
+                    set_wrap: true,
+                    add_css_class: relm4::css::DIM_LABEL,
+                    set_label: "If no browser opened, copy this login URL into your browser:",
+                },
+
+                gtk::Box {
+                    set_orientation: gtk::Orientation::Horizontal,
+                    set_spacing: 6,
+
+                    gtk::Entry {
+                        set_hexpand: true,
+                        set_editable: false,
+                        add_css_class: relm4::css::MONOSPACE,
+
+                        #[watch]
+                        set_text: model.state.login_url.as_deref().unwrap_or_default(),
+                    },
+
+                    gtk::Button {
+                        set_label: "Copy",
+                        set_tooltip_text: Some("Copy the login URL to the clipboard"),
+                        connect_clicked => StatusPanelInput::CopyLoginUrl,
+                    },
+                },
+            },
+
             gtk::ProgressBar {
                 set_show_text: true,
 
@@ -64,7 +103,7 @@ impl SimpleComponent for StatusPanel {
     fn init(
         state: Self::Init,
         root: Self::Root,
-        _sender: ComponentSender<Self>,
+        sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
         let model = StatusPanel { state };
         let widgets = view_output!();
@@ -75,6 +114,14 @@ impl SimpleComponent for StatusPanel {
     fn update(&mut self, input: Self::Input, _sender: ComponentSender<Self>) {
         match input {
             StatusPanelInput::Render(state) => self.state = state,
+            StatusPanelInput::CopyLoginUrl => {
+                if let (Some(url), Some(display)) = (
+                    self.state.login_url.as_deref(),
+                    gtk::gdk::Display::default(),
+                ) {
+                    display.clipboard().set_text(url);
+                }
+            }
         }
     }
 }
