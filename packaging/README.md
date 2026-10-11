@@ -42,7 +42,7 @@ If the AlmaLinux mirror list is slow, pass
 | `linux/packages.sh` | deb/rpm/pacman via nfpm (soname RPM dependencies) |
 | `linux/appimage.sh` | AppImage via pinned linuxdeploy, appimagetool and type2 runtime |
 | `linux/check-glibc.sh` | Fails if any ELF needs glibc > 2.34 or core runtime libraries got bundled |
-| `linux/smoke.sh` | Installs and starts the artifacts on a distro (CI matrix) |
+| `linux/smoke.sh` | Installs and starts the artifacts on a distro (CI matrix); runs `--print-child-env` |
 | `appimage/AppRun` | AppImage entry point |
 
 Pinned tools (bump the version and the SHA-256 together in `appimage.sh`):
@@ -51,7 +51,10 @@ linuxdeploy `1-alpha-20251107-1`, appimagetool `1.9.1`, type2 runtime
 
 `.github/workflows/packaging.yml` builds everything on every pull request
 and smoke-tests it on AlmaLinux 9, Ubuntu 22.04, Debian 12, Ubuntu 24.04,
-Debian 13, Fedora, Arch Linux and openSUSE Tumbleweed.
+Debian 13, Fedora, Arch Linux and openSUSE Tumbleweed. Each smoke job runs
+the hidden `hearthstone-linux-gui --print-child-env` probe (including a
+poisoned `LD_LIBRARY_PATH`) so AppImage children never inherit bundled
+library or GTK/GLib module paths.
 
 ### AppImage rules
 

@@ -166,8 +166,10 @@ build, and by the CI smoke matrix):
    `opensuse/tumbleweed`: `packaging/linux/smoke.sh` installs the native
    package and the extracted AppImage, checks that every library resolves
    (bundled GTK from the AppImage, glibc from the host), runs `--no-gui` and
-   keeps the GUI up for 8 s under Xvfb. The child-environment contract is
-   covered by `tests/apprun.rs` instead of a hidden CLI flag.
+   keeps the GUI up for 8 s under Xvfb. It also runs the hidden
+   `--print-child-env` probe (and a poisoned `LD_LIBRARY_PATH` case) so host
+   children do not inherit AppRun's GTK/GLib module paths or a bundled
+   `LD_LIBRARY_PATH`. `tests/apprun.rs` still checks AppRun itself.
 3. **Native package fixes** (done). Soname-based RPM dependencies (work on
    Fedora, EL9 and openSUSE), versioned deb dependencies at the real API
    floor, fixed homepage, x86_64 only.

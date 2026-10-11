@@ -2,7 +2,8 @@ name: Packaging
 
 # Builds every non-Nix artifact on the Enterprise Linux 9 baseline
 # (glibc 2.34) and smoke-tests it on the oldest and newest mainstream
-# distributions.
+# distributions. Smoke also runs the hidden --print-child-env probe so
+# AppImage children do not inherit bundled LD_LIBRARY_PATH / GTK paths.
 
 on:
   pull_request:
@@ -77,5 +78,5 @@ jobs:
           name: linux-packages
           path: dist
 
-      - name: Install and start
+      - name: Install, start, and check child environment
         run: bash packaging/linux/smoke.sh dist

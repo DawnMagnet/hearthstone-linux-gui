@@ -113,6 +113,47 @@ pub fn host_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
     command
 }
 
+/// Spawns a host child (`env`) and prints the environment variables that
+/// matter for issue #22: every name in [`OVERRIDDEN_VARS`], as the child
+/// actually sees them after [`apply`].
+///
+/// Hidden CLI: `hearthstone-linux-gui --print-child-env`. Packaging smoke
+/// uses this to prove AppImage children do not inherit bundled
+/// `LD_LIBRARY_PATH` / GTK / GLib module paths.
+pub fn print_child_env() -> anyhow::Result<()> {
+    let mut command = host_command("env");
+    let output = command
+        .output()
+        .map_err(|error| anyhow::anyhow!("failed to spawn host `env`: {error}"))?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "host `env` exited with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let mut child = std::collections::BTreeMap::<String, String>::new();
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        if let Some((key, value)) = line.split_once('=') {
+            child.insert(key.to_string(), value.to_string());
+        }
+    }
+
+    println!("# hearthstone-linux-gui --print-child-env");
+    println!("# host_env_active={}", if is_active() { "1" } else { "0" });
+    if let Some(bundled) = std::env::var_os("HEARTHSTONE_LINUX_BUNDLED_LIB_DIR") {
+        println!("# bundled_lib_dir={}", bundled.to_string_lossy());
+    }
+    for name in OVERRIDDEN_VARS {
+        match child.get(*name) {
+            Some(value) => println!("{name}={value}"),
+            None => println!("{name}=<unset>"),
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

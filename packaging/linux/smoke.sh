@@ -9,6 +9,8 @@
 # 2. Extracts the AppImage (on top of a plain desktop library set, without
 #    GTK 4) and does the same, checking that bundled libraries come from the
 #    AppImage and core libraries (glibc, GL, X11) from the host.
+# 3. Runs the hidden `--print-child-env` probe so host children do not inherit
+#    AppImage/bundled LD_LIBRARY_PATH or GTK/GLib module paths (issue #22).
 set -euo pipefail
 
 dist="$(readlink -f "${1:?usage: smoke.sh <dist-dir>}")"
@@ -69,12 +71,84 @@ gui_smoke() {
   echo "GUI stayed up: $*"
 }
 
+# Verifies `--print-child-env`. Optional $2 = AppDir (AppImage). Optional $3 =
+# expected LD_LIBRARY_PATH after restore (`<unset>` or an exact string).
+# Variables AppRun forces into the AppDir must never appear in the child.
+check_child_env() {
+  local launcher="$1"
+  local appdir="${2:-}"
+  local expect_ld="${3:-}"
+  local out value var
+
+  echo "-- child environment ($launcher)"
+  out="$("$launcher" --print-child-env)"
+  printf '%s\n' "$out"
+
+  echo "$out" | grep -q '^# host_env_active=' || {
+    echo "error: --print-child-env missing host_env_active header" >&2
+    return 1
+  }
+  echo "$out" | grep -q '^PATH=' || {
+    echo "error: --print-child-env missing PATH" >&2
+    return 1
+  }
+
+  child_var() {
+    echo "$out" | sed -n "s/^${1}=//p" | head -n1
+  }
+
+  if [ -n "$expect_ld" ]; then
+    value="$(child_var LD_LIBRARY_PATH)"
+    if [ "$value" != "$expect_ld" ]; then
+      echo "error: child LD_LIBRARY_PATH='$value', expected '$expect_ld'" >&2
+      return 1
+    fi
+  fi
+
+  if [ -n "$appdir" ]; then
+    echo "$out" | grep -q '^# host_env_active=1$' || {
+      echo "error: AppImage child probe expected host_env_active=1" >&2
+      return 1
+    }
+
+    # AppRun points these at the bundle; host children must get the host values.
+    for var in GIO_MODULE_DIR GTK_PATH GTK_EXE_PREFIX GI_TYPELIB_PATH \
+               GDK_PIXBUF_MODULE_FILE GSETTINGS_SCHEMA_DIR XDG_DATA_DIRS; do
+      value="$(child_var "$var")"
+      [ -z "$value" ] || [ "$value" = "<unset>" ] && continue
+      case "$value" in
+        "$appdir"|"$appdir"/*|*"$appdir"/*)
+          echo "error: child $var still points into AppDir ($appdir): $value" >&2
+          return 1
+          ;;
+      esac
+    done
+
+    # Without an explicit expect_ld, LD_LIBRARY_PATH must not look like an
+    # AppImage mount. Poison tests pass expect_ld=/tmp/... instead.
+    value="$(child_var LD_LIBRARY_PATH)"
+    if [ -z "$expect_ld" ] || [ "$expect_ld" = "<unset>" ]; then
+      if [ -n "$value" ] && [ "$value" != "<unset>" ]; then
+        case "$value" in
+          */squashfs-root/*|*/.mount_*/*)
+            echo "error: child LD_LIBRARY_PATH points at an AppImage mount: $value" >&2
+            return 1
+            ;;
+        esac
+      fi
+    fi
+  fi
+
+  echo "child environment OK"
+}
+
 install_native
 ldd --version | head -n1
 
 echo "-- native package"
 check_ldd /usr/bin/hearthstone-linux-gui /usr/share/hearthstone-linux-gui/stubs
 hearthstone-linux-gui --no-gui
+check_child_env hearthstone-linux-gui
 gui_smoke hearthstone-linux-gui
 
 echo "-- AppImage"
@@ -89,5 +163,12 @@ ldd "$appdir/usr/bin/hearthstone-linux-gui" | grep -E 'libgtk-4|libc\.so'
 ldd "$appdir/usr/bin/hearthstone-linux-gui" | grep libgtk-4 | grep -q "$appdir"
 ldd "$appdir/usr/bin/hearthstone-linux-gui" | grep 'libc\.so' | grep -vq "$appdir"
 "$appdir/AppRun" --no-gui
+# Default host has no LD_LIBRARY_PATH: child must keep it unset and must not
+# inherit AppRun's GTK/GLib module paths (issue #22).
+check_child_env "$appdir/AppRun" "$appdir" "<unset>"
+# Poison a non-AppDir LD_LIBRARY_PATH: AppRun records it, host_env restores it,
+# and GTK/GLib vars still must not point into the AppDir.
+poison="$(mktemp -d "$work/ld-poison.XXXXXX")"
+LD_LIBRARY_PATH="$poison" check_child_env "$appdir/AppRun" "$appdir" "$poison"
 gui_smoke "$appdir/AppRun"
 echo "== OK: ${PRETTY_NAME:-$ID}"
