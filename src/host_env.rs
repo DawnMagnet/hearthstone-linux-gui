@@ -1,13 +1,12 @@
 //! Restores the host environment for processes spawned from the AppImage.
 //!
-//! `AppRun` points `LD_LIBRARY_PATH`, `PATH`, `GIO_MODULE_DIR` and friends at
-//! the libraries bundled inside the AppImage, including its own glibc.  The
-//! launcher itself does not need those variables (it is started through the
-//! bundled ELF interpreter with an explicit `--library-path`), but every child
-//! process inherits them.  Host programs such as `xdg-open`, `gio`, a browser
-//! or the Unity player then run with the host's dynamic loader against the
-//! bundled glibc/GLib, and fail or crash silently on hosts whose glibc
-//! differs from the bundled one (issue #22).
+//! `AppRun` points `XDG_DATA_DIRS`, `GIO_MODULE_DIR`, `GTK_PATH` and friends at
+//! data and modules bundled inside the AppImage.  Every child process would
+//! inherit them, so host programs such as `xdg-open`, `gio`, a browser or the
+//! Unity player would load the bundled GLib/GTK modules into the host's
+//! libraries.  Older AppImages even exported the bundled glibc in
+//! `LD_LIBRARY_PATH`, which made those programs fail or crash silently on
+//! hosts with a different glibc (issue #22).
 //!
 //! `AppRun` saves the original value of every variable it changes as
 //! `HEARTHSTONE_LINUX_HOST_<NAME>` (or `HEARTHSTONE_LINUX_HOST_UNSET_<NAME>`
@@ -27,6 +26,9 @@ pub const OVERRIDDEN_VARS: &[&str] = &[
     "GI_TYPELIB_PATH",
     "GIO_MODULE_DIR",
     "GDK_PIXBUF_MODULE_FILE",
+    "GSETTINGS_SCHEMA_DIR",
+    "GTK_EXE_PREFIX",
+    "GTK_PATH",
 ];
 
 const MARKER: &str = "HEARTHSTONE_LINUX_APPIMAGE_ENV";

@@ -77,13 +77,31 @@ to distribute and maintain.
 
 | Package | Best for | User experience |
 | --- | --- | --- |
-| **AppImage** | Any x86_64 Linux desktop, including NixOS | Download and open the application directly |
+| **AppImage** | Any x86_64 Linux desktop with glibc 2.34 or newer | Download and open the application directly |
 | **DEB** | Debian, Ubuntu, Linux Mint, Pop!_OS, and related systems | Open with the graphical software installer |
 | **RPM** | Fedora, RHEL-compatible, openSUSE-style workflows | Open with the graphical software installer |
 | **Nix** | NixOS and Nix package users | Native package output with desktop file and launcher |
 
-Release builds are produced from the unified Nix build pipeline so every format
-comes from the same source, version, and dependency graph.
+### System requirements
+
+All release artifacts are built on the oldest still-supported distribution
+that ships GTK 4 and libadwaita, Enterprise Linux 9 (glibc 2.34), so they run
+on old and new systems alike:
+
+| | Minimum |
+| --- | --- |
+| CPU | x86_64 |
+| glibc | **2.34** (RHEL/AlmaLinux/Rocky 9, Ubuntu 22.04, Debian 12, Fedora 35, openSUSE Leap 15.6/16 and newer) |
+| GTK / libadwaita (DEB/RPM/Pacman) | GTK 4.0, libadwaita 1.0, GLib 2.66 from your distribution |
+| GTK / libadwaita (AppImage) | Bundled (GTK 4.12, libadwaita 1.4); glibc, graphics drivers, fonts and X11/Wayland come from your system |
+
+On NixOS, use the Nix package below; the AppImage needs `programs.nix-ld`
+or `appimage-run`. Older systems such as Ubuntu 20.04, Debian 11 or RHEL 8
+are not supported: they do not ship GTK 4.
+
+The AppImage and the DEB/RPM/Pacman packages come from one container build
+(`packaging/linux/Dockerfile`); the Nix package is built by the flake. See
+[`docs/design/packaging-pipeline.md`](docs/design/packaging-pipeline.md).
 
 ## Installation For Users
 
@@ -125,7 +143,6 @@ Build outputs from a local checkout:
 
 ```sh
 nix build .#default
-nix build .#AppImage
 nix build .#runtime
 ```
 
@@ -135,8 +152,6 @@ The available flake outputs are:
 | --- | --- |
 | `packages.x86_64-linux.default` | Native Nix package for the GTK launcher |
 | `packages.x86_64-linux.runtime` | FHS runtime wrapper used to launch the downloaded Unity player |
-| `packages.x86_64-linux.AppImage` | Portable AppImage build |
-| `packages.x86_64-linux.AppDir` | Intermediate AppDir used to build the AppImage |
 | `apps.x86_64-linux.default` | `nix run` entrypoint |
 | `devShells.x86_64-linux.default` | Rust/GTK development shell |
 

@@ -189,24 +189,10 @@
               $out/share/hearthstone-linux-gui/stubs/libNativeApiMac.so
           '';
         };
-
-        appimage = import ./nix/appimage.nix {
-          inherit
-            pkgs
-            pname
-            packageVersion
-            appId
-            desktopFile
-            iconFile
-            hearthstonePackage
-            ;
-        };
       in
       {
         packages.default = hearthstonePackage;
         packages.runtime = hearthstoneRuntime;
-        packages.AppDir = appimage.appDir;
-        packages.AppImage = appimage.appImage;
 
         devShells.default = pkgs.mkShell {
           inherit nativeBuildInputs buildInputs;

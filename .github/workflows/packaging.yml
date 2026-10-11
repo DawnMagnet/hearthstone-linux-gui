@@ -1,0 +1,81 @@
+name: Packaging
+
+# Builds every non-Nix artifact on the Enterprise Linux 9 baseline
+# (glibc 2.34) and smoke-tests it on the oldest and newest mainstream
+# distributions.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: packaging-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build packages (EL9 baseline)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Build deb, rpm, pacman and AppImage
+        run: |
+          set -euo pipefail
+          docker build \
+            -f packaging/linux/Dockerfile \
+            --target dist \
+            --output type=local,dest=dist \
+            .
+          ls -l dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-packages
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  smoke:
+    name: Smoke test (${{ matrix.image }})
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          # Oldest supported baselines (glibc 2.34 / 2.35 / 2.36).
+          - almalinux:9
+          - ubuntu:22.04
+          - debian:12
+          # Current releases.
+          - ubuntu:24.04
+          - debian:13
+          - fedora:latest
+          - archlinux:latest
+          - opensuse/tumbleweed:latest
+    container:
+      image: ${{ matrix.image }}
+    steps:
+      - name: Install checkout prerequisites
+        run: |
+          if command -v apt-get >/dev/null; then apt-get update -qq && apt-get install -y -qq ca-certificates >/dev/null; fi
+          if command -v pacman >/dev/null; then pacman -Sy --noconfirm --needed ca-certificates >/dev/null; fi
+
+      - uses: actions/checkout@v6
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-packages
+          path: dist
+
+      - name: Install and start
+        run: bash packaging/linux/smoke.sh dist

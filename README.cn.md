@@ -61,12 +61,25 @@
 
 | 包格式 | 适合场景 | 用户体验 |
 | --- | --- | --- |
-| **AppImage** | 任意 x86_64 Linux 桌面环境，包括 NixOS | 下载后直接打开应用 |
+| **AppImage** | glibc 2.34 及以上的任意 x86_64 Linux 桌面 | 下载后直接打开应用 |
 | **DEB** | Debian、Ubuntu、Linux Mint、Pop!_OS 等系统 | 双击后通过图形化软件中心安装 |
 | **RPM** | Fedora、RHEL 兼容系统以及 openSUSE 类工作流 | 双击后通过图形化软件中心安装 |
 | **Nix** | NixOS 和 Nix 用户 | 原生 Nix 包输出，包含桌面文件和启动器 |
 
-所有发布产物都来自统一的 Nix 构建流程，确保 AppImage、DEB、RPM 和 Nix 包使用同一份源码、同一个版本和同一套依赖图。
+### 系统要求
+
+所有发布产物都在「仍受支持、且自带 GTK 4 和 libadwaita 的最老发行版」——Enterprise Linux 9（glibc 2.34）上编译，因此新老系统都能运行：
+
+| | 最低要求 |
+| --- | --- |
+| CPU | x86_64 |
+| glibc | **2.34**（RHEL/AlmaLinux/Rocky 9、Ubuntu 22.04、Debian 12、Fedora 35、openSUSE Leap 15.6/16 及更新版本） |
+| GTK / libadwaita（DEB/RPM/Pacman） | 使用系统的 GTK 4.0、libadwaita 1.0、GLib 2.66 及以上 |
+| GTK / libadwaita（AppImage） | 自带（GTK 4.12、libadwaita 1.4）；glibc、显卡驱动、字体和 X11/Wayland 用系统自己的 |
+
+NixOS 请使用下面的 Nix 包；AppImage 需要 `programs.nix-ld` 或 `appimage-run`。Ubuntu 20.04、Debian 11、RHEL 8 等更老的系统没有 GTK 4，不在支持范围内。
+
+AppImage 和 DEB/RPM/Pacman 包来自同一次容器构建（`packaging/linux/Dockerfile`），Nix 包由 flake 构建。详见 [`docs/design/packaging-pipeline.md`](docs/design/packaging-pipeline.md)。
 
 ## 普通用户如何安装
 
@@ -103,7 +116,6 @@ nix run github:DawnMagnet/hearthstone-linux-gui
 
 ```sh
 nix build .#default
-nix build .#AppImage
 nix build .#runtime
 ```
 
@@ -113,8 +125,6 @@ nix build .#runtime
 | --- | --- |
 | `packages.x86_64-linux.default` | GTK 启动器的原生 Nix 包 |
 | `packages.x86_64-linux.runtime` | 用于启动下载后的 Unity player 的 FHS runtime wrapper |
-| `packages.x86_64-linux.AppImage` | 便携 AppImage 构建产物 |
-| `packages.x86_64-linux.AppDir` | 构建 AppImage 时使用的中间 AppDir |
 | `apps.x86_64-linux.default` | `nix run` 入口 |
 | `devShells.x86_64-linux.default` | Rust/GTK 开发 shell |
 
