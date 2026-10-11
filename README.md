@@ -56,7 +56,7 @@ to distribute and maintain.
   packaged with the libraries it needs.
 - **Cross-distribution Linux packaging**: use the same project on NixOS,
   Debian, Ubuntu, Fedora, and other x86_64 Linux distributions.
-- **Portable AppImage**: a self-contained build for broad Linux compatibility.
+- **Portable AppImage**: GTK/runtime layer bundled; glibc and drivers come from the host (glibc ≥ 2.34).
 - **Native Nix package**: Nix users can consume a standard package output with
   desktop integration.
 - **DEB/RPM installers**: package-manager friendly builds for common desktop
@@ -65,9 +65,9 @@ to distribute and maintain.
   file after interruption.
 - **Cached game data**: downloaded NGDP content is cached and verified to avoid
   unnecessary network work.
-- **No Steam dependency**: the AppImage carries the portable GTK/runtime layer;
-  the game itself is launched with the project's own runtime handling, not
-  `steam-run`.
+- **No Steam dependency**: the AppImage carries a portable GTK layer (not
+  glibc); the game itself is launched with the project's own runtime handling,
+  not `steam-run`.
 
 ## Packages
 
@@ -101,7 +101,31 @@ are not supported: they do not ship GTK 4.
 
 The AppImage and the DEB/RPM/Pacman packages come from one container build
 (`packaging/linux/Dockerfile`); the Nix package is built by the flake. See
-[`docs/design/packaging-pipeline.md`](docs/design/packaging-pipeline.md).
+[`docs/design/packaging-pipeline.md`](docs/design/packaging-pipeline.md)
+and [`packaging/README.md`](packaging/README.md).
+
+### Building packages
+
+All non-Nix release artifacts are built on **AlmaLinux 9** (glibc **2.34**),
+the oldest still-supported distribution that ships GTK 4 and libadwaita.
+Newer hosts run these binaries without change.
+
+```sh
+# deb + rpm + pacman + AppImage → dist/
+packaging/appimage/build.sh
+
+# AppImage only
+TARGET=appimage-out packaging/appimage/build.sh
+```
+
+The AppImage is assembled with pinned **linuxdeploy** /
+**appimagetool** / **type2-runtime**. It bundles GTK/libadwaita/GLib from
+EL9, but **never** bundles glibc or exports `LD_LIBRARY_PATH` (libraries are
+found via `RUNPATH`). Native deb/rpm/pacman packages link against the host
+GTK stack. CI (`.github/workflows/packaging.yml`) smoke-tests every artifact
+on AlmaLinux 9, Ubuntu 22.04/24.04, Debian 12/13, Fedora, Arch, and openSUSE
+Tumbleweed, including the hidden `--print-child-env` probe that catches
+environment leaks into child processes.
 
 ## Installation For Users
 
@@ -257,7 +281,7 @@ upstream distribution endpoints during installation.
 | Install was interrupted | Click **Install / Update** again; resumable and cached downloads will be reused. |
 | The game does not launch after an update | Click **Install / Update** once to repair Unity/runtime files. |
 | The game exits immediately with `Unable to load mono library` (NixOS flake) | Update the flake; the FHS environment now ships `zlib`, which the bundled Mono runtime requires. |
-| A package opens but does not start on an unusual distro | Try the AppImage release, which carries the widest runtime set. |
+| A package opens but does not start on an unusual distro | Try the AppImage release (bundles GTK; uses your system glibc). |
 
 ### Browser login
 
