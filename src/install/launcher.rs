@@ -1,15 +1,31 @@
 use super::compatibility;
+use crate::host_env;
 use anyhow::{Context, Result};
 use std::{
     collections::HashSet,
     env,
     ffi::{OsStr, OsString},
+    fs::File,
     path::{Path, PathBuf},
-    process::{Child, Command},
+    process::{Child, Command, ExitStatus, Stdio},
+    time::Duration,
 };
 use tracing::{debug, info, warn};
 
-pub fn launch_game(game_dir: &Path, use_discrete_gpu: bool) -> Result<Child> {
+/// A game that exits sooner than this after launch most likely crashed while
+/// starting (missing library, loader mismatch, ...), so the UI reports why.
+pub const QUICK_EXIT_THRESHOLD: Duration = Duration::from_secs(15);
+
+/// Launches Hearthstone.
+///
+/// When `output_log` is given, the game's stdout and stderr are written to
+/// that file, so dynamic-loader errors that happen before Unity opens
+/// `Player.log` are not lost. Otherwise the game inherits the caller's stdio.
+pub fn launch_game(
+    game_dir: &Path,
+    use_discrete_gpu: bool,
+    output_log: Option<&Path>,
+) -> Result<Child> {
     let exe = game_dir.join("Bin/Hearthstone.x86_64");
     anyhow::ensure!(exe.exists(), "{} does not exist", exe.display());
     anyhow::ensure!(
@@ -28,25 +44,28 @@ pub fn launch_game(game_dir: &Path, use_discrete_gpu: bool) -> Result<Child> {
         "client.config is missing"
     );
     compatibility::patch_corefoundation_imports(game_dir)?;
-    ensure_bundled_interpreter(&exe);
+    let bundled_interpreter = ensure_bundled_interpreter(&exe);
 
     info!(
         exe = %exe.display(),
         game_dir = %game_dir.display(),
         use_discrete_gpu,
+        bundled_interpreter,
         "launching Hearthstone"
     );
-    let library_path = game_library_path(game_dir);
+    let library_path = game_library_path(game_dir, bundled_interpreter);
     let graphics_env = graphics_env(use_discrete_gpu);
     debug!(ld_library_path = ?library_path, "configured game library path");
     if let Some(runner) = find_runtime_runner() {
         info!(runner = %runner.display(), "launching Hearthstone through runtime");
         let mut command = Command::new(&runner);
+        host_env::apply(&mut command);
         command
             .arg(&exe)
             .current_dir(game_dir)
             .env("LD_LIBRARY_PATH", library_path)
             .envs(graphics_env);
+        redirect_output(&mut command, output_log);
         return command
             .spawn()
             .with_context(|| format!("failed to launch Hearthstone through {}", runner.display()));
@@ -54,14 +73,119 @@ pub fn launch_game(game_dir: &Path, use_discrete_gpu: bool) -> Result<Child> {
 
     debug!("no runtime runner configured; launching directly");
     let mut command = Command::new(exe);
+    host_env::apply(&mut command);
     command
         .current_dir(game_dir)
         .env("LD_LIBRARY_PATH", library_path)
         .envs(graphics_env);
+    redirect_output(&mut command, output_log);
     command.spawn().context("failed to launch Hearthstone")
 }
 
-fn game_library_path(game_dir: &Path) -> OsString {
+fn redirect_output(command: &mut Command, output_log: Option<&Path>) {
+    let Some(path) = output_log else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    match File::create(path).and_then(|file| Ok((file.try_clone()?, file))) {
+        Ok((stdout, stderr)) => {
+            command
+                .stdin(Stdio::null())
+                .stdout(Stdio::from(stdout))
+                .stderr(Stdio::from(stderr));
+        }
+        Err(error) => warn!(
+            path = %path.display(),
+            %error,
+            "could not create game output log; inheriting stdio"
+        ),
+    }
+}
+
+/// Unity's own log for Hearthstone (`~/.config/unity3d/<company>/<product>`).
+pub fn player_log_path() -> Option<PathBuf> {
+    let config_home = env::var_os("XDG_CONFIG_HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))?;
+    Some(config_home.join("unity3d/Blizzard Entertainment/Hearthstone/Player.log"))
+}
+
+/// Describes how the game process ended, e.g. `exit code 1` or
+/// `signal 11 (SIGSEGV)`.
+pub fn describe_exit_status(status: &ExitStatus) -> String {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(signal) = status.signal() {
+            return match signal_name(signal) {
+                Some(name) => format!("signal {signal} ({name})"),
+                None => format!("signal {signal}"),
+            };
+        }
+    }
+    match status.code() {
+        Some(code) => format!("exit code {code}"),
+        None => status.to_string(),
+    }
+}
+
+fn signal_name(signal: i32) -> Option<&'static str> {
+    Some(match signal {
+        1 => "SIGHUP",
+        2 => "SIGINT",
+        4 => "SIGILL",
+        6 => "SIGABRT",
+        7 => "SIGBUS",
+        8 => "SIGFPE",
+        9 => "SIGKILL",
+        11 => "SIGSEGV",
+        13 => "SIGPIPE",
+        15 => "SIGTERM",
+        _ => return None,
+    })
+}
+
+/// Returns a user-facing explanation when the game ended suspiciously: it
+/// failed, or it exited within [`QUICK_EXIT_THRESHOLD`] of being launched.
+/// Returns `None` for a normal exit after a regular play session.
+pub fn unexpected_exit_message(
+    status: &ExitStatus,
+    elapsed: Duration,
+    player_log: Option<&Path>,
+    output_log: Option<&Path>,
+) -> Option<String> {
+    let quick = elapsed < QUICK_EXIT_THRESHOLD;
+    if status.success() && !quick {
+        return None;
+    }
+
+    let mut message = format!(
+        "Game exited after {}s ({})",
+        elapsed.as_secs(),
+        describe_exit_status(status)
+    );
+    let logs: Vec<String> = [player_log, output_log]
+        .into_iter()
+        .flatten()
+        .map(|path| path.display().to_string())
+        .collect();
+    if !logs.is_empty() {
+        message.push_str(". Check ");
+        message.push_str(&logs.join(" and "));
+    }
+    Some(message)
+}
+
+/// Builds the game's `LD_LIBRARY_PATH`.
+///
+/// Libraries bundled with the launcher (AppImage glibc, GLib, X11, ...) are
+/// only added when the game runs through the bundled ELF interpreter.  With
+/// the host interpreter they must stay out: mixing the host `ld-linux` with a
+/// bundled `libc.so.6` makes the game exit immediately (issue #22).
+fn game_library_path(game_dir: &Path, bundled_interpreter: bool) -> OsString {
     let mut paths = Vec::from([
         game_dir.join("Bin"),
         game_dir.join("Bin/Hearthstone_Data/Plugins"),
@@ -70,7 +194,10 @@ fn game_library_path(game_dir: &Path) -> OsString {
         ),
         game_dir.join("Bin/Hearthstone_Data/MonoBleedingEdge/x86_64"),
     ]);
-    paths.extend(runtime_library_paths());
+    if bundled_interpreter {
+        paths.extend(runtime_library_paths());
+        paths.extend(bundled_library_paths());
+    }
     push_existing(&mut paths, "/run/opengl-driver/lib");
     push_existing(&mut paths, "/run/current-system/sw/share/nix-ld/lib");
     push_existing(&mut paths, "/run/current-system/sw/lib");
@@ -78,12 +205,30 @@ fn game_library_path(game_dir: &Path) -> OsString {
     if let Some(existing) = env::var_os("NIX_LD_LIBRARY_PATH") {
         paths.extend(env::split_paths(&existing));
     }
-    if let Some(existing) = env::var_os("LD_LIBRARY_PATH") {
+    if let Some(existing) = host_env::host_var("LD_LIBRARY_PATH") {
         paths.extend(env::split_paths(&existing));
     }
 
+    if !bundled_interpreter {
+        let bundled = bundled_library_paths();
+        paths.retain(|path| !bundled.contains(path));
+    }
     dedupe_paths(&mut paths);
     std::env::join_paths(paths).unwrap_or_default()
+}
+
+/// Library directories shipped inside the AppImage.
+fn bundled_library_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Some(dir) = env::var_os("HEARTHSTONE_LINUX_BUNDLED_LIB_DIR") {
+        paths.push(PathBuf::from(dir));
+    }
+    if let Some(runtime_dir) =
+        bundled_interpreter().and_then(|path| path.parent().map(Path::to_path_buf))
+    {
+        paths.push(runtime_dir);
+    }
+    paths
 }
 
 fn runtime_library_paths() -> Vec<PathBuf> {
@@ -131,27 +276,30 @@ fn find_runtime_runner() -> Option<PathBuf> {
 /// existing interpreter is usually fine.  When inspection fails, system
 /// `patchelf` is preferred over the bundled one, which is only tried first
 /// because it is known to match the bundled runtime.
-fn ensure_bundled_interpreter(exe: &Path) {
+///
+/// Returns true when the game binary ends up using the bundled interpreter,
+/// in which case it also needs the bundled libraries on its library path.
+fn ensure_bundled_interpreter(exe: &Path) -> bool {
     let Some(interpreter) = bundled_interpreter() else {
-        return;
+        return false;
     };
     if !interpreter.exists() {
         warn!(
             interpreter = %interpreter.display(),
             "bundled ELF interpreter was configured but does not exist"
         );
-        return;
+        return false;
     }
 
     let candidates = patchelf_candidates();
     if candidates.is_empty() {
         warn!("bundled ELF interpreter was configured but patchelf was not found");
-        return;
+        return false;
     }
 
     if let Some(current) = print_interpreter(&candidates, exe) {
         if current == interpreter.to_string_lossy() {
-            return;
+            return true;
         }
         if env::var_os("HEARTHSTONE_LINUX_FORCE_BUNDLED_INTERPRETER").is_none()
             && Path::new(&current).exists()
@@ -161,7 +309,7 @@ fn ensure_bundled_interpreter(exe: &Path) {
                 interpreter = %current,
                 "Unity player ELF interpreter exists on this system"
             );
-            return;
+            return false;
         }
     } else {
         warn!(
@@ -177,13 +325,13 @@ fn ensure_bundled_interpreter(exe: &Path) {
         "patching Unity player ELF interpreter"
     );
     for patchelf in &candidates {
-        match Command::new(patchelf)
+        match host_env::host_command(patchelf)
             .arg("--set-interpreter")
             .arg(&interpreter)
             .arg(exe)
             .status()
         {
-            Ok(status) if status.success() => return,
+            Ok(status) if status.success() => return true,
             Ok(status) => warn!(
                 patchelf = %patchelf.display(),
                 %status,
@@ -200,6 +348,7 @@ fn ensure_bundled_interpreter(exe: &Path) {
         exe = %exe.display(),
         "could not rewrite the ELF interpreter; launching with the existing one"
     );
+    false
 }
 
 fn bundled_interpreter() -> Option<PathBuf> {
@@ -233,7 +382,7 @@ fn patchelf_candidates() -> Vec<PathBuf> {
 /// inspect the binary, or `None` when every candidate fails.
 fn print_interpreter(candidates: &[PathBuf], exe: &Path) -> Option<String> {
     for patchelf in candidates {
-        match Command::new(patchelf)
+        match host_env::host_command(patchelf)
             .arg("--print-interpreter")
             .arg(exe)
             .output()
@@ -263,8 +412,10 @@ fn print_interpreter(candidates: &[PathBuf], exe: &Path) -> Option<String> {
     None
 }
 
+/// Looks `command` up in the host `PATH`, so the AppImage's own `usr/bin`
+/// is not mistaken for a system installation.
 fn find_in_path(command: &str) -> Option<PathBuf> {
-    env::split_paths(&env::var_os("PATH")?).find_map(|dir| {
+    env::split_paths(&host_env::host_var("PATH")?).find_map(|dir| {
         let path = dir.join(command);
         path.exists().then_some(path)
     })
@@ -300,7 +451,7 @@ fn push_env_path(envs: &mut Vec<(&'static str, OsString)>, name: &'static str, p
     }
 
     let mut paths = vec![path.to_path_buf()];
-    if let Some(existing) = env::var_os(name) {
+    if let Some(existing) = host_env::host_var(name) {
         paths.extend(env::split_paths(&existing));
     }
     dedupe_paths(&mut paths);
@@ -319,4 +470,61 @@ fn push_existing(paths: &mut Vec<PathBuf>, path: impl AsRef<Path>) {
 fn dedupe_paths(paths: &mut Vec<PathBuf>) {
     let mut seen = HashSet::new();
     paths.retain(|path| seen.insert(path.clone()));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::process::ExitStatusExt;
+
+    #[test]
+    fn describes_exit_codes_and_signals() {
+        assert_eq!(
+            describe_exit_status(&ExitStatus::from_raw(1 << 8)),
+            "exit code 1"
+        );
+        assert_eq!(
+            describe_exit_status(&ExitStatus::from_raw(11)),
+            "signal 11 (SIGSEGV)"
+        );
+        assert_eq!(describe_exit_status(&ExitStatus::from_raw(42)), "signal 42");
+    }
+
+    #[test]
+    fn quick_exit_is_reported_with_logs() {
+        let message = unexpected_exit_message(
+            &ExitStatus::from_raw(0),
+            Duration::from_secs(1),
+            Some(Path::new("/tmp/Player.log")),
+            Some(Path::new("/tmp/game.log")),
+        )
+        .unwrap();
+        assert_eq!(
+            message,
+            "Game exited after 1s (exit code 0). Check /tmp/Player.log and /tmp/game.log"
+        );
+    }
+
+    #[test]
+    fn failure_after_long_session_is_reported() {
+        let message = unexpected_exit_message(
+            &ExitStatus::from_raw(6),
+            Duration::from_secs(600),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(message, "Game exited after 600s (signal 6 (SIGABRT))");
+    }
+
+    #[test]
+    fn normal_exit_after_long_session_is_quiet() {
+        assert!(unexpected_exit_message(
+            &ExitStatus::from_raw(0),
+            Duration::from_secs(600),
+            None,
+            None
+        )
+        .is_none());
+    }
 }

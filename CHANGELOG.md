@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- AppImage: host programs started by the launcher (browser openers, `gio`,
+  `xdg-mime`, `update-desktop-database`, `patchelf`, the game) no longer
+  inherit the AppImage's bundled glibc/GLib. `AppRun` records the original
+  environment as `HEARTHSTONE_LINUX_HOST_*` and no longer exports the bundled
+  library directory in `LD_LIBRARY_PATH`; the launcher gets it through
+  `ld-linux --library-path` only. This made the Login button silently do
+  nothing and the game exit after about a second on Fedora/Bazzite and other
+  hosts whose glibc differs from the bundled one (#22).
+- The game only gets the bundled libraries on its library path when it runs
+  through the bundled ELF interpreter.
+- Login opens the browser through the XDG Desktop Portal when available, waits
+  for each opener's exit status and falls through to the next one on failure,
+  and runs off the UI thread.
+- The full login URL is always shown with a Copy button while a login is
+  pending, so it can be pasted manually when no browser appears.
+- When the game exits within 15 seconds or fails, the status line shows the
+  exit code or signal and points to `Player.log` and the new game output log
+  (`<state dir>/logs/game.log`).
+
 ## v0.2.2 - 2026-10-02
 
 ### Fixed

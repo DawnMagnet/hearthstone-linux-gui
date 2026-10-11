@@ -125,7 +125,7 @@ fn main() -> Result<()> {
         let config = hearthstone_linux::AppConfig::load_or_default(&paths.config_file)?;
         let use_discrete_gpu = config.use_discrete_gpu;
         let game_dir = config.game_dir.unwrap_or(paths.game_dir);
-        hearthstone_linux::install::launcher::launch_game(&game_dir, use_discrete_gpu)?;
+        hearthstone_linux::install::launcher::launch_game(&game_dir, use_discrete_gpu, None)?;
         return Ok(());
     }
 

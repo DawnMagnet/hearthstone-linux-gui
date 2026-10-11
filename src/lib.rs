@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod config;
 pub mod download;
+pub mod host_env;
 pub mod install;
 pub mod logging;
 pub mod ngdp;

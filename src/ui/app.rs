@@ -20,7 +20,11 @@ use relm4::{
     abstractions::Toaster, adw, gtk, gtk::glib, prelude::*, ComponentController, Controller,
     RelmApp,
 };
-use std::{process::Child, time::Duration};
+use std::{
+    path::PathBuf,
+    process::Child,
+    time::{Duration, Instant},
+};
 use tokio_util::sync::CancellationToken;
 
 const PROJECT_URL: &str = "https://github.com/DawnMagnet/hearthstone-linux-gui";
@@ -58,6 +62,7 @@ struct MainWindow {
     install_state: InstallState,
     install_cancel: Option<CancellationToken>,
     login_session: Option<LoginSession>,
+    next_login_id: u64,
     game_session: Option<GameSession>,
     status_panel: Controller<StatusPanel>,
     settings_panel: Controller<SettingsPanel>,
@@ -72,16 +77,25 @@ pub enum AppMsg {
     InstallEvent(TaskEvent),
     UninstallFinished(Result<(), String>),
     LoginPoll,
+    BrowserOpened {
+        session: u64,
+        result: Result<String, String>,
+    },
     GamePoll,
 }
 
 struct LoginSession {
+    id: u64,
     cancel: CancellationToken,
+    url: String,
 }
 
 struct GameSession {
     child: Child,
     poll_cancel: CancellationToken,
+    started: Instant,
+    stop_requested: bool,
+    output_log: PathBuf,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -158,6 +172,18 @@ impl SimpleComponent for MainWindow {
                                 set_label: "github.com/DawnMagnet/hearthstone-linux-gui",
                                 set_uri: PROJECT_URL,
                                 set_tooltip_text: Some(PROJECT_URL),
+
+                                // Open through our host-environment-aware
+                                // openers instead of GTK's default handler.
+                                connect_activate_link => move |button| {
+                                    let uri = button.uri().to_string();
+                                    std::thread::spawn(move || {
+                                        if let Err(error) = browser::open_url(&uri) {
+                                            tracing::warn!(error = %format!("{error:#}"), "failed to open project URL");
+                                        }
+                                    });
+                                    glib::Propagation::Stop
+                                },
                             },
                         },
                     }
@@ -177,6 +203,7 @@ impl SimpleComponent for MainWindow {
             .launch(StatusPanelState {
                 snapshot: init.snapshot.clone(),
                 progress: ProgressState::default(),
+                login_url: None,
             })
             .detach();
         let settings_panel = SettingsPanel::builder()
@@ -195,6 +222,7 @@ impl SimpleComponent for MainWindow {
             install_state: InstallState::Idle,
             install_cancel: None,
             login_session: None,
+            next_login_id: 0,
             game_session: None,
             status_panel,
             settings_panel,
@@ -220,6 +248,9 @@ impl SimpleComponent for MainWindow {
             AppMsg::InstallEvent(event) => self.handle_install_event(event),
             AppMsg::UninstallFinished(result) => self.handle_uninstall_finished(result),
             AppMsg::LoginPoll => self.handle_login_poll(),
+            AppMsg::BrowserOpened { session, result } => {
+                self.handle_browser_opened(session, result)
+            }
             AppMsg::GamePoll => self.handle_game_poll(),
         }
 
@@ -468,36 +499,68 @@ impl MainWindow {
             return;
         }
 
+        let login_url = current.region.login_url().to_string();
         let cancel = CancellationToken::new();
+        self.next_login_id += 1;
+        let session_id = self.next_login_id;
         self.login_session = Some(LoginSession {
+            id: session_id,
             cancel: cancel.clone(),
+            url: login_url.clone(),
         });
 
         if let Err(error) = auth::ensure_auth_scheme_handlers() {
             tracing::warn!(error = %format!("{error:#}"), "failed to register auth URI handlers");
             self.status.headline =
-                "Login handler registration failed; continuing with browser login".into();
+                "Login handler registration failed; opening browser login anyway".into();
         } else {
-            self.status.headline = "Complete login in browser; waiting for desktop callback".into();
+            self.status.headline = "Opening browser for login…".into();
         }
         self.refresh_details();
 
-        let login_url = current.region.login_url().to_string();
         tracing::info!(
             region = %current.region,
             url = %login_url,
             "opening browser login with desktop callback handler"
         );
-        if let Err(error) = browser::open_login_url(&login_url) {
-            tracing::error!(
-                url = login_url,
-                error = %format!("{error:#}"),
-                "failed to open browser login"
-            );
-            self.status.headline = format!("Could not open browser. URL: {login_url}");
-        }
+        // Openers are waited on to detect failures, so keep them off the GTK
+        // main thread.
+        let input = sender.input_sender().clone();
+        std::thread::spawn(move || {
+            let result = browser::open_url(&login_url).map_err(|error| format!("{error:#}"));
+            input.emit(AppMsg::BrowserOpened {
+                session: session_id,
+                result,
+            });
+        });
 
         Self::start_poll(&sender, AppMsg::LoginPoll, cancel);
+    }
+
+    fn handle_browser_opened(&mut self, session: u64, result: Result<String, String>) {
+        let Some(current) = self.login_session.as_ref() else {
+            return;
+        };
+        if current.id != session || current.cancel.is_cancelled() {
+            return;
+        }
+        match result {
+            Ok(opener) => {
+                tracing::info!(opener = %opener, "opened login URL");
+                self.status.headline =
+                    "Complete login in your browser; waiting for desktop callback".into();
+            }
+            Err(error) => {
+                tracing::error!(
+                    url = %current.url,
+                    error = %error,
+                    "failed to open browser login"
+                );
+                self.status.headline =
+                    "Could not open a browser. Copy the login URL below into your browser".into();
+            }
+        }
+        self.refresh_details();
     }
 
     fn handle_login_poll(&mut self) {
@@ -528,6 +591,7 @@ impl MainWindow {
             tracing::info!("game stop requested from UI");
             match session.child.kill() {
                 Ok(()) => {
+                    session.stop_requested = true;
                     self.status.headline = "Stopping game".into();
                     self.refresh_details();
                 }
@@ -546,12 +610,16 @@ impl MainWindow {
             .clone()
             .unwrap_or_else(|| self.paths.game_dir.clone());
         tracing::info!(game_dir = %game_dir.display(), "launch requested from UI");
-        match launcher::launch_game(&game_dir, self.config.use_discrete_gpu) {
+        let output_log = self.paths.log_dir.join("game.log");
+        match launcher::launch_game(&game_dir, self.config.use_discrete_gpu, Some(&output_log)) {
             Ok(child) => {
                 let poll_cancel = CancellationToken::new();
                 self.game_session = Some(GameSession {
                     child,
                     poll_cancel: poll_cancel.clone(),
+                    started: Instant::now(),
+                    stop_requested: false,
+                    output_log,
                 });
                 self.status.headline = "Game running".into();
                 self.refresh_details();
@@ -573,10 +641,33 @@ impl MainWindow {
 
         match session.child.try_wait() {
             Ok(Some(exit)) => {
-                tracing::info!(status = %exit, "game exited");
+                let elapsed = session.started.elapsed();
+                tracing::info!(
+                    status = %exit,
+                    elapsed_secs = elapsed.as_secs(),
+                    "game exited"
+                );
                 session.poll_cancel.cancel();
+                let message = if session.stop_requested {
+                    None
+                } else {
+                    let player_log = launcher::player_log_path();
+                    launcher::unexpected_exit_message(
+                        &exit,
+                        elapsed,
+                        player_log.as_deref(),
+                        Some(&session.output_log),
+                    )
+                };
                 self.game_session = None;
-                self.status.headline = "Game stopped".into();
+                match message {
+                    Some(message) => {
+                        tracing::warn!(%message, "game exited unexpectedly");
+                        self.status.headline = message;
+                        self.toast("Game exited unexpectedly");
+                    }
+                    None => self.status.headline = "Game stopped".into(),
+                }
                 self.refresh_details();
             }
             Ok(None) => {}
@@ -611,6 +702,10 @@ impl MainWindow {
             .emit(StatusPanelInput::Render(StatusPanelState {
                 snapshot: self.status.clone(),
                 progress: self.progress.clone(),
+                login_url: self
+                    .login_session
+                    .as_ref()
+                    .map(|session| session.url.clone()),
             }));
         self.settings_panel
             .emit(SettingsPanelInput::SetConfig(self.config.clone()));
