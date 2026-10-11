@@ -160,10 +160,11 @@ pointing at this repository, x86_64-only builds.
 3. **Native package fixes** (done). Soname-based RPM dependencies (work on
    Fedora, EL9 and openSUSE), versioned deb dependencies at the real API
    floor, fixed homepage, x86_64 only.
-4. **Optional: Flatpak** on `org.gnome.Platform`. It is the most robust
-   portable format for a GTK app and opens URLs through the portal by design.
-   The Unity player would run inside the sandbox on runtime libraries.
-   Evaluate after step 2.
+4. **Flatpak** (done, `packaging/flatpak/`, `.github/workflows/flatpak.yml`)
+   on `org.gnome.Platform` 51. It is the most robust portable format for a
+   GTK app and opens URLs through the portal by design. The Unity player runs
+   inside the sandbox on runtime libraries. The bundle is attached to the
+   release by the `Flatpak` workflow (first shipped for v0.2.3).
 5. **Pinned tooling** (done). linuxdeploy / appimagetool / type2 runtime are
    fixed release tags with SHA-256 checks in `appimage.sh`.
 6. **Docs** (done). `packaging/README.md` and both READMEs document the glibc

@@ -40,6 +40,11 @@ pub enum HostVar {
     Unset(&'static str),
 }
 
+/// Returns true when running inside a Flatpak sandbox.
+pub fn is_flatpak() -> bool {
+    std::path::Path::new("/.flatpak-info").exists()
+}
+
 /// Returns true when running from an AppImage whose `AppRun` recorded the
 /// host environment.
 pub fn is_active() -> bool {

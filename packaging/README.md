@@ -6,6 +6,8 @@ Release artifacts come from two build tracks:
   pacman packages, all built on **AlmaLinux 9 (glibc 2.34)**, the oldest
   still-supported distribution that ships GTK 4 and libadwaita. Every artifact
   runs on any x86_64 distribution with glibc ≥ 2.34, old and new.
+- **Flatpak** (`packaging/flatpak/`): a single-file bundle on the GNOME 51
+  runtime from Flathub, built by `.github/workflows/flatpak.yml`.
 - **Nix** (`flake.nix`): the native Nix package for Nix/NixOS users.
 
 Why this baseline and what was rejected is in
@@ -130,6 +132,30 @@ LD_LIBRARY_PATH=/tmp/does-not-exist \
 It prints every `host_env::OVERRIDDEN_VARS` entry as a freshly spawned host
 child actually sees it after restore. A clean run has no AppDir paths and no
 bundled `LD_LIBRARY_PATH`. `smoke.sh` fails the job if any leak appears.
+
+## Flatpak
+
+```sh
+flatpak-builder --user --install --force-clean build-flatpak \
+  packaging/flatpak/io.github.hearthstone_linux_gui.yml
+flatpak run io.github.hearthstone_linux_gui
+```
+
+The manifest builds with the `rust-stable` SDK extension and lets cargo fetch
+the crates pinned in `Cargo.lock` (`--share=network` at build time), so it is
+meant for the GitHub bundle, not Flathub. The sandbox gets network, IPC,
+Wayland/X11 fallback, PulseAudio and `/dev/dri`; game files and settings live
+under `~/.var/app/io.github.hearthstone_linux_gui/`. Login URLs open through
+the OpenURI portal, and the exported desktop file claims the Battle.net
+callback schemes on the host.
+
+The `Flatpak` workflow runs for tag releases (called from `release.yml`) and
+can be started by hand with `release_tag` set to attach the bundle to an
+existing release without changing the version:
+
+```sh
+gh workflow run flatpak.yml -f release_tag=v0.2.3
+```
 
 ## Nix
 

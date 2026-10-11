@@ -1,0 +1,155 @@
+name: Flatpak
+
+# Builds the Flatpak bundle. When release_tag is set (tag pushes through
+# release.yml, or a manual run), the bundle is attached to that existing
+# GitHub release, SHA256SUMS.txt is updated, and the release notes get a
+# Flatpak entry. Version numbers are never changed here.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - packaging/flatpak/**
+      - packaging/linux/stage.sh
+      - data/**
+      - .github/workflows/flatpak.yml
+  pull_request:
+    paths:
+      - packaging/flatpak/**
+      - packaging/linux/stage.sh
+      - data/**
+      - .github/workflows/flatpak.yml
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing release tag to attach the bundle to (for example v0.2.3). Leave empty to only build.
+        required: false
+        default: ""
+  workflow_call:
+    inputs:
+      release_tag:
+        type: string
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: flatpak-${{ github.ref }}-${{ inputs.release_tag || 'build' }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build Flatpak bundle
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-51
+      options: --privileged
+    outputs:
+      bundle: ${{ steps.names.outputs.bundle }}
+      artifact: ${{ steps.names.outputs.artifact }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Prepare names
+        id: names
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)"
+          if [ -n "$RELEASE_TAG" ] && [ "${RELEASE_TAG#v}" != "$version" ]; then
+            echo "Release tag ${RELEASE_TAG} does not match Cargo.toml version ${version}" >&2
+            exit 1
+          fi
+          bundle="hearthstone-linux-gui-${version}-x86_64.flatpak"
+          echo "bundle=${bundle}" >> "$GITHUB_OUTPUT"
+          echo "artifact=hearthstone-linux-gui-${version}-flatpak" >> "$GITHUB_OUTPUT"
+
+      - name: Build bundle
+        uses: flatpak/flatpak-github-actions/flatpak-builder@v6.8
+        with:
+          manifest-path: packaging/flatpak/io.github.hearthstone_linux_gui.yml
+          bundle: ${{ steps.names.outputs.bundle }}
+          artifact-name: ${{ steps.names.outputs.artifact }}
+          cache-key: flatpak-builder-${{ hashFiles('packaging/flatpak/*.yml', 'Cargo.lock') }}
+
+      - name: Smoke test bundle
+        shell: bash
+        env:
+          BUNDLE: ${{ steps.names.outputs.bundle }}
+        run: |
+          set -euo pipefail
+          flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          flatpak install --user -y --noninteractive "./${BUNDLE}"
+          flatpak info io.github.hearthstone_linux_gui
+          flatpak run io.github.hearthstone_linux_gui --no-gui
+
+  publish:
+    name: Attach to release
+    if: ${{ inputs.release_tag }}
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ inputs.release_tag }}
+      BUNDLE: ${{ needs.build.outputs.bundle }}
+    steps:
+      - name: Download bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build.outputs.artifact }}
+          path: flatpak
+
+      - name: Upload bundle and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          ls -l flatpak
+          test -f "flatpak/${BUNDLE}"
+          gh release view "$TAG" >/dev/null
+          mkdir -p sums
+          gh release download "$TAG" -p SHA256SUMS.txt -D sums || touch sums/SHA256SUMS.txt
+          # Keep plain file names so `sha256sum -c SHA256SUMS.txt` works in
+          # the download directory, and replace any older Flatpak entry.
+          sed -E 's#^([0-9a-f]{64})  .*/#\1  #' sums/SHA256SUMS.txt \
+            | grep -v '\.flatpak$' > sums/SHA256SUMS.new || true
+          (cd flatpak && sha256sum "$BUNDLE") >> sums/SHA256SUMS.new
+          sort -k2 sums/SHA256SUMS.new > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          gh release upload "$TAG" "flatpak/${BUNDLE}" SHA256SUMS.txt --clobber
+
+      - name: Add Flatpak to release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" --json body -q .body > notes.md
+          if grep -q '\.flatpak' notes.md; then
+            echo "Release notes already mention the Flatpak bundle"
+            exit 0
+          fi
+          python3 - "$BUNDLE" <<'PY'
+          import sys
+          bundle = sys.argv[1]
+          entry = (
+              f"- Flatpak: `{bundle}`, sandboxed x86_64 bundle on the GNOME 51 runtime "
+              "(installed from Flathub automatically). Install with "
+              f"`flatpak install --user ./{bundle}`, run with "
+              "`flatpak run io.github.hearthstone_linux_gui`."
+          )
+          text = open("notes.md").read()
+          marker = "- Nix users"
+          if marker in text:
+              text = text.replace(marker, entry + "\n" + marker, 1)
+          else:
+              text = text.rstrip() + "\n\n" + entry + "\n"
+          open("notes.md", "w").write(text)
+          PY
+          gh release edit "$TAG" --notes-file notes.md

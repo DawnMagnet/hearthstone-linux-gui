@@ -80,6 +80,7 @@ to distribute and maintain.
 | **AppImage** | Any x86_64 Linux desktop with glibc 2.34 or newer | Download and open the application directly |
 | **DEB** | Debian, Ubuntu, Linux Mint, Pop!_OS, and related systems | Open with the graphical software installer |
 | **RPM** | Fedora, RHEL-compatible, openSUSE-style workflows | Open with the graphical software installer |
+| **Flatpak** | Any distribution with Flatpak, including immutable ones (Bazzite, Silverblue, SteamOS) and systems older than glibc 2.34 | `flatpak install --user ./hearthstone-linux-gui-*-x86_64.flatpak` |
 | **Nix** | NixOS and Nix package users | Native package output with desktop file and launcher |
 
 ### System requirements
@@ -94,6 +95,7 @@ on old and new systems alike:
 | glibc | **2.34** (RHEL/AlmaLinux/Rocky 9, Ubuntu 22.04, Debian 12, Fedora 35, openSUSE Leap 15.6/16 and newer) |
 | GTK / libadwaita (DEB/RPM/Pacman) | GTK 4.0, libadwaita 1.0, GLib 2.66 from your distribution |
 | GTK / libadwaita (AppImage) | Bundled (GTK 4.12, libadwaita 1.4); glibc, graphics drivers, fonts and X11/Wayland come from your system |
+| Flatpak | Only Flatpak itself; the GNOME 51 runtime (with its own glibc and GTK) is installed from Flathub |
 
 On NixOS, use the Nix package below; the AppImage needs `programs.nix-ld`
 or `appimage-run`. Older systems such as Ubuntu 20.04, Debian 11 or RHEL 8
@@ -137,6 +139,10 @@ environment leaks into child processes.
      enable "Allow executing file as program" in file properties.
    - DEB/RPM: double-click the package and install it with your graphical
      software center.
+   - Flatpak: `flatpak install --user ./hearthstone-linux-gui-*-x86_64.flatpak`
+     (Flathub is added automatically for the GNOME runtime), then
+     `flatpak run io.github.hearthstone_linux_gui`. Game files and settings
+     live in `~/.var/app/io.github.hearthstone_linux_gui/`.
    - Nix/NixOS: install the native Nix package through your normal Nix workflow.
 4. Launch **hearthstone-linux-gui** from the application menu.
 

@@ -33,6 +33,12 @@ pub fn preserve_install_metadata(paths: &AppPaths, config: &mut AppConfig) {
 }
 
 pub fn ensure_auth_scheme_handlers() -> std::io::Result<()> {
+    // Inside Flatpak the exported desktop file already claims the login URL
+    // schemes on the host, and a helper written into the sandbox could not be
+    // started by the host anyway.
+    if host_env::is_flatpak() {
+        return Ok(());
+    }
     let exe = auth_handler_executable()?;
     let paths = AppPaths::discover().map_err(std::io::Error::other)?;
     let helper = install_auth_callback_helper(&paths, &exe)?;
