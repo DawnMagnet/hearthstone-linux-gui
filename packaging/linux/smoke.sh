@@ -43,10 +43,10 @@ install_native() {
         dnf -y -q install dnf-plugins-core >/dev/null
         dnf config-manager --set-enabled crb
       fi
-      dnf -y -q --setopt=install_weak_deps=False install "$dist"/*.rpm xorg-x11-server-Xvfb gtk3 >/dev/null
+      dnf -y -q --setopt=install_weak_deps=False install "$dist"/*.rpm xorg-x11-server-Xvfb gtk3 libglvnd-gles mesa-dri-drivers >/dev/null
       ;;
     *suse*)
-      zypper --non-interactive --quiet install --allow-unsigned-rpm "$dist"/*.rpm xorg-x11-server-Xvfb gtk3-tools >/dev/null
+      zypper --non-interactive --quiet install --allow-unsigned-rpm "$dist"/*.rpm xorg-x11-server-Xvfb gtk3-tools libglvnd Mesa-dri >/dev/null
       ;;
     *arch*)
       pacman -Syu --noconfirm --needed xorg-server-xvfb gtk3 >/dev/null
@@ -78,12 +78,18 @@ check_ldd() {
 }
 
 # Starts the GUI on a virtual display; it must still be running after 8 s.
+# Force GTK's Cairo renderer: headless Xvfb often lacks DRI3/GLES and Fedora /
+# Tumbleweed otherwise abort or segfault when GTK tries the GL path.
 gui_smoke() {
   local display=:99 status=0
-  Xvfb "$display" -screen 0 1280x800x24 >/dev/null 2>&1 &
+  # Minimal machine-id so GLib/dbus warnings do not escalate on some images.
+  if [ ! -s /etc/machine-id ]; then
+    printf '%032x\n' "$$" >/etc/machine-id 2>/dev/null || true
+  fi
+  Xvfb "$display" -screen 0 1280x800x24 +extension GLX >/dev/null 2>&1 &
   local xvfb=$!
   sleep 2
-  DISPLAY="$display" GDK_BACKEND=x11 timeout 8 "$@" || status=$?
+  DISPLAY="$display" GDK_BACKEND=x11 GSK_RENDERER=cairo LIBGL_ALWAYS_SOFTWARE=1     timeout 8 "$@" || status=$?
   kill "$xvfb" 2>/dev/null || true
   if [ "$status" -ne 124 ]; then
     echo "error: '$*' exited with status $status before the timeout" >&2
