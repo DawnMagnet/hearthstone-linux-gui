@@ -7,4 +7,7 @@
   <project_license>MIT</project_license>
   <url type="homepage">https://github.com/DawnMagnet/hearthstone-linux-gui</url>
   <launchable type="desktop-id">io.github.hearthstone_linux_gui.desktop</launchable>
+  <releases>
+    <release version="0.2.3" date="2026-10-11"/>
+  </releases>
 </component>

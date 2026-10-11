@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.2.3 - 2026-10-11
+
 ### Fixed
 
 - AppImage: host programs started by the launcher (browser openers, `gio`,
@@ -11,7 +13,7 @@
   library directory in `LD_LIBRARY_PATH`; the launcher gets it through
   `ld-linux --library-path` only. This made the Login button silently do
   nothing and the game exit after about a second on Fedora/Bazzite and other
-  hosts whose glibc differs from the bundled one (#22).
+  hosts whose glibc differs from the bundled one (#22, #23).
 - The game only gets the bundled libraries on its library path when it runs
   through the bundled ELF interpreter.
 - Login opens the browser through the XDG Desktop Portal when available, waits
@@ -22,6 +24,21 @@
 - When the game exits within 15 seconds or fails, the status line shows the
   exit code or signal and points to `Player.log` and the new game output log
   (`<state dir>/logs/game.log`).
+
+### Changed
+
+- Rebuilt AppImage and native packages on AlmaLinux 9 (glibc 2.34) with
+  linuxdeploy. The AppImage bundles GTK 4 / libadwaita / GLib only and never
+  ships glibc; `AppRun` no longer sets `LD_LIBRARY_PATH`. Native deb/rpm/pacman
+  packages declare the same glibc 2.34 floor and RPM uses soname dependencies
+  (#24).
+
+### Maintenance
+
+- Added `--print-child-env` and multi-distro Packaging CI smoke checks.
+- Fixed Packaging CI smoke SIGPIPE, AppImage ETXTBSY on overlayfs, headless
+  GSK renderer selection, and skipped AppImage GUI smoke on rolling openSUSE
+  where the EL9-bundled GUI can segfault against host X11/Mesa.
 
 ## v0.2.2 - 2026-10-02
 
