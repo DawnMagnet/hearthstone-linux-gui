@@ -65,6 +65,7 @@
 | **DEB** | Debian、Ubuntu、Linux Mint、Pop!_OS 等系统 | 双击后通过图形化软件中心安装 |
 | **RPM** | Fedora、RHEL 兼容系统以及 openSUSE 类工作流 | 双击后通过图形化软件中心安装 |
 | **Nix** | NixOS 和 Nix 用户 | 原生 Nix 包输出，包含桌面文件和启动器 |
+| **Flatpak** | 任何装了 Flatpak 的发行版，包括 Bazzite、Silverblue、SteamOS 等不可变系统，以及 glibc 低于 2.34 的老系统 | `flatpak install --user ./hearthstone-linux-gui-*-x86_64.flatpak` |
 
 ### 系统要求
 
@@ -76,6 +77,7 @@
 | glibc | **2.34**（RHEL/AlmaLinux/Rocky 9、Ubuntu 22.04、Debian 12、Fedora 35、openSUSE Leap 15.6/16 及更新版本） |
 | GTK / libadwaita（DEB/RPM/Pacman） | 使用系统的 GTK 4.0、libadwaita 1.0、GLib 2.66 及以上 |
 | GTK / libadwaita（AppImage） | 自带（GTK 4.12、libadwaita 1.4）；glibc、显卡驱动、字体和 X11/Wayland 用系统自己的 |
+| Flatpak | 只需要 Flatpak；GNOME 51 运行时（自带 glibc 和 GTK）会自动从 Flathub 安装 |
 
 NixOS 请使用下面的 Nix 包；AppImage 需要 `programs.nix-ld` 或 `appimage-run`。Ubuntu 20.04、Debian 11、RHEL 8 等更老的系统没有 GTK 4，不在支持范围内。
 

@@ -6,3 +6,7 @@ result
 result-*
 *.AppImage
 .direnv
+.flatpak-builder/
+build-flatpak/
+flatpak_app/
+*.flatpak

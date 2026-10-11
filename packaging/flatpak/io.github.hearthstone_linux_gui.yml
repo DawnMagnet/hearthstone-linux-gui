@@ -1,0 +1,50 @@
+# Flatpak build of hearthstone-linux-gui.
+#
+# Built in CI by .github/workflows/flatpak.yml into a single-file bundle
+# (hearthstone-linux-gui-<version>-x86_64.flatpak) that is attached to the
+# GitHub release. The bundle pulls org.gnome.Platform from Flathub on install.
+#
+# Local build:
+#   flatpak-builder --user --install --force-clean build-flatpak \
+#     packaging/flatpak/io.github.hearthstone_linux_gui.yml
+app-id: io.github.hearthstone_linux_gui
+runtime: org.gnome.Platform
+runtime-version: "51"
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: hearthstone-linux-gui
+finish-args:
+  - --share=network
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --socket=pulseaudio
+  # GPU access for the Unity player (GL drivers come from the GL extension).
+  - --device=dri
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+  env:
+    CARGO_HOME: /run/build/hearthstone-linux-gui/cargo
+    CARGO_NET_RETRY: "5"
+  # Crates are fetched from crates.io during the build (Cargo.lock pins and
+  # checksums every one of them). Flathub would need vendored sources instead.
+  build-args:
+    - --share=network
+modules:
+  - name: hearthstone-linux-gui
+    buildsystem: simple
+    build-commands:
+      - cargo build --workspace --release --locked
+      - PREFIX=/app packaging/linux/stage.sh /
+    sources:
+      - type: dir
+        path: ../..
+        skip:
+          - target
+          - dist
+          - hearthstone
+          - .flatpak-builder
+          - build-flatpak
+          - flatpak_app
+          - repo

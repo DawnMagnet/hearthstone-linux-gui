@@ -6,6 +6,17 @@
   <metadata_license>MIT</metadata_license>
   <project_license>MIT</project_license>
   <url type="homepage">https://github.com/DawnMagnet/hearthstone-linux-gui</url>
+  <description>
+    <p>
+      Installs the Hearthstone client, logs into Battle.net through the system
+      browser, and launches the game natively on Linux.
+    </p>
+  </description>
+  <developer id="io.github.dawnmagnet">
+    <name>DawnMagnet</name>
+  </developer>
+  <url type="bugtracker">https://github.com/DawnMagnet/hearthstone-linux-gui/issues</url>
+  <content_rating type="oars-1.1"/>
   <launchable type="desktop-id">io.github.hearthstone_linux_gui.desktop</launchable>
   <releases>
     <release version="0.2.3" date="2026-10-11"/>
