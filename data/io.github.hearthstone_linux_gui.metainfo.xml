@@ -5,5 +5,6 @@
   <summary>Native GTK4 Linux GUI manager for installing, logging into, and launching Hearthstone</summary>
   <metadata_license>MIT</metadata_license>
   <project_license>MIT</project_license>
+  <url type="homepage">https://github.com/DawnMagnet/hearthstone-linux-gui</url>
   <launchable type="desktop-id">io.github.hearthstone_linux_gui.desktop</launchable>
 </component>

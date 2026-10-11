@@ -30,6 +30,9 @@ ENV CARGO_HOME=/opt/cargo \
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
+# Hearthstone's Unity player is x86_64-only; refuse other arches early.
+RUN case "$(uname -m)" in x86_64) ;; *) echo "x86_64 only, got $(uname -m)" >&2; exit 1 ;; esac
+
 RUN set -eux; \
   if [ -n "$ALMALINUX_MIRROR" ]; then \
     sed -i -e 's|^mirrorlist=|#mirrorlist=|' \

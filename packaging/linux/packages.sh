@@ -6,7 +6,19 @@
 # (relm4 without its `gnome_42` default): GTK 4.0, libadwaita 1.0, GLib 2.66,
 # Pango 1.46. In practice the oldest distributions that ship GTK 4 and
 # libadwaita are Ubuntu 22.04 and Enterprise Linux 9.
+#
+# Native packages are x86_64 only: Hearthstone's Unity player has no other
+# Linux architecture. RPM dependencies use soname provides so the same
+# package resolves on Fedora, EL9 and openSUSE.
 set -euo pipefail
+
+case "$(uname -m)" in
+  x86_64 | amd64) ;;
+  *)
+    echo "error: native packages are x86_64 only (got $(uname -m))" >&2
+    exit 1
+    ;;
+esac
 
 root="${1:?usage: packages.sh <pkgroot> <outdir>}"
 out="${2:?usage: packages.sh <pkgroot> <outdir>}"
@@ -48,6 +60,7 @@ overrides:
       - libgtk-4-1 (>= 4.0)
       - libadwaita-1-0 (>= 1.0)
       - libglib2.0-0 (>= 2.66) | libglib2.0-0t64 (>= 2.66)
+      - libpango-1.0-0 (>= 1.46) | libpango-1.0-0t64 (>= 1.46)
       - xdg-utils
   rpm:
     # soname dependencies resolve on Fedora, EL9 and openSUSE alike.
@@ -57,6 +70,7 @@ overrides:
       - libadwaita-1.so.0()(64bit)
       - libglib-2.0.so.0()(64bit)
       - libgio-2.0.so.0()(64bit)
+      - libpango-1.0.so.0()(64bit)
       - xdg-utils
   archlinux:
     depends:
@@ -64,6 +78,7 @@ overrides:
       - gtk4
       - libadwaita
       - glib2
+      - pango
       - xdg-utils
 YAML
 

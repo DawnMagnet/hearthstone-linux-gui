@@ -23,7 +23,7 @@ into processes we start.**
 | --- | --- | --- | --- |
 | Nix package (`nix build`) | `flake.nix`, `buildRustPackage` + `wrapGAppsHook4` | Nix store; game runs in a `buildFHSEnv` runtime | Fine on Nix/NixOS. Keep. |
 | AppImage | `nix/appimage.nix` (nixos-unstable closure) | Bundles glibc 2.42, `ld-linux`, GLib, GTK4, libadwaita, X11/Wayland libs, glib-networking, dconf, patchelf | Main source of OS incompatibility; see below. |
-| deb / rpm / pacman | `packaging/native/Dockerfile` (Debian 12, nfpm) | Host libraries only (glibc >= 2.36, GTK >= 4.8, libadwaita >= 1.2) | Right model. Small fixes needed. |
+| deb / rpm / pacman | `packaging/linux/packages.sh` (AlmaLinux 9 build, nfpm) | Host libraries only (glibc >= 2.34, GTK >= 4.0, libadwaita >= 1.0, GLib >= 2.66, Pango >= 1.46); RPM soname deps; x86_64 only | Done. |
 
 ### AppImage problems
 
@@ -51,15 +51,12 @@ into processes we start.**
 6. **No cross-distro smoke test in CI.** The AppImage is only ever executed
    by users.
 
-### Native package problems (minor)
+### Native package problems (resolved)
 
-- RPM dependencies are Fedora package names (`gtk4`, `libadwaita`,
-  `glib2`, `dbus-libs`). openSUSE uses different names (`libgtk-4-1`,
-  `libadwaita-1-0`, ...), so zypper cannot resolve them. Use soname
-  dependencies such as `libgtk-4.so.1()(64bit)`, which work on both.
-- `homepage` points to the old `DawnMagnet/hearthstone-linux` URL.
-- The Dockerfile accepts `TARGETARCH=arm64`, but Hearthstone's Unity player
-  is x86_64 only.
+- RPM dependencies now use soname provides (`libgtk-4.so.1()(64bit)`, …)
+  so Fedora, EL9 and openSUSE all resolve them.
+- `homepage` is `https://github.com/DawnMagnet/hearthstone-linux-gui`.
+- Native packages and the build container are x86_64 only (Unity player).
 
 ## Target pipeline
 
