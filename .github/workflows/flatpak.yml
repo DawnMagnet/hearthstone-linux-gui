@@ -92,7 +92,7 @@ jobs:
           flatpak run io.github.hearthstone_linux_gui --no-gui
 
   publish:
-    name: Attach to release ${{ inputs.release_tag }}
+    name: Attach to release
     if: ${{ inputs.release_tag }}
     needs: build
     runs-on: ubuntu-latest
