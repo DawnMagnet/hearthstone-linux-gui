@@ -1,13 +1,12 @@
 //! Restores the host environment for processes spawned from the AppImage.
 //!
-//! `AppRun` points `LD_LIBRARY_PATH`, `PATH`, `GIO_MODULE_DIR` and friends at
-//! the libraries bundled inside the AppImage, including its own glibc.  The
-//! launcher itself does not need those variables (it is started through the
-//! bundled ELF interpreter with an explicit `--library-path`), but every child
-//! process inherits them.  Host programs such as `xdg-open`, `gio`, a browser
-//! or the Unity player then run with the host's dynamic loader against the
-//! bundled glibc/GLib, and fail or crash silently on hosts whose glibc
-//! differs from the bundled one (issue #22).
+//! `AppRun` points `XDG_DATA_DIRS`, `GIO_MODULE_DIR`, `GTK_PATH` and friends at
+//! data and modules bundled inside the AppImage.  Every child process would
+//! inherit them, so host programs such as `xdg-open`, `gio`, a browser or the
+//! Unity player would load the bundled GLib/GTK modules into the host's
+//! libraries.  Older AppImages even exported the bundled glibc in
+//! `LD_LIBRARY_PATH`, which made those programs fail or crash silently on
+//! hosts with a different glibc (issue #22).
 //!
 //! `AppRun` saves the original value of every variable it changes as
 //! `HEARTHSTONE_LINUX_HOST_<NAME>` (or `HEARTHSTONE_LINUX_HOST_UNSET_<NAME>`
@@ -27,6 +26,9 @@ pub const OVERRIDDEN_VARS: &[&str] = &[
     "GI_TYPELIB_PATH",
     "GIO_MODULE_DIR",
     "GDK_PIXBUF_MODULE_FILE",
+    "GSETTINGS_SCHEMA_DIR",
+    "GTK_EXE_PREFIX",
+    "GTK_PATH",
 ];
 
 const MARKER: &str = "HEARTHSTONE_LINUX_APPIMAGE_ENV";
@@ -109,6 +111,47 @@ pub fn host_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
     let mut command = Command::new(program);
     apply(&mut command);
     command
+}
+
+/// Spawns a host child (`env`) and prints the environment variables that
+/// matter for issue #22: every name in [`OVERRIDDEN_VARS`], as the child
+/// actually sees them after [`apply`].
+///
+/// Hidden CLI: `hearthstone-linux-gui --print-child-env`. Packaging smoke
+/// uses this to prove AppImage children do not inherit bundled
+/// `LD_LIBRARY_PATH` / GTK / GLib module paths.
+pub fn print_child_env() -> anyhow::Result<()> {
+    let mut command = host_command("env");
+    let output = command
+        .output()
+        .map_err(|error| anyhow::anyhow!("failed to spawn host `env`: {error}"))?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "host `env` exited with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let mut child = std::collections::BTreeMap::<String, String>::new();
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        if let Some((key, value)) = line.split_once('=') {
+            child.insert(key.to_string(), value.to_string());
+        }
+    }
+
+    println!("# hearthstone-linux-gui --print-child-env");
+    println!("# host_env_active={}", if is_active() { "1" } else { "0" });
+    if let Some(bundled) = std::env::var_os("HEARTHSTONE_LINUX_BUNDLED_LIB_DIR") {
+        println!("# bundled_lib_dir={}", bundled.to_string_lossy());
+    }
+    for name in OVERRIDDEN_VARS {
+        match child.get(*name) {
+            Some(value) => println!("{name}={value}"),
+            None => println!("{name}=<unset>"),
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

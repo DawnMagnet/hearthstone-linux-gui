@@ -1,0 +1,9 @@
+target/
+hearthstone/
+AppDir/
+dist/
+result
+result-*
+*.AppImage
+.direnv
+.git

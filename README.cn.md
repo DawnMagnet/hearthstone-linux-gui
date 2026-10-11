@@ -46,12 +46,12 @@
 - **无需命令行操作**：发布版本面向图形化安装和日常使用。
 - **无需 Python/Bash 运行环境**：启动器是原生 Rust 程序，并随发布包携带所需运行库。
 - **跨 Linux 发行版**：面向 NixOS、Debian、Ubuntu、Fedora 以及其他 x86_64 Linux 桌面系统。
-- **AppImage 便携包**：适合在尽可能多的 Linux 环境中直接运行。
+- **AppImage 便携包**：捆绑 GTK/runtime 层；glibc 与显卡驱动来自宿主（glibc ≥ 2.34）。
 - **Nix 原生包**：Nix/NixOS 用户可以获得标准 Nix 包、桌面文件和启动器。
 - **DEB/RPM 安装包**：适合通过发行版的软件中心或包管理器安装。
 - **断点续传**：Unity runtime 下载中断后可以从未完成的部分继续。
 - **缓存复用**：NGDP 游戏数据会被缓存并校验，减少重复下载。
-- **不依赖 Steam**：AppImage 自带可移植 GTK/runtime 层，游戏启动由项目自身 runtime 处理，不需要 `steam-run`。
+- **不依赖 Steam**：AppImage 自带可移植 GTK 层（不含 glibc），游戏启动由项目自身 runtime 处理，不需要 `steam-run`。
 
 ## 发布包选择
 
@@ -61,12 +61,39 @@
 
 | 包格式 | 适合场景 | 用户体验 |
 | --- | --- | --- |
-| **AppImage** | 任意 x86_64 Linux 桌面环境，包括 NixOS | 下载后直接打开应用 |
+| **AppImage** | glibc 2.34 及以上的任意 x86_64 Linux 桌面 | 下载后直接打开应用 |
 | **DEB** | Debian、Ubuntu、Linux Mint、Pop!_OS 等系统 | 双击后通过图形化软件中心安装 |
 | **RPM** | Fedora、RHEL 兼容系统以及 openSUSE 类工作流 | 双击后通过图形化软件中心安装 |
 | **Nix** | NixOS 和 Nix 用户 | 原生 Nix 包输出，包含桌面文件和启动器 |
 
-所有发布产物都来自统一的 Nix 构建流程，确保 AppImage、DEB、RPM 和 Nix 包使用同一份源码、同一个版本和同一套依赖图。
+### 系统要求
+
+所有发布产物都在「仍受支持、且自带 GTK 4 和 libadwaita 的最老发行版」——Enterprise Linux 9（glibc 2.34）上编译，因此新老系统都能运行：
+
+| | 最低要求 |
+| --- | --- |
+| CPU | x86_64 |
+| glibc | **2.34**（RHEL/AlmaLinux/Rocky 9、Ubuntu 22.04、Debian 12、Fedora 35、openSUSE Leap 15.6/16 及更新版本） |
+| GTK / libadwaita（DEB/RPM/Pacman） | 使用系统的 GTK 4.0、libadwaita 1.0、GLib 2.66 及以上 |
+| GTK / libadwaita（AppImage） | 自带（GTK 4.12、libadwaita 1.4）；glibc、显卡驱动、字体和 X11/Wayland 用系统自己的 |
+
+NixOS 请使用下面的 Nix 包；AppImage 需要 `programs.nix-ld` 或 `appimage-run`。Ubuntu 20.04、Debian 11、RHEL 8 等更老的系统没有 GTK 4，不在支持范围内。
+
+AppImage 和 DEB/RPM/Pacman 包来自同一次容器构建（`packaging/linux/Dockerfile`），Nix 包由 flake 构建。详见 [`docs/design/packaging-pipeline.md`](docs/design/packaging-pipeline.md) 与 [`packaging/README.md`](packaging/README.md)。
+
+### 构建发布包
+
+所有非 Nix 发布产物都在 **AlmaLinux 9**（glibc **2.34**）上编译——这是仍受支持、且自带 GTK 4 与 libadwaita 的最老发行版。更新的系统可以直接运行这些二进制。
+
+```sh
+# deb + rpm + pacman + AppImage → dist/
+packaging/appimage/build.sh
+
+# 仅 AppImage
+TARGET=appimage-out packaging/appimage/build.sh
+```
+
+AppImage 使用固定版本的 **linuxdeploy** / **appimagetool** / **type2-runtime** 组装：捆绑 EL9 的 GTK/libadwaita/GLib，**绝不**捆绑 glibc，也**不**导出 `LD_LIBRARY_PATH`（通过 `RUNPATH` 查找库）。deb/rpm/pacman 原生包链接系统 GTK。CI（`.github/workflows/packaging.yml`）会在 AlmaLinux 9、Ubuntu 22.04/24.04、Debian 12/13、Fedora、Arch、openSUSE Tumbleweed 上冒烟测试，并用隐藏的 `--print-child-env` 探测子进程是否泄漏了捆绑库路径。
 
 ## 普通用户如何安装
 
@@ -103,7 +130,6 @@ nix run github:DawnMagnet/hearthstone-linux-gui
 
 ```sh
 nix build .#default
-nix build .#AppImage
 nix build .#runtime
 ```
 
@@ -113,8 +139,6 @@ nix build .#runtime
 | --- | --- |
 | `packages.x86_64-linux.default` | GTK 启动器的原生 Nix 包 |
 | `packages.x86_64-linux.runtime` | 用于启动下载后的 Unity player 的 FHS runtime wrapper |
-| `packages.x86_64-linux.AppImage` | 便携 AppImage 构建产物 |
-| `packages.x86_64-linux.AppDir` | 构建 AppImage 时使用的中间 AppDir |
 | `apps.x86_64-linux.default` | `nix run` 入口 |
 | `devShells.x86_64-linux.default` | Rust/GTK 开发 shell |
 
@@ -213,7 +237,7 @@ Linux player 运行这些官方游戏数据。
 | 安装过程中断 | 重新点击 **Install / Update**,断点续传和缓存会继续发挥作用。 |
 | 更新后游戏无法启动 | 点击一次 **Install / Update**,修复 Unity/runtime 文件。 |
 | 游戏立即退出并提示 `Unable to load mono library`(NixOS flake) | 更新 flake;FHS 环境现已包含内置 Mono 运行时所需的 `zlib`。 |
-| 某些发行版上安装包打开后不能启动 | 优先尝试 AppImage,它携带的运行环境最完整。 |
+| 某些发行版上安装包打开后不能启动 | 优先尝试 AppImage（自带 GTK，glibc 用系统的）。 |
 
 ### 浏览器登录
 

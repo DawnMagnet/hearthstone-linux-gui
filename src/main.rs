@@ -24,6 +24,10 @@ struct Args {
     #[arg(long)]
     no_gui: bool,
 
+    /// Print the environment a host child process would see (packaging smoke).
+    #[arg(long, hide = true)]
+    print_child_env: bool,
+
     /// Region to use with --install.
     #[arg(long)]
     region: Option<hearthstone_linux::Region>,
@@ -43,6 +47,9 @@ struct Args {
 fn main() -> Result<()> {
     let _log_guard = hearthstone_linux::logging::init();
     let args = Args::parse();
+    if args.print_child_env {
+        return hearthstone_linux::host_env::print_child_env();
+    }
     let callback = args.auth_callback.or(args.uri);
 
     if let Some(uri) = callback {

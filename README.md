@@ -56,7 +56,7 @@ to distribute and maintain.
   packaged with the libraries it needs.
 - **Cross-distribution Linux packaging**: use the same project on NixOS,
   Debian, Ubuntu, Fedora, and other x86_64 Linux distributions.
-- **Portable AppImage**: a self-contained build for broad Linux compatibility.
+- **Portable AppImage**: GTK/runtime layer bundled; glibc and drivers come from the host (glibc ≥ 2.34).
 - **Native Nix package**: Nix users can consume a standard package output with
   desktop integration.
 - **DEB/RPM installers**: package-manager friendly builds for common desktop
@@ -65,9 +65,9 @@ to distribute and maintain.
   file after interruption.
 - **Cached game data**: downloaded NGDP content is cached and verified to avoid
   unnecessary network work.
-- **No Steam dependency**: the AppImage carries the portable GTK/runtime layer;
-  the game itself is launched with the project's own runtime handling, not
-  `steam-run`.
+- **No Steam dependency**: the AppImage carries a portable GTK layer (not
+  glibc); the game itself is launched with the project's own runtime handling,
+  not `steam-run`.
 
 ## Packages
 
@@ -77,13 +77,55 @@ to distribute and maintain.
 
 | Package | Best for | User experience |
 | --- | --- | --- |
-| **AppImage** | Any x86_64 Linux desktop, including NixOS | Download and open the application directly |
+| **AppImage** | Any x86_64 Linux desktop with glibc 2.34 or newer | Download and open the application directly |
 | **DEB** | Debian, Ubuntu, Linux Mint, Pop!_OS, and related systems | Open with the graphical software installer |
 | **RPM** | Fedora, RHEL-compatible, openSUSE-style workflows | Open with the graphical software installer |
 | **Nix** | NixOS and Nix package users | Native package output with desktop file and launcher |
 
-Release builds are produced from the unified Nix build pipeline so every format
-comes from the same source, version, and dependency graph.
+### System requirements
+
+All release artifacts are built on the oldest still-supported distribution
+that ships GTK 4 and libadwaita, Enterprise Linux 9 (glibc 2.34), so they run
+on old and new systems alike:
+
+| | Minimum |
+| --- | --- |
+| CPU | x86_64 |
+| glibc | **2.34** (RHEL/AlmaLinux/Rocky 9, Ubuntu 22.04, Debian 12, Fedora 35, openSUSE Leap 15.6/16 and newer) |
+| GTK / libadwaita (DEB/RPM/Pacman) | GTK 4.0, libadwaita 1.0, GLib 2.66 from your distribution |
+| GTK / libadwaita (AppImage) | Bundled (GTK 4.12, libadwaita 1.4); glibc, graphics drivers, fonts and X11/Wayland come from your system |
+
+On NixOS, use the Nix package below; the AppImage needs `programs.nix-ld`
+or `appimage-run`. Older systems such as Ubuntu 20.04, Debian 11 or RHEL 8
+are not supported: they do not ship GTK 4.
+
+The AppImage and the DEB/RPM/Pacman packages come from one container build
+(`packaging/linux/Dockerfile`); the Nix package is built by the flake. See
+[`docs/design/packaging-pipeline.md`](docs/design/packaging-pipeline.md)
+and [`packaging/README.md`](packaging/README.md).
+
+### Building packages
+
+All non-Nix release artifacts are built on **AlmaLinux 9** (glibc **2.34**),
+the oldest still-supported distribution that ships GTK 4 and libadwaita.
+Newer hosts run these binaries without change.
+
+```sh
+# deb + rpm + pacman + AppImage → dist/
+packaging/appimage/build.sh
+
+# AppImage only
+TARGET=appimage-out packaging/appimage/build.sh
+```
+
+The AppImage is assembled with pinned **linuxdeploy** /
+**appimagetool** / **type2-runtime**. It bundles GTK/libadwaita/GLib from
+EL9, but **never** bundles glibc or exports `LD_LIBRARY_PATH` (libraries are
+found via `RUNPATH`). Native deb/rpm/pacman packages link against the host
+GTK stack. CI (`.github/workflows/packaging.yml`) smoke-tests every artifact
+on AlmaLinux 9, Ubuntu 22.04/24.04, Debian 12/13, Fedora, Arch, and openSUSE
+Tumbleweed, including the hidden `--print-child-env` probe that catches
+environment leaks into child processes.
 
 ## Installation For Users
 
@@ -125,7 +167,6 @@ Build outputs from a local checkout:
 
 ```sh
 nix build .#default
-nix build .#AppImage
 nix build .#runtime
 ```
 
@@ -135,8 +176,6 @@ The available flake outputs are:
 | --- | --- |
 | `packages.x86_64-linux.default` | Native Nix package for the GTK launcher |
 | `packages.x86_64-linux.runtime` | FHS runtime wrapper used to launch the downloaded Unity player |
-| `packages.x86_64-linux.AppImage` | Portable AppImage build |
-| `packages.x86_64-linux.AppDir` | Intermediate AppDir used to build the AppImage |
 | `apps.x86_64-linux.default` | `nix run` entrypoint |
 | `devShells.x86_64-linux.default` | Rust/GTK development shell |
 
@@ -242,7 +281,7 @@ upstream distribution endpoints during installation.
 | Install was interrupted | Click **Install / Update** again; resumable and cached downloads will be reused. |
 | The game does not launch after an update | Click **Install / Update** once to repair Unity/runtime files. |
 | The game exits immediately with `Unable to load mono library` (NixOS flake) | Update the flake; the FHS environment now ships `zlib`, which the bundled Mono runtime requires. |
-| A package opens but does not start on an unusual distro | Try the AppImage release, which carries the widest runtime set. |
+| A package opens but does not start on an unusual distro | Try the AppImage release (bundles GTK; uses your system glibc). |
 
 ### Browser login
 

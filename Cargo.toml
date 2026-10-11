@@ -62,7 +62,7 @@ url = "2"
 walkdir = "2"
 xz2 = "0.1"
 
-relm4 = { version = "=0.10.0", features = ["libadwaita"], optional = true }
+relm4 = { version = "=0.10.0", default-features = false, features = ["css", "macros", "libadwaita"], optional = true }
 relm4-components = { version = "=0.10.0", features = ["libadwaita"], optional = true }
 
 [dev-dependencies]
