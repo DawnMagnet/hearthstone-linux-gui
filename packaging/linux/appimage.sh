@@ -83,11 +83,10 @@ glib-compile-schemas "$schemas"
 
 deps_only=()
 for dir in "$pixbuf_dir/loaders" "$appdir/usr/lib/gio/modules" "$appdir/usr/lib/gtk-4.0"; do
-  if find "$dir" -name '*.so' -print -quit 2>/dev/null | grep -q .; then
-    while IFS= read -r -d '' module; do
-      deps_only+=("--deploy-deps-only=$module")
-    done < <(find "$dir" -name '*.so' -print0)
-  fi
+  [ -d "$dir" ] || continue
+  while IFS= read -r -d '' module; do
+    deps_only+=("--deploy-deps-only=$module")
+  done < <(find "$dir" -name '*.so' -print0 2>/dev/null)
 done
 
 # Explicit excludes (belt-and-braces on top of linuxdeploy's built-in

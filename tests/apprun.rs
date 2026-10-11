@@ -5,24 +5,43 @@
 //! starts would inherit it. Every variable AppRun changes must be recorded so
 //! `host_env` can restore it for child processes.
 
-use std::{collections::HashMap, fs, os::unix::fs::PermissionsExt, path::Path, process::Command};
+use std::{
+    collections::HashMap,
+    fs,
+    io::Write,
+    os::unix::fs::PermissionsExt,
+    path::Path,
+    process::Command,
+    thread,
+    time::Duration,
+};
 
 use hearthstone_linux::host_env::OVERRIDDEN_VARS;
 
 const APPRUN: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/packaging/appimage/AppRun");
 
-fn write_script(path: &Path, body: &str) {
+/// Write + fsync + rename so Docker overlayfs does not hit ETXTBSY on exec.
+fn write_executable(path: &Path, body: &[u8]) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
-    fs::write(path, body).unwrap();
-    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    let tmp = path.with_extension("write-tmp");
+    {
+        let mut f = fs::File::create(&tmp).unwrap();
+        f.write_all(body).unwrap();
+        f.sync_all().unwrap();
+    }
+    fs::set_permissions(&tmp, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::rename(&tmp, path).unwrap();
+}
+
+fn write_script(path: &Path, body: &str) {
+    write_executable(path, body.as_bytes());
 }
 
 /// Builds a fake AppDir whose "launcher" dumps its environment.
 fn fake_appdir() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
-    fs::copy(APPRUN, root.join("AppRun")).unwrap();
-    fs::set_permissions(root.join("AppRun"), fs::Permissions::from_mode(0o755)).unwrap();
+    write_executable(root.join("AppRun").as_path(), &fs::read(APPRUN).unwrap());
     write_script(
         &root.join("usr/bin/hearthstone-linux-gui"),
         "#!/bin/sh\nenv > \"$ENV_DUMP\"\n",
@@ -49,7 +68,26 @@ fn run(appdir: &Path, env: &[(&str, &str)]) -> HashMap<String, String> {
         .env("ENV_DUMP", &env_dump)
         .env("XDG_RUNTIME_DIR", &runtime)
         .envs(env.iter().copied());
-    let status = command.status().unwrap();
+
+    // Overlayfs can return ETXTBSY briefly after writing an executable.
+    let status = {
+        let mut last_err = None;
+        let mut ok = None;
+        for attempt in 0..8 {
+            match command.status() {
+                Ok(status) => {
+                    ok = Some(status);
+                    break;
+                }
+                Err(err) if err.raw_os_error() == Some(26) => {
+                    last_err = Some(err);
+                    thread::sleep(Duration::from_millis(10 * (attempt + 1) as u64));
+                }
+                Err(err) => panic!("failed to start AppRun: {err}"),
+            }
+        }
+        ok.unwrap_or_else(|| panic!("failed to start AppRun after ETXTBSY retries: {last_err:?}"))
+    };
     assert!(status.success(), "AppRun failed: {status}");
     fs::read_to_string(env_dump)
         .unwrap()
