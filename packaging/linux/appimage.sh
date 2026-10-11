@@ -127,6 +127,22 @@ excludes=(
   "${excludes[@]}" \
   "${deps_only[@]}"
 
+# linuxdeploy's default exclude list omits libgpg-error even though bundled
+# libgcrypt / libsystemd need it. Copy it explicitly so hosts without the
+# package (e.g. Debian images with Install-Recommends disabled) still resolve.
+copy_host_lib() {
+  local name="$1" src
+  [ -e "$appdir/usr/lib/$name" ] && return 0
+  src="$(ldconfig -p 2>/dev/null | awk -v n="$name" '$1 == n { print $NF; exit }')"
+  if [ -z "$src" ] || [ ! -f "$src" ]; then
+    echo "error: required library $name not found on the build host" >&2
+    return 1
+  fi
+  cp -L "$src" "$appdir/usr/lib/"
+  echo "bundled host library: $name <- $src"
+}
+copy_host_lib libgpg-error.so.0
+
 # Belt and braces: nothing from the excludelist may have slipped in, and no
 # bundled file may need a newer glibc than the baseline.
 packaging/linux/check-glibc.sh "$max_glibc" "$appdir"

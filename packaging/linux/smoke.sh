@@ -11,11 +11,25 @@
 #    AppImage and core libraries (glibc, GL, X11) from the host.
 # 3. Runs the hidden `--print-child-env` probe so host children do not inherit
 #    AppImage/bundled LD_LIBRARY_PATH or GTK/GLib module paths (issue #22).
+#
+# Avoid `cmd | head` / `cmd | grep -q` under `set -o pipefail`: short-circuit
+# readers close the pipe and the writer exits 141 (SIGPIPE) on many distros.
 set -euo pipefail
 
 dist="$(readlink -f "${1:?usage: smoke.sh <dist-dir>}")"
 . /etc/os-release
 echo "== ${PRETTY_NAME:-$ID}"
+
+# First line of a multi-line string without a head|pipe SIGPIPE.
+first_line() {
+  local s="$1"
+  printf '%s\n' "${s%%$'\n'*}"
+}
+
+# True when file starts with the ELF magic (read the file, not a pipe).
+is_elf() {
+  [ "$(head -c4 "$1" 2>/dev/null || true)" = $'\x7fELF' ]
+}
 
 install_native() {
   case "$ID ${ID_LIKE:-}" in
@@ -46,12 +60,19 @@ install_native() {
 }
 
 check_ldd() {
-  local missing
-  missing="$(find "$@" -type f \( -name '*.so*' -o -perm -u+x \) -print0 \
-    | xargs -0 -r sh -c 'for f; do head -c4 "$f" | grep -q ELF && ldd "$f" 2>/dev/null | sed "s|^|$f: |"; done' sh \
-    | grep 'not found' || true)"
+  local missing="" f line
+  while IFS= read -r -d '' f; do
+    is_elf "$f" || continue
+    while IFS= read -r line; do
+      case "$line" in
+        *'not found'*)
+          missing+="$f: $line"$'\n'
+          ;;
+      esac
+    done < <(ldd "$f" 2>/dev/null || true)
+  done < <(find "$@" -type f \( -name '*.so*' -o -perm -u+x \) -print0 2>/dev/null)
   if [ -n "$missing" ]; then
-    echo "$missing" >&2
+    printf '%s' "$missing" >&2
     return 1
   fi
 }
@@ -84,17 +105,32 @@ check_child_env() {
   out="$("$launcher" --print-child-env)"
   printf '%s\n' "$out"
 
-  echo "$out" | grep -q '^# host_env_active=' || {
-    echo "error: --print-child-env missing host_env_active header" >&2
-    return 1
-  }
-  echo "$out" | grep -q '^PATH=' || {
-    echo "error: --print-child-env missing PATH" >&2
-    return 1
-  }
+  case "$out" in
+    *$'# host_env_active='*) ;;
+    *)
+      echo "error: --print-child-env missing host_env_active header" >&2
+      return 1
+      ;;
+  esac
+  case "$out" in
+    *$'\nPATH='*|PATH=*) ;;
+    *)
+      echo "error: --print-child-env missing PATH" >&2
+      return 1
+      ;;
+  esac
 
   child_var() {
-    echo "$out" | sed -n "s/^${1}=//p" | head -n1
+    local prefix="$1=" line
+    while IFS= read -r line; do
+      case "$line" in
+        "$prefix"*)
+          printf '%s\n' "${line#"$prefix"}"
+          return 0
+          ;;
+      esac
+    done <<< "$out"
+    printf '\n'
   }
 
   if [ -n "$expect_ld" ]; then
@@ -106,10 +142,10 @@ check_child_env() {
   fi
 
   if [ -n "$appdir" ]; then
-    echo "$out" | grep -q '^# host_env_active=1$' || {
+    if ! grep -Fxq '# host_env_active=1' <<< "$out"; then
       echo "error: AppImage child probe expected host_env_active=1" >&2
       return 1
-    }
+    fi
 
     # AppRun points these at the bundle; host children must get the host values.
     for var in GIO_MODULE_DIR GTK_PATH GTK_EXE_PREFIX GI_TYPELIB_PATH \
@@ -143,7 +179,9 @@ check_child_env() {
 }
 
 install_native
-ldd --version | head -n1
+
+ldd_ver="$(ldd --version 2>&1 || true)"
+first_line "$ldd_ver"
 
 echo "-- native package"
 check_ldd /usr/bin/hearthstone-linux-gui /usr/share/hearthstone-linux-gui/stubs
@@ -158,10 +196,30 @@ chmod +x "$work/app.AppImage"
 (cd "$work" && ./app.AppImage --appimage-extract >/dev/null)
 appdir="$work/squashfs-root"
 check_ldd "$appdir/usr/bin" "$appdir/usr/lib"
+
 # Bundled GTK must come from the AppImage, glibc from the host.
-ldd "$appdir/usr/bin/hearthstone-linux-gui" | grep -E 'libgtk-4|libc\.so'
-ldd "$appdir/usr/bin/hearthstone-linux-gui" | grep libgtk-4 | grep -q "$appdir"
-ldd "$appdir/usr/bin/hearthstone-linux-gui" | grep 'libc\.so' | grep -vq "$appdir"
+ldd_bin="$(ldd "$appdir/usr/bin/hearthstone-linux-gui")"
+printf '%s\n' "$ldd_bin" | grep -E 'libgtk-4|libc\.so' || true
+gtk_line="$(printf '%s\n' "$ldd_bin" | grep libgtk-4 || true)"
+libc_line="$(printf '%s\n' "$ldd_bin" | grep 'libc\.so' || true)"
+case "$gtk_line" in
+  *"$appdir"*) ;;
+  *)
+    echo "error: libgtk-4 is not resolved from AppDir ($appdir): $gtk_line" >&2
+    exit 1
+    ;;
+esac
+case "$libc_line" in
+  *"$appdir"*)
+    echo "error: libc.so must come from the host, not AppDir: $libc_line" >&2
+    exit 1
+    ;;
+  '')
+    echo "error: libc.so mapping missing from ldd output" >&2
+    exit 1
+    ;;
+esac
+
 "$appdir/AppRun" --no-gui
 # Default host has no LD_LIBRARY_PATH: child must keep it unset and must not
 # inherit AppRun's GTK/GLib module paths (issue #22).
