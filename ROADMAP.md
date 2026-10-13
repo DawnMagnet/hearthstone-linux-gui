@@ -78,15 +78,16 @@ English for an unsupported locale, and the catalog test is part of CI.
   `PATH` (`host_env`), not inside the AppImage environment.
 - A switch is disabled with an explanatory tooltip when the tool is not
   installed. Detection runs at start and on "Refresh".
-- Packaging differences to handle and test:
+- Packaging differences:
   - AppImage, DEB, RPM, Pacman: host tools are used directly.
-  - Nix: wrappers go in front of the runtime runner; the FHS environment
-    needs the MangoHud and GameMode libraries.
-  - Flatpak: MangoHud needs the
-    `org.freedesktop.Platform.VulkanLayer.MangoHud` extension, GameMode needs
-    access to its D-Bus service. If one of them cannot be made to work in the
-    sandbox, the switch explains that instead of failing silently.
-- Extend the `--print-child-env` probe so CI covers the wrapper chain.
+  - Flatpak: the host tools are not reachable from the sandbox, so the
+    switches are disabled and say so. Making them work needs the
+    `org.freedesktop.Platform.VulkanLayer.MangoHud` extension and access to
+    the GameMode D-Bus service; that is left for a follow-up.
+  - Nix: the wrappers are put in front of the runtime runner; whether the
+    FHS environment needs the MangoHud and GameMode libraries added has to
+    be tested on NixOS.
+- The wrapper chain is covered by a unit test.
 
 ### Game settings editor
 
@@ -97,11 +98,12 @@ The game reads two files, and they need different handling:
 | `options.txt` | `~/Library/Preferences/Blizzard/Hearthstone/` (the macOS path, used as is on Linux) | Graphics and gameplay options, `key=value` | Not exposed at all |
 | `client.config` | game directory | Connection and locale settings | Overwritten on every Install / Update |
 
-- A "Game settings" dialog with typed controls for the common cases:
-  frame-rate limit (`targetframerate`, verified in a local install), VSync on
-  or off, graphics quality.
-- An "Advanced" page with a plain text editor for both files, with "Open in
-  external editor" and "Reset to defaults".
+- A "Game settings" dialog, opened from the gear menu, with typed controls
+  for the common cases: frame-rate limit (`targetframerate`), VSync on or
+  off, graphics quality.
+- An "Advanced" section with a plain text editor for `options.txt` and for
+  additional `client.config` entries, with "Open in editor" and "Reset to
+  defaults".
 - Unknown keys and their order are preserved on save. The game rewrites
   `options.txt` on exit, so editing is blocked while the game runs.
 - User changes to `client.config` are kept as an overlay that is re-applied
@@ -113,6 +115,9 @@ The game reads two files, and they need different handling:
 Done when: frame rate and VSync can be changed from the launcher, the change
 is visible in the game (verified with the MangoHud overlay), and survives an
 update.
+
+Status: implemented on the working branch. Writing the files is verified;
+the effect inside the running game still has to be confirmed.
 
 ## 0.5.0 Name, logo and icon
 

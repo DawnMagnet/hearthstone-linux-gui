@@ -147,10 +147,13 @@ impl InstallManager {
             message: tr!("install.compatibility"),
             fraction: Some(0.99),
         });
+        let overrides =
+            std::fs::read_to_string(self.paths.client_config_overrides()).unwrap_or_default();
         compatibility::install_compatibility_files(
             &self.paths.game_dir,
             config.region,
             config.locale,
+            &overrides,
         )?;
 
         config.game_dir = Some(self.paths.game_dir.clone());

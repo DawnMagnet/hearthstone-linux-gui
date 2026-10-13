@@ -13,13 +13,24 @@
   locale; a change takes effect after a restart.
 - On first start, region and game language are preselected from the system
   locale instead of always starting with `us` / `enUS`.
+- **GameMode** and **MangoHud** switches. The game is started as
+  `gamemoderun mangohud <game>`; a switch is disabled with an explanation
+  when the tool is not installed or, in the Flatpak, not reachable from the
+  sandbox.
+- **Game settings** dialog in the gear menu: frame-rate limit, VSync and
+  graphics quality, plus plain editors for the game's `options.txt` and for
+  additional `client.config` entries. VSync is switched off by writing
+  `vsync=0`. Unknown keys and their order are preserved, and the dialog is
+  locked while the game runs because the game rewrites the file on exit.
+- Additional `client.config` entries are stored outside the game directory
+  and re-applied on every Install / Update instead of being overwritten.
 - Translated desktop entry comment and AppStream summary and description.
 - German README (`README.de.md`).
 
 ### Changed
 
 - The window content is centred: status, settings and actions form one
-  ordered column.
+  ordered column, and the status line stays on one line.
 - The **Locale** setting is now labelled **Game language** to tell it apart
   from the launcher language.
 

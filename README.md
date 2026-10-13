@@ -55,6 +55,11 @@ to distribute and maintain.
 - **Translated interface**: English, German and Simplified Chinese; the
   launcher follows your system language and can be switched in the gear menu
   in the bottom right corner.
+- **GameMode and MangoHud**: optional switches start the game through
+  `gamemoderun` and with the MangoHud overlay when they are installed.
+- **Game settings editor**: change the frame-rate limit, VSync and graphics
+  quality, or edit `options.txt` and extra `client.config` entries, from the
+  gear menu.
 - **No command-line requirement**: release builds are meant for graphical
   installation and daily use.
 - **No Python/Bash runtime requirement**: the launcher is a native Rust binary

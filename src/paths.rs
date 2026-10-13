@@ -64,6 +64,13 @@ impl AppPaths {
         Ok(())
     }
 
+    /// User entries that are applied on top of the generated `client.config`.
+    /// Kept outside the game directory so they survive Install / Update and
+    /// Uninstall.
+    pub fn client_config_overrides(&self) -> PathBuf {
+        self.config_dir.join("client.config.overrides")
+    }
+
     pub fn game_token(&self) -> PathBuf {
         self.game_dir.join("token")
     }

@@ -83,16 +83,17 @@ Katalogtest läuft in der CI.
 - Ein Schalter ist deaktiviert und erklärt per Tooltip warum, wenn das
   Werkzeug nicht installiert ist. Die Erkennung läuft beim Start und bei
   „Refresh“.
-- Unterschiede je Paketformat, die behandelt und getestet werden müssen:
+- Unterschiede je Paketformat:
   - AppImage, DEB, RPM, Pacman: Die Werkzeuge des Hosts werden direkt genutzt.
-  - Nix: Die Wrapper kommen vor den Runtime-Runner; die FHS-Umgebung braucht
-    die Bibliotheken von MangoHud und GameMode.
-  - Flatpak: MangoHud braucht die Erweiterung
-    `org.freedesktop.Platform.VulkanLayer.MangoHud`, GameMode braucht Zugriff
-    auf seinen D-Bus-Dienst. Lässt sich eines davon in der Sandbox nicht zum
-    Laufen bringen, erklärt der Schalter das, statt still zu scheitern.
-- Die Probe `--print-child-env` erweitern, damit die CI die Wrapper-Kette
-  abdeckt.
+  - Flatpak: Die Werkzeuge des Hosts sind aus der Sandbox nicht erreichbar;
+    die Schalter sind deshalb deaktiviert und sagen das. Damit sie
+    funktionieren, braucht es die Erweiterung
+    `org.freedesktop.Platform.VulkanLayer.MangoHud` und Zugriff auf den
+    D-Bus-Dienst von GameMode; das bleibt einem Folgeschritt vorbehalten.
+  - Nix: Die Wrapper stehen vor dem Runtime-Runner; ob die FHS-Umgebung die
+    Bibliotheken von MangoHud und GameMode zusätzlich braucht, muss unter
+    NixOS getestet werden.
+- Die Wrapper-Kette ist durch einen Unit-Test abgedeckt.
 
 ### Editor für Spieleinstellungen
 
@@ -103,11 +104,12 @@ Das Spiel liest zwei Dateien, die unterschiedlich behandelt werden müssen:
 | `options.txt` | `~/Library/Preferences/Blizzard/Hearthstone/` (der macOS-Pfad, unter Linux unverändert benutzt) | Grafik- und Spieloptionen, `schlüssel=wert` | Gar nicht erreichbar |
 | `client.config` | Spielverzeichnis | Verbindungs- und Spracheinstellungen | Wird bei jedem Install / Update überschrieben |
 
-- Ein Dialog „Spieleinstellungen“ mit passenden Bedienelementen für die
-  häufigen Fälle: Bildratenbegrenzung (`targetframerate`, in einer lokalen
-  Installation bestätigt), VSync an oder aus, Grafikqualität.
-- Eine Seite „Erweitert“ mit einem einfachen Texteditor für beide Dateien,
-  dazu „In externem Editor öffnen“ und „Auf Standard zurücksetzen“.
+- Ein Dialog „Spieleinstellungen“, erreichbar über das Zahnradmenü, mit
+  passenden Bedienelementen für die häufigen Fälle: Bildratenbegrenzung
+  (`targetframerate`), VSync an oder aus, Grafikqualität.
+- Ein Abschnitt „Erweitert“ mit einem einfachen Texteditor für `options.txt`
+  und für zusätzliche `client.config`-Einträge, dazu „Im Editor öffnen“ und
+  „Auf Standard zurücksetzen“.
 - Unbekannte Schlüssel und ihre Reihenfolge bleiben beim Speichern erhalten.
   Das Spiel schreibt `options.txt` beim Beenden neu, deshalb ist das
   Bearbeiten gesperrt, solange das Spiel läuft.
@@ -122,6 +124,9 @@ Das Spiel liest zwei Dateien, die unterschiedlich behandelt werden müssen:
 Fertig, wenn: Bildrate und VSync lassen sich im Launcher ändern, die Änderung
 ist im Spiel sichtbar (mit dem MangoHud-Overlay geprüft) und übersteht ein
 Update.
+
+Stand: auf dem Arbeitsbranch umgesetzt. Das Schreiben der Dateien ist
+geprüft; die Wirkung im laufenden Spiel muss noch bestätigt werden.
 
 ## 0.5.0 Name, Logo und Icon
 
