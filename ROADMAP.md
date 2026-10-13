@@ -48,7 +48,7 @@ German ships complete.
   headline text (`"Stopping game"`). Replace that with a real state field
   before translating, otherwise the logic breaks in every other language.
 - UI language follows the system locale. It can be overridden in a gear menu
-  in the bottom right corner, which lists each language with its flag (shipped
+  at the top right, which lists each language with its flag (shipped
   as graphics, not emoji, so it does not depend on installed fonts). It is
   independent of the game language that already exists.
 - On first start, region and game language are preselected from the system

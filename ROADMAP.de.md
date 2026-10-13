@@ -50,7 +50,7 @@ Fallback; Deutsch ist vollständig.
   ein echtes Zustandsfeld ersetzt, sonst bricht die Logik in jeder anderen
   Sprache.
 - Die Oberflächensprache folgt der Systemsprache. Sie lässt sich über ein
-  Zahnradmenü unten rechts umstellen, das jede Sprache mit ihrer Flagge
+  Zahnradmenü oben rechts umstellen, das jede Sprache mit ihrer Flagge
   zeigt (als mitgelieferte Grafik, nicht als Emoji, damit es nicht von
   installierten Schriften abhängt). Sie ist unabhängig von der bereits
   vorhandenen Spielsprache.

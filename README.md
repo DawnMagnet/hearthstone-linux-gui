@@ -59,7 +59,7 @@ to distribute and maintain.
   GTK4 window.
 - **Translated interface**: English, German and Simplified Chinese; the
   launcher follows your system language and can be switched in the gear menu
-  in the bottom right corner.
+  at the top right.
 - **GameMode and MangoHud**: optional switches start the game through
   `gamemoderun` and with the MangoHud overlay when they are installed.
 - **Game settings editor**: change the frame-rate limit, VSync and graphics
