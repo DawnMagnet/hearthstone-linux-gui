@@ -20,12 +20,15 @@ const CALLBACK_SCHEMES: [&str; 2] = ["blizzard-hearthstone:", "wtcg:"];
 const ZOOM: f64 = 0.6;
 const HEIGHT: i32 = 410;
 
-/// Dark card behind the page. Blizzard's embedded page uses light text, so
-/// it needs a dark background in the light theme as well.
+/// Class the window carries while the login is shown.
+pub const WINDOW_CLASS: &str = "login-active";
+
+/// While the login is shown the whole window takes the background colour of
+/// Blizzard's login page, so the embedded page blends in without an edge.
 pub const CSS: &str = "
-.login-card {
+window.login-active,
+window.login-active headerbar {
     background-color: #15171e;
-    border-radius: 12px;
 }
 ";
 
@@ -44,7 +47,7 @@ pub fn build(
         .network_session(&session)
         .web_context(&context)
         .build();
-    // The card behind the view shows through the transparent page.
+    // The window behind the view shows through the transparent page.
     web_view.set_background_color(&gdk::RGBA::new(0.0, 0.0, 0.0, 0.0));
     web_view.set_zoom_level(ZOOM);
     web_view.set_vexpand(true);
@@ -82,11 +85,7 @@ pub fn build(
     });
     web_view.load_uri(url);
 
-    let card = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    card.add_css_class("login-card");
-    card.set_overflow(gtk::Overflow::Hidden);
-    card.set_size_request(-1, HEIGHT);
-    card.append(&web_view);
+    web_view.set_size_request(-1, HEIGHT);
 
     // Below the page rather than on top of it: the gap in Blizzard's form
     // holds the privacy notice, which must stay readable.
@@ -96,7 +95,7 @@ pub fn build(
     cancel.connect_clicked(move |_| on_cancel());
 
     let view = gtk::Box::new(gtk::Orientation::Vertical, 12);
-    view.append(&card);
+    view.append(&web_view);
     view.append(&cancel);
     view.upcast()
 }

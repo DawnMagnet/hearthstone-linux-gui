@@ -75,6 +75,9 @@ struct MainWindow {
     details: gtk::Label,
     /// Shows the settings and actions, or the embedded login.
     controls_stack: gtk::Stack,
+    /// Colour scheme to return to once the embedded login is closed.
+    #[cfg(feature = "embedded-login")]
+    scheme_before_login: std::cell::Cell<Option<adw::ColorScheme>>,
     game_settings_button: gtk::Button,
     update_button: gtk::Button,
     /// Newer launcher release found by the update check.
@@ -370,6 +373,8 @@ impl SimpleComponent for MainWindow {
             window: root.clone(),
             details: gtk::Label::new(None),
             controls_stack: gtk::Stack::new(),
+            #[cfg(feature = "embedded-login")]
+            scheme_before_login: std::cell::Cell::new(None),
             game_settings_button: preferences_menu.game_settings,
             update_button: update_button.clone(),
             update: None,
@@ -585,6 +590,12 @@ impl MainWindow {
         );
         self.controls_stack.add_named(&view, Some("login"));
         self.controls_stack.set_visible_child_name("login");
+        // Blizzard's page is dark with light text: match it for as long as
+        // it is shown, whatever the desktop's colour scheme is.
+        let style = adw::StyleManager::default();
+        self.scheme_before_login.set(Some(style.color_scheme()));
+        style.set_color_scheme(adw::ColorScheme::ForceDark);
+        self.window.add_css_class(super::login_view::WINDOW_CLASS);
         self.status.headline = tr!("login.embedded");
         self.refresh_details();
     }
@@ -595,6 +606,11 @@ impl MainWindow {
         if let Some(view) = self.controls_stack.child_by_name("login") {
             self.controls_stack.set_visible_child_name("controls");
             self.controls_stack.remove(&view);
+            self.window
+                .remove_css_class(super::login_view::WINDOW_CLASS);
+            if let Some(scheme) = self.scheme_before_login.take() {
+                adw::StyleManager::default().set_color_scheme(scheme);
+            }
             self.window.set_default_size(1, 1);
         }
     }
