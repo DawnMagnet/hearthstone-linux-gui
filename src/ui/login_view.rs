@@ -18,7 +18,7 @@ const CALLBACK_SCHEMES: [&str; 2] = ["blizzard-hearthstone:", "wtcg:"];
 /// The page is laid out for a full browser window; scaled down it matches
 /// the launcher's own controls.
 const ZOOM: f64 = 0.6;
-const HEIGHT: i32 = 410;
+const HEIGHT: i32 = 350;
 
 /// Class the window carries while the login is shown.
 pub const WINDOW_CLASS: &str = "login-active";
@@ -29,6 +29,11 @@ pub const CSS: &str = "
 window.login-active,
 window.login-active headerbar {
     background-color: #15171e;
+}
+/* Pulls the page up over its own empty top area, so its heading follows the
+   launcher's headline directly. */
+.login-page {
+    margin-top: -56px;
 }
 ";
 
@@ -86,6 +91,7 @@ pub fn build(
     web_view.load_uri(url);
 
     web_view.set_size_request(-1, HEIGHT);
+    web_view.add_css_class("login-page");
 
     // Below the page rather than on top of it: the gap in Blizzard's form
     // holds the privacy notice, which must stay readable.

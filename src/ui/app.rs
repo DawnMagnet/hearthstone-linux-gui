@@ -125,6 +125,9 @@ struct GameSession {
     output_log: PathBuf,
 }
 
+/// Space between the headline and the settings below it.
+const STATUS_PANEL_GAP: i32 = 32;
+
 /// What clicking the upgrade button led to.
 #[derive(Clone, Copy, Debug)]
 pub enum UpdateOutcome {
@@ -214,6 +217,7 @@ impl SimpleComponent for MainWindow {
                             gtk::Box {
                                 set_orientation: gtk::Orientation::Horizontal,
                                 set_spacing: 12,
+                                set_margin_bottom: 16,
 
                                 #[local_ref]
                                 details -> gtk::Label {
@@ -236,7 +240,7 @@ impl SimpleComponent for MainWindow {
 
                             #[local_ref]
                             status_panel -> gtk::Box {
-                                set_margin_bottom: 32,
+                                set_margin_bottom: STATUS_PANEL_GAP,
                             },
 
                             // Settings and actions; the embedded login
@@ -596,6 +600,8 @@ impl MainWindow {
         self.scheme_before_login.set(Some(style.color_scheme()));
         style.set_color_scheme(adw::ColorScheme::ForceDark);
         self.window.add_css_class(super::login_view::WINDOW_CLASS);
+        // The headline continues into the page's own heading.
+        self.status_panel.widget().set_margin_bottom(0);
         self.status.headline = tr!("login.embedded");
         self.refresh_details();
     }
@@ -608,6 +614,9 @@ impl MainWindow {
             self.controls_stack.remove(&view);
             self.window
                 .remove_css_class(super::login_view::WINDOW_CLASS);
+            self.status_panel
+                .widget()
+                .set_margin_bottom(STATUS_PANEL_GAP);
             if let Some(scheme) = self.scheme_before_login.take() {
                 adw::StyleManager::default().set_color_scheme(scheme);
             }
