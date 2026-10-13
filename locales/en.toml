@@ -125,6 +125,7 @@ handler_failed = "Login handler registration failed; opening browser login anywa
 opening = "Opening browser for login…"
 waiting = "Complete login in your browser; waiting for desktop callback"
 no_browser = "Could not open a browser. Copy the login URL below into your browser"
+embedded = "Sign in with Battle.net below"
 complete = "Login complete"
 
 [game]

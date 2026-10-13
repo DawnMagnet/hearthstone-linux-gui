@@ -121,6 +121,7 @@ handler_failed = "Der Anmelde-Handler konnte nicht registriert werden; die Brows
 opening = "Browser wird für die Anmeldung geöffnet …"
 waiting = "Schließe die Anmeldung im Browser ab; es wird auf die Rückmeldung gewartet"
 no_browser = "Es konnte kein Browser geöffnet werden. Kopiere die Anmelde-URL unten in deinen Browser"
+embedded = "Melde dich unten bei Battle.net an"
 complete = "Anmeldung abgeschlossen"
 
 [game]

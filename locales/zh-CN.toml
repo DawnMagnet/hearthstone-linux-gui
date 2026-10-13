@@ -121,6 +121,7 @@ handler_failed = "登录回调处理程序注册失败；仍将打开浏览器�
 opening = "正在打开浏览器登录…"
 waiting = "请在浏览器中完成登录；正在等待桌面回调"
 no_browser = "无法打开浏览器。请将下方的登录链接复制到浏览器中"
+embedded = "请在下方登录 Battle.net"
 complete = "登录完成"
 
 [game]

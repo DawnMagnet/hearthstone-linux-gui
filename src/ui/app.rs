@@ -73,6 +73,8 @@ struct MainWindow {
     window: adw::ApplicationWindow,
     /// Status line above the logo.
     details: gtk::Label,
+    /// Shows the settings and actions, or the embedded login.
+    controls_stack: gtk::Stack,
     game_settings_button: gtk::Button,
     update_button: gtk::Button,
     /// Newer launcher release found by the update check.
@@ -90,11 +92,15 @@ pub enum AppMsg {
     CheckForUpdatesChanged(bool),
     UpdateFound(Release),
     InstallUpdate,
+    /// Redirect URI with the login token, from the embedded login.
+    #[cfg(feature = "embedded-login")]
+    LoginCallback(String),
     UpdateFetched(Result<UpdateOutcome, String>),
     Action(ActionBarOutput),
     InstallEvent(TaskEvent),
     UninstallFinished(Result<(), String>),
     LoginPoll,
+    #[cfg_attr(feature = "embedded-login", allow(dead_code))]
     BrowserOpened {
         session: u64,
         result: Result<String, String>,
@@ -230,13 +236,10 @@ impl SimpleComponent for MainWindow {
                                 set_margin_bottom: 32,
                             },
 
+                            // Settings and actions; the embedded login
+                            // takes their place while a login is pending.
                             #[local_ref]
-                            settings_panel -> gtk::Grid {},
-
-                            #[local_ref]
-                            actions -> gtk::Box {
-                                set_margin_top: 16,
-                            },
+                            controls_stack -> gtk::Stack {},
                         },
 
                         gtk::CenterBox {
@@ -333,6 +336,8 @@ impl SimpleComponent for MainWindow {
         }
 
         relm4::set_global_css(UPDATE_BUTTON_CSS);
+        #[cfg(feature = "embedded-login")]
+        relm4::set_global_css(super::login_view::CSS);
         let update_button = gtk::Button::from_icon_name("software-update-available-symbolic");
         update_button.set_tooltip_text(Some(&tr!("update.install_tooltip")));
         update_button.add_css_class(relm4::css::CIRCULAR);
@@ -364,6 +369,7 @@ impl SimpleComponent for MainWindow {
             toaster,
             window: root.clone(),
             details: gtk::Label::new(None),
+            controls_stack: gtk::Stack::new(),
             game_settings_button: preferences_menu.game_settings,
             update_button: update_button.clone(),
             update: None,
@@ -385,10 +391,14 @@ impl SimpleComponent for MainWindow {
         side.append(&update_button);
         logo.add_overlay(&side);
         let details = &model.details;
+        let controls = gtk::Box::new(gtk::Orientation::Vertical, 16);
+        controls.append(model.settings_panel.widget());
+        controls.append(model.actions.widget());
+        let controls_stack = &model.controls_stack;
+        controls_stack.set_vhomogeneous(false);
+        controls_stack.add_named(&controls, Some("controls"));
         let toast_overlay = model.toaster.overlay_widget();
         let status_panel = model.status_panel.widget();
-        let settings_panel = model.settings_panel.widget();
-        let actions = model.actions.widget();
 
         let widgets = view_output!();
         model.render_children();
@@ -414,6 +424,8 @@ impl SimpleComponent for MainWindow {
             }
             AppMsg::UpdateFound(release) => self.update = Some(release),
             AppMsg::InstallUpdate => self.install_update(sender),
+            #[cfg(feature = "embedded-login")]
+            AppMsg::LoginCallback(uri) => self.handle_login_callback(&uri),
             AppMsg::UpdateFetched(result) => self.handle_update_fetched(result),
             AppMsg::Action(output) => self.handle_action(output, sender),
             AppMsg::InstallEvent(event) => self.handle_install_event(event),
@@ -558,6 +570,52 @@ impl MainWindow {
             }
         };
         self.refresh_details();
+    }
+
+    /// Puts Blizzard's login page in place of the settings and actions.
+    #[cfg(feature = "embedded-login")]
+    fn show_embedded_login(&mut self, url: &str, sender: &ComponentSender<Self>) {
+        self.hide_embedded_login();
+        let callback_input = sender.input_sender().clone();
+        let cancel_input = sender.input_sender().clone();
+        let view = super::login_view::build(
+            url,
+            move |uri| callback_input.emit(AppMsg::LoginCallback(uri)),
+            move || cancel_input.emit(AppMsg::Action(ActionBarOutput::Account)),
+        );
+        self.controls_stack.add_named(&view, Some("login"));
+        self.controls_stack.set_visible_child_name("login");
+        self.status.headline = tr!("login.embedded");
+        self.refresh_details();
+    }
+
+    /// Brings the settings and actions back and lets the window shrink.
+    #[cfg(feature = "embedded-login")]
+    fn hide_embedded_login(&self) {
+        if let Some(view) = self.controls_stack.child_by_name("login") {
+            self.controls_stack.set_visible_child_name("controls");
+            self.controls_stack.remove(&view);
+            self.window.set_default_size(1, 1);
+        }
+    }
+
+    #[cfg(feature = "embedded-login")]
+    fn handle_login_callback(&mut self, uri: &str) {
+        if self.login_session.is_none() {
+            return;
+        }
+        tracing::info!("embedded login returned a callback");
+        if let Err(error) = hearthstone_linux::auth::handle_callback_uri(&self.paths, uri) {
+            tracing::error!(error = %format!("{error:#}"), "embedded login callback failed");
+            if let Some(session) = self.login_session.take() {
+                session.cancel.cancel();
+            }
+            self.status.headline = tr!("login.setup_failed", error = format!("{error:#}"));
+            self.refresh_details();
+            return;
+        }
+        // The token is on disk now; finish as the browser flow would.
+        self.handle_login_poll();
     }
 
     fn save_settings(&mut self) {
@@ -822,16 +880,24 @@ impl MainWindow {
             url = %login_url,
             "opening browser login with desktop callback handler"
         );
+        #[cfg(feature = "embedded-login")]
+        {
+            let _ = session_id;
+            self.show_embedded_login(&login_url, &sender);
+        }
         // Openers are waited on to detect failures, so keep them off the GTK
         // main thread.
-        let input = sender.input_sender().clone();
-        std::thread::spawn(move || {
-            let result = browser::open_url(&login_url).map_err(|error| format!("{error:#}"));
-            input.emit(AppMsg::BrowserOpened {
-                session: session_id,
-                result,
+        #[cfg(not(feature = "embedded-login"))]
+        {
+            let input = sender.input_sender().clone();
+            std::thread::spawn(move || {
+                let result = browser::open_url(&login_url).map_err(|error| format!("{error:#}"));
+                input.emit(AppMsg::BrowserOpened {
+                    session: session_id,
+                    result,
+                });
             });
-        });
+        }
 
         Self::start_poll(&sender, AppMsg::LoginPoll, cancel);
     }
@@ -997,13 +1063,19 @@ impl MainWindow {
 
     fn render_children(&self) {
         self.details.set_label(&self.status.details);
+        #[cfg(feature = "embedded-login")]
+        if self.login_session.is_none() {
+            self.hide_embedded_login();
+        }
         self.status_panel
             .emit(StatusPanelInput::Render(StatusPanelState {
                 snapshot: self.status.clone(),
                 progress: self.progress.clone(),
+                // The embedded login needs no URL to copy.
                 login_url: self
                     .login_session
                     .as_ref()
+                    .filter(|_| cfg!(not(feature = "embedded-login")))
                     .map(|session| session.url.clone()),
             }));
         self.settings_panel

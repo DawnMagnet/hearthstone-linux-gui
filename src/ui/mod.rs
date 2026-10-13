@@ -3,6 +3,8 @@ mod auth;
 mod browser;
 mod components;
 mod game_settings;
+#[cfg(feature = "embedded-login")]
+mod login_view;
 mod status;
 
 use relm4::gtk::prelude::*;
