@@ -591,6 +591,11 @@ impl MainWindow {
             url,
             move |uri| callback_input.emit(AppMsg::LoginCallback(uri)),
             move || cancel_input.emit(AppMsg::Action(ActionBarOutput::Account)),
+            // The status line starts flush with the login field.
+            {
+                let details = self.details.clone();
+                move |indent| details.set_margin_start(indent)
+            },
         );
         self.controls_stack.add_named(&view, Some("login"));
         self.controls_stack.set_visible_child_name("login");
@@ -617,6 +622,7 @@ impl MainWindow {
             self.status_panel
                 .widget()
                 .set_margin_bottom(STATUS_PANEL_GAP);
+            self.details.set_margin_start(0);
             if let Some(scheme) = self.scheme_before_login.take() {
                 adw::StyleManager::default().set_color_scheme(scheme);
             }

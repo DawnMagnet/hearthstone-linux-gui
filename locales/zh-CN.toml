@@ -122,6 +122,8 @@ opening = "正在打开浏览器登录…"
 waiting = "请在浏览器中完成登录；正在等待桌面回调"
 no_browser = "无法打开浏览器。请将下方的登录链接复制到浏览器中"
 embedded = "使用 Battle.net"
+show_scrollbar = "显示滚动条"
+hide_scrollbar = "隐藏滚动条"
 complete = "登录完成"
 
 [game]

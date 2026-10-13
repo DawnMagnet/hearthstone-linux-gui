@@ -126,6 +126,8 @@ opening = "Opening browser for login…"
 waiting = "Complete login in your browser; waiting for desktop callback"
 no_browser = "Could not open a browser. Copy the login URL below into your browser"
 embedded = "With Battle.net"
+show_scrollbar = "Show scrollbar"
+hide_scrollbar = "Hide scrollbar"
 complete = "Login complete"
 
 [game]
