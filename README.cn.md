@@ -1,4 +1,8 @@
-# hearthstone-linux-gui
+# 炉石传说 Linux 启动器（hearthstone-linux-gui）
+
+<p align="center">
+  <img src="data/icons/io.github.hearthstone_linux_gui.svg" alt="玩牌的 Tux：启动器图标" width="160">
+</p>
 
 <p align="center">
   <img src="docs/images/readme-hero.svg" alt="hearthstone-linux-gui 桌面启动器预览" width="920">

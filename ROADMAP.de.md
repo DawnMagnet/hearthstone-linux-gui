@@ -154,17 +154,24 @@ Login-Handler weiter funktionieren. Es ändert sich nur der angezeigte Name.
   Kartenrahmen, Kartenbilder, Schriften oder Screenshots. Die Karten sind ein
   eigener Entwurf.
 - Ergebnisse:
-  - App-Icon: SVG-Vorlage plus PNG von 16 bis 512 px, bei 32 px noch
-    erkennbar (bei Bedarf eine vereinfachte Variante für kleine Größen).
-  - Logo: breitere Variante, im Hauptfenster direkt unter dem Titel.
-  - Symbolisches Icon für GNOME, aktualisiertes Titelbild im README.
-- Das Icon zieht von `packaging/appimage/` nach `data/icons/` um und ist dort
-  die einzige Quelle für AppImage, DEB, RPM, Pacman, Flatpak und Nix.
+  - App-Icon als SVG in `data/icons/`, die einzige Quelle für AppImage, DEB,
+    RPM, Pacman, Flatpak und Nix; die Paketskripte rendern daraus die
+    PNG-Größen.
+  - Logo im Hauptfenster direkt unter dem Titel.
+  - Icon am Anfang der READMEs.
 - Referenzmaterial aus der Entwurfsphase bleibt außerhalb des Repositorys.
+- Ein symbolisches (einfarbiges) Icon ist nicht nötig: GNOME zeigt es für
+  Anwendungen ohne Benachrichtigungen oder Statuseintrag nicht an.
+- Die jetzige Zeichnung ist eine flache Vektorfassung. Eine gerenderte
+  3D-Fassung im glänzenden Maskottchenstil kann sie später ersetzen, ohne
+  dass sich am Code etwas ändert.
 
 Fertig, wenn: Alle Paketformate zeigen das neue Icon und den neuen Namen im
 Anwendungsmenü, und das Logo wird im hellen und dunklen Modus korrekt
 dargestellt.
+
+Stand: auf dem Arbeitsbranch umgesetzt; das paketierte Icon muss noch in
+jedem Paketformat geprüft werden.
 
 ## 1.0.0 Ingame-Shop
 
@@ -323,5 +330,5 @@ lässt, und ein Spielupdate erfordert keine Handarbeit.
    keine neue Abhängigkeit.
 3. **Shop.** Entschieden: die macOS-Umgebung für die originale
    macOS-Bibliothek emulieren, der Weg über Wine nur als Ausweichlösung.
-4. **Anzeigename.** Offen: „Hearthstone Linux Launcher“ wie vorgeschlagen,
-   oder ein anderer Name, den der Upstream-Maintainer bevorzugt.
+4. **Anzeigename.** Entschieden: „Hearthstone Linux Launcher“ mit dem
+   Untertitel „Inoffizieller Community-Launcher“.

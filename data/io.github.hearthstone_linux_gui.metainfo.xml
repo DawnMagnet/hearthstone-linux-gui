@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
   <id>io.github.hearthstone_linux_gui</id>
-  <name>hearthstone-linux-gui</name>
+  <name>Hearthstone Linux Launcher</name>
+  <name xml:lang="zh-CN">炉石传说 Linux 启动器</name>
   <summary>Native GTK4 Linux GUI manager for installing, logging into, and launching Hearthstone</summary>
   <summary xml:lang="de">Native GTK4-Oberfläche für Linux zum Installieren, Anmelden und Starten von Hearthstone</summary>
   <summary xml:lang="zh-CN">用于安装、登录并启动炉石传说的原生 GTK4 Linux 图形管理器</summary>

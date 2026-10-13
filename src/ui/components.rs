@@ -42,7 +42,7 @@ impl SimpleComponent for StatusPanel {
             gtk::Label {
                 set_justify: gtk::Justification::Center,
                 set_wrap: true,
-                set_margin_top: 12,
+                set_margin_top: 6,
                 add_css_class: relm4::css::TITLE_2,
 
                 #[watch]
@@ -651,7 +651,7 @@ pub fn preferences_menu(
     let languages = i18n::available().into_iter().map(|language| {
         (
             Some(language.code),
-            flag_image(language.flag),
+            embedded_image(language.flag),
             language.name,
         )
     });
@@ -717,9 +717,9 @@ pub struct PreferencesMenu {
     pub game_settings: gtk::Button,
 }
 
-/// Decodes one of the embedded flag PNGs. PNG support is built into
-/// gdk-pixbuf, so this does not depend on an installed image loader.
-fn flag_image(png: &'static [u8]) -> gtk::Image {
+/// Decodes an embedded PNG. PNG support is built into gdk-pixbuf, so this
+/// does not depend on an installed image loader.
+pub fn embedded_image(png: &'static [u8]) -> gtk::Image {
     let loader = gtk::gdk_pixbuf::PixbufLoader::new();
     let decoded = loader.write(png).and_then(|()| loader.close());
     match (decoded, loader.pixbuf()) {

@@ -1,9 +1,9 @@
 use super::{
     auth, browser,
     components::{
-        preferences_menu, ActionBar, ActionBarInput, ActionBarOutput, ActionBarState,
-        InstallAction, InstallState, LaunchState, LoginState, SettingsOutput, SettingsPanel,
-        SettingsPanelInput, StatusPanel, StatusPanelInput, StatusPanelState,
+        embedded_image, preferences_menu, ActionBar, ActionBarInput, ActionBarOutput,
+        ActionBarState, InstallAction, InstallState, LaunchState, LoginState, SettingsOutput,
+        SettingsPanel, SettingsPanelInput, StatusPanel, StatusPanelInput, StatusPanelState,
     },
     game_settings, status,
 };
@@ -119,7 +119,7 @@ impl SimpleComponent for MainWindow {
 
     view! {
         main_window = adw::ApplicationWindow {
-            set_title: Some("hearthstone-linux-gui"),
+            set_title: Some(&tr!("app.name")),
             set_default_size: (680, 360),
 
             #[local_ref]
@@ -130,17 +130,24 @@ impl SimpleComponent for MainWindow {
                     adw::HeaderBar {
                         #[wrap(Some)]
                         set_title_widget = &adw::WindowTitle {
-                            set_title: "hearthstone-linux-gui",
+                            set_title: &tr!("app.name"),
+                            // Keeps the launcher from passing as an official product.
+                            set_subtitle: &tr!("app.unofficial"),
                         }
                     },
 
                     gtk::Box {
                         set_orientation: gtk::Orientation::Vertical,
                         set_spacing: 18,
-                        set_margin_top: 18,
+                        set_margin_top: 12,
                         set_margin_bottom: 18,
                         set_margin_start: 18,
                         set_margin_end: 18,
+
+                        #[local_ref]
+                        logo -> gtk::Image {
+                            set_pixel_size: 128,
+                        },
 
                         #[local_ref]
                         status_panel -> gtk::Box {},
@@ -255,6 +262,7 @@ impl SimpleComponent for MainWindow {
             game_settings_button: preferences_menu.game_settings,
         };
 
+        let logo = embedded_image(include_bytes!("../../data/icons/logo.png"));
         let toast_overlay = model.toaster.overlay_widget();
         let status_panel = model.status_panel.widget();
         let settings_panel = model.settings_panel.widget();

@@ -1,0 +1,99 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="ringBlue" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4fb0ff"/>
+      <stop offset="1" stop-color="#1668d6"/>
+    </linearGradient>
+    <linearGradient id="ringGold" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffe08a"/>
+      <stop offset="1" stop-color="#e09a1f"/>
+    </linearGradient>
+    <radialGradient id="body" cx="0.36" cy="0.28" r="0.85">
+      <stop offset="0" stop-color="#4a4f58"/>
+      <stop offset="0.45" stop-color="#1d2026"/>
+      <stop offset="1" stop-color="#08090b"/>
+    </radialGradient>
+    <radialGradient id="belly" cx="0.42" cy="0.3" r="0.8">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#d9dde4"/>
+    </radialGradient>
+    <linearGradient id="beak" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffc83a"/>
+      <stop offset="1" stop-color="#f08c12"/>
+    </linearGradient>
+    <linearGradient id="wood" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#c8793a"/>
+      <stop offset="1" stop-color="#7a3f17"/>
+    </linearGradient>
+    <linearGradient id="woodTop" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#e7a25c"/>
+      <stop offset="1" stop-color="#c8793a"/>
+    </linearGradient>
+    <linearGradient id="card" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fffaf0"/>
+      <stop offset="1" stop-color="#eedfc2"/>
+    </linearGradient>
+    <linearGradient id="cardBack" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3f8ef0"/>
+      <stop offset="1" stop-color="#1b4fb0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- ring: blue on the left, gold on the right -->
+  <path d="M128 22 A100 100 0 0 0 128 222" fill="none" stroke="url(#ringBlue)" stroke-width="18" stroke-linecap="round"/>
+  <path d="M128 22 A100 100 0 0 1 128 222" fill="none" stroke="url(#ringGold)" stroke-width="18" stroke-linecap="round"/>
+
+  <!-- Tux -->
+  <ellipse cx="128" cy="150" rx="62" ry="70" fill="url(#body)"/>
+  <ellipse cx="128" cy="86" rx="46" ry="44" fill="url(#body)"/>
+  <ellipse cx="128" cy="160" rx="41" ry="52" fill="url(#belly)"/>
+  <!-- glossy highlight on the head -->
+  <ellipse cx="110" cy="58" rx="20" ry="9" fill="#ffffff" opacity="0.22" transform="rotate(-24 110 58)"/>
+
+  <!-- eyes, looking down at the cards -->
+  <ellipse cx="112" cy="80" rx="10" ry="13" fill="#ffffff"/>
+  <ellipse cx="144" cy="80" rx="10" ry="13" fill="#ffffff"/>
+  <circle cx="115" cy="85" r="5" fill="#101114"/>
+  <circle cx="141" cy="85" r="5" fill="#101114"/>
+  <circle cx="116.500" cy="83.200" r="1.600" fill="#ffffff"/>
+  <circle cx="142.500" cy="83.200" r="1.600" fill="#ffffff"/>
+
+  <!-- beak -->
+  <path d="M106 100 Q128 88 150 100 Q140 112 128 112 Q116 112 106 100z" fill="url(#beak)"/>
+  <path d="M110 101 Q128 107 146 101 Q138 114 128 114 Q118 114 110 101z" fill="#e07b0c"/>
+  <ellipse cx="122" cy="96" rx="9" ry="2.600" fill="#ffffff" opacity="0.45"/>
+
+  <!-- table -->
+  <path d="M26 196 Q128 172 230 196 L230 214 Q128 240 26 214z" fill="url(#wood)"/>
+  <path d="M26 196 Q128 172 230 196 Q128 220 26 196z" fill="url(#woodTop)"/>
+  <path d="M48 196 Q128 180 208 196" fill="none" stroke="#ffffff" stroke-width="2" opacity="0.25"/>
+
+  <!-- card played on the table -->
+  <g transform="translate(188 201) rotate(14) scale(1 0.42)">
+    <rect x="-21" y="-30" width="42" height="60" rx="6" fill="url(#cardBack)" stroke="#f3c64f" stroke-width="3"/>
+    <path d="M0 -14 L10 0 L0 14 L-10 0z" fill="#f3c64f"/>
+  </g>
+
+  <!-- hand of cards -->
+  <g transform="translate(98 172) rotate(-24) scale(1.150)">
+    <rect x="-20" y="-28" width="42" height="60" rx="6" fill="#000000" opacity="0.28"/>
+    <rect x="-21" y="-30" width="42" height="60" rx="6" fill="url(#card)" stroke="#b9851f" stroke-width="3.500"/>
+    <path d="M0 -15 L11 0 L0 15 L-11 0z" fill="#2f7fe8"/>
+  </g>
+  <g transform="translate(128 164) scale(1.150)">
+    <rect x="-20" y="-28" width="42" height="60" rx="6" fill="#000000" opacity="0.28"/>
+    <rect x="-21" y="-30" width="42" height="60" rx="6" fill="url(#card)" stroke="#b9851f" stroke-width="3.500"/>
+    <circle r="12" fill="#e5533a"/>
+    <circle r="5.500" fill="#fffaf0"/>
+  </g>
+  <g transform="translate(158 172) rotate(24) scale(1.150)">
+    <rect x="-20" y="-28" width="42" height="60" rx="6" fill="#000000" opacity="0.28"/>
+    <rect x="-21" y="-30" width="42" height="60" rx="6" fill="url(#card)" stroke="#b9851f" stroke-width="3.500"/>
+    <path d="M0 -15 L4.400 -4.800 L15 -4.800 L6.400 2 L9.400 12.600 L0 6.400 L-9.400 12.600 L-6.400 2 L-15 -4.800 L-4.400 -4.800z" fill="#3aa35a"/>
+  </g>
+
+  <!-- flippers holding the cards -->
+  <path d="M70 126 Q48 150 60 186 Q70 206 96 204 Q110 200 106 190 Q88 190 82 168 Q78 148 86 130z" fill="url(#body)"/>
+  <path d="M186 126 Q208 150 196 186 Q186 206 160 204 Q146 200 150 190 Q168 190 174 168 Q178 148 170 130z" fill="url(#body)"/>
+  <path d="M70 136 Q58 154 64 176" fill="none" stroke="#ffffff" stroke-width="3" stroke-linecap="round" opacity="0.2"/>
+</svg>

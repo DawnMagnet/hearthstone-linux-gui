@@ -1,4 +1,8 @@
-# hearthstone-linux-gui
+# Hearthstone Linux Launcher
+
+<p align="center">
+  <img src="data/icons/io.github.hearthstone_linux_gui.svg" alt="Tux spielt Karten: das Icon des Launchers" width="160">
+</p>
 
 <p align="center">
   <img src="docs/images/launcher-de.png" alt="hearthstone-linux-gui mit deutscher Oberfläche" width="620">
@@ -12,7 +16,8 @@
   <a href="https://github.com/DawnMagnet/hearthstone-linux-gui/releases/latest">Neueste Version</a>
 </p>
 
-**hearthstone-linux-gui** ist ein nativer GTK4-Desktop-Manager, mit dem sich
+**Hearthstone Linux Launcher** (`hearthstone-linux-gui`) ist ein
+inoffizieller, von der Community gebauter nativer GTK4-Desktop-Manager, mit dem sich
 Hearthstone unter Linux installieren, aktualisieren, anmelden und starten
 lässt. Er ist aus dem ursprünglichen Projekt
 [`hearthstone-linux`](https://github.com/0xf4b1/hearthstone-linux)
@@ -137,7 +142,7 @@ Ubuntu 22.04/24.04, Debian 12/13, Fedora, Arch und openSUSE Tumbleweed.
      Einstellungen liegen unter
      `~/.var/app/io.github.hearthstone_linux_gui/`.
    - Nix/NixOS: Installiere das native Nix-Paket auf deinem gewohnten Weg.
-4. Starte **hearthstone-linux-gui** aus dem Anwendungsmenü.
+4. Starte **Hearthstone Linux Launcher** aus dem Anwendungsmenü.
 
 Danach ist der normale Ablauf:
 

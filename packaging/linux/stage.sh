@@ -10,7 +10,7 @@ prefix="${PREFIX:-/usr}"
 target="${CARGO_TARGET_DIR:-target}/release"
 app_id=io.github.hearthstone_linux_gui
 share="$root$prefix/share/hearthstone-linux-gui"
-icon=packaging/appimage/$app_id.svg
+icon=data/icons/$app_id.svg
 
 install -Dm755 "$target/hearthstone-linux-gui" "$root$prefix/bin/hearthstone-linux-gui"
 

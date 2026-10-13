@@ -1,6 +1,10 @@
 [meta]
 name = "Deutsch"
 
+[app]
+name = "Hearthstone Linux Launcher"
+unofficial = "Inoffizieller Community-Launcher"
+
 [cli]
 about = "Nativer Linux-Manager für Hearthstone"
 help_auth_callback = "Callback-URI der Battle.net-Anmeldung im Browser."

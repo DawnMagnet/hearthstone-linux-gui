@@ -1,6 +1,10 @@
 [meta]
 name = "简体中文"
 
+[app]
+name = "炉石传说 Linux 启动器"
+unofficial = "非官方社区启动器"
+
 [cli]
 about = "原生 Linux 炉石传说管理器"
 help_auth_callback = "Battle.net 浏览器回调 URI。"

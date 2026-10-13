@@ -142,16 +142,22 @@ displayed name changes.
 - No Blizzard material: no Hearthstone logo or swirl, no card frames, card
   art, fonts or screenshots. The cards are an original design.
 - Deliverables:
-  - App icon: SVG master plus PNG 16 to 512 px, legible at 32 px (simplified
-    variant for small sizes if needed).
-  - Logo: wider variant placed in the main window directly below the title.
-  - Symbolic icon for GNOME, updated README hero image.
-- Move the icon from `packaging/appimage/` to `data/icons/` as the single
-  source for AppImage, DEB, RPM, Pacman, Flatpak and Nix.
+  - App icon as SVG in `data/icons/`, the single source for AppImage, DEB,
+    RPM, Pacman, Flatpak and Nix; the packaging scripts render the PNG sizes
+    from it.
+  - Logo in the main window directly below the title.
+  - Icon at the top of the READMEs.
 - Reference material used while designing stays outside the repository.
+- A symbolic (monochrome) icon is not needed: GNOME does not show one for
+  applications that have no notifications or status entry.
+- The current drawing is a flat vector version. A rendered 3D version in the
+  glossy mascot style can replace it later without further code changes.
 
 Done when: all package formats show the new icon and name in the application
 menu, and the logo renders correctly in light and dark mode.
+
+Status: implemented on the working branch; the packaged icon still has to be
+checked in each package format.
 
 ## 1.0.0 In-game shop
 
@@ -296,5 +302,5 @@ update of the game does not need manual changes.
    dependency.
 3. **Shop.** Decided: emulate the macOS environment for the original macOS
    library, with the Wine route only as fallback.
-4. **Display name.** Open: "Hearthstone Linux Launcher" as proposed, or
-   another name the upstream maintainer prefers.
+4. **Display name.** Decided: "Hearthstone Linux Launcher" with the subtitle
+   "Unofficial community launcher".
