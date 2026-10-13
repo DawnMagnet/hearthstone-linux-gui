@@ -3,7 +3,7 @@ use crate::{
     config::AppConfig,
     ngdp::{InstallOptions, NgdpClient},
     paths::AppPaths,
-    util,
+    tr, util,
 };
 use anyhow::{Context, Result};
 use tokio_util::sync::CancellationToken;
@@ -81,7 +81,7 @@ impl InstallManager {
             cache_dir = %self.paths.cache_dir.display(),
             "starting install/update"
         );
-        event(TaskEvent::Started("Preparing installation".into()));
+        event(TaskEvent::Started(tr!("install.preparing_installation")));
         util::check_cancelled(cancel.as_ref(), "installation cancelled")?;
 
         cleanup_installation(&self.paths.game_dir).await?;
@@ -116,7 +116,7 @@ impl InstallManager {
         util::check_cancelled(cancel.as_ref(), "installation cancelled")?;
 
         event(TaskEvent::Progress {
-            message: "Transforming macOS layout".into(),
+            message: tr!("install.transforming"),
             fraction: Some(0.96),
         });
         debug!("transforming macOS layout");
@@ -124,7 +124,7 @@ impl InstallManager {
         util::check_cancelled(cancel.as_ref(), "installation cancelled")?;
 
         event(TaskEvent::Progress {
-            message: "Installing Unity Linux player".into(),
+            message: tr!("install.unity_player"),
             fraction: Some(0.98),
         });
         debug!("installing Unity player");
@@ -144,7 +144,7 @@ impl InstallManager {
         util::check_cancelled(cancel.as_ref(), "installation cancelled")?;
 
         event(TaskEvent::Progress {
-            message: "Installing compatibility files".into(),
+            message: tr!("install.compatibility"),
             fraction: Some(0.99),
         });
         compatibility::install_compatibility_files(
@@ -157,7 +157,7 @@ impl InstallManager {
         preserve_login_metadata(config, &self.paths);
         config.save(&self.paths.config_file)?;
         info!("install/update completed");
-        event(TaskEvent::Finished("Ready to play".into()));
+        event(TaskEvent::Finished(tr!("install.ready")));
         Ok(())
     }
 }
@@ -173,26 +173,29 @@ fn preserve_login_metadata(config: &mut AppConfig, paths: &AppPaths) {
 
 fn format_unity_download_progress(progress: &unity::UnityDownloadProgress) -> String {
     let action = match progress.phase {
-        unity::UnityProgressPhase::Downloading if progress.resumed => "Resuming Unity download",
-        unity::UnityProgressPhase::Downloading => "Downloading Unity",
-        unity::UnityProgressPhase::Extracting => "Extracting Unity",
+        unity::UnityProgressPhase::Downloading if progress.resumed => {
+            tr!("progress.unity_resuming")
+        }
+        unity::UnityProgressPhase::Downloading => tr!("progress.unity_downloading"),
+        unity::UnityProgressPhase::Extracting => tr!("progress.unity_extracting"),
     };
-    let downloaded = util::format_bytes(progress.downloaded as f64);
-    let speed = if progress.speed_bytes_per_second > 0.0 {
-        format!(
-            " at {}/s",
-            util::format_bytes(progress.speed_bytes_per_second)
-        )
-    } else {
-        String::new()
-    };
+    let done = util::format_bytes(progress.downloaded as f64);
+    let speed = util::format_speed_suffix(progress.speed_bytes_per_second);
 
     match progress.total {
-        Some(total) if total > 0 => format!(
-            "{action}: {downloaded}/{}{speed}",
-            util::format_bytes(total as f64)
+        Some(total) if total > 0 => tr!(
+            "progress.with_total",
+            action = action,
+            done = done,
+            total = util::format_bytes(total as f64),
+            speed = speed
         ),
-        _ => format!("{action}: {downloaded}{speed}"),
+        _ => tr!(
+            "progress.without_total",
+            action = action,
+            done = done,
+            speed = speed
+        ),
     }
 }
 

@@ -1,9 +1,9 @@
 use super::{
     auth, browser,
     components::{
-        ActionBar, ActionBarInput, ActionBarOutput, ActionBarState, InstallState, LaunchState,
-        LoginState, SettingsOutput, SettingsPanel, SettingsPanelInput, StatusPanel,
-        StatusPanelInput, StatusPanelState,
+        preferences_menu, ActionBar, ActionBarInput, ActionBarOutput, ActionBarState,
+        InstallAction, InstallState, LaunchState, LoginState, SettingsOutput, SettingsPanel,
+        SettingsPanelInput, StatusPanel, StatusPanelInput, StatusPanelState,
     },
     status,
 };
@@ -14,6 +14,7 @@ use hearthstone_linux::{
         manager::{InstallManager, TaskEvent},
     },
     paths::AppPaths,
+    tr,
 };
 use relm4::adw::prelude::*;
 use relm4::{
@@ -73,6 +74,7 @@ struct MainWindow {
 #[derive(Clone, Debug)]
 pub enum AppMsg {
     Settings(SettingsOutput),
+    UiLanguageChanged(Option<&'static str>),
     Action(ActionBarOutput),
     InstallEvent(TaskEvent),
     UninstallFinished(Result<(), String>),
@@ -114,7 +116,7 @@ impl SimpleComponent for MainWindow {
     view! {
         main_window = adw::ApplicationWindow {
             set_title: Some("hearthstone-linux-gui"),
-            set_default_size: (620, 360),
+            set_default_size: (680, 360),
 
             #[local_ref]
             toast_overlay -> adw::ToastOverlay {
@@ -130,7 +132,7 @@ impl SimpleComponent for MainWindow {
 
                     gtk::Box {
                         set_orientation: gtk::Orientation::Vertical,
-                        set_spacing: 12,
+                        set_spacing: 18,
                         set_margin_top: 18,
                         set_margin_bottom: 18,
                         set_margin_start: 18,
@@ -145,46 +147,53 @@ impl SimpleComponent for MainWindow {
                         #[local_ref]
                         actions -> gtk::Box {},
 
-                        gtk::Box {
-                            set_orientation: gtk::Orientation::Vertical,
-                            set_spacing: 2,
-                            set_halign: gtk::Align::Center,
+                        gtk::CenterBox {
                             set_margin_top: 4,
 
-                            gtk::Box {
-                                set_orientation: gtk::Orientation::Horizontal,
-                                set_spacing: 8,
+                            #[wrap(Some)]
+                            set_center_widget = &gtk::Box {
+                                set_orientation: gtk::Orientation::Vertical,
+                                set_spacing: 2,
                                 set_halign: gtk::Align::Center,
-                                set_valign: gtk::Align::Center,
 
-                                gtk::Label {
-                                    add_css_class: relm4::css::DIM_LABEL,
-                                    set_label: COPYRIGHT_TEXT,
+                                gtk::Box {
+                                    set_orientation: gtk::Orientation::Horizontal,
+                                    set_spacing: 8,
+                                    set_halign: gtk::Align::Center,
+                                    set_valign: gtk::Align::Center,
+
+                                    gtk::Label {
+                                        add_css_class: relm4::css::DIM_LABEL,
+                                        set_label: COPYRIGHT_TEXT,
+                                    },
+
+                                    gtk::Label {
+                                        add_css_class: relm4::css::DIM_LABEL,
+                                        set_label: APP_VERSION_TEXT,
+                                    },
                                 },
 
-                                gtk::Label {
-                                    add_css_class: relm4::css::DIM_LABEL,
-                                    set_label: APP_VERSION_TEXT,
+                                gtk::LinkButton {
+                                    set_label: "github.com/DawnMagnet/hearthstone-linux-gui",
+                                    set_uri: PROJECT_URL,
+                                    set_tooltip_text: Some(PROJECT_URL),
+
+                                    // Open through our host-environment-aware
+                                    // openers instead of GTK's default handler.
+                                    connect_activate_link => move |button| {
+                                        let uri = button.uri().to_string();
+                                        std::thread::spawn(move || {
+                                            if let Err(error) = browser::open_url(&uri) {
+                                                tracing::warn!(error = %format!("{error:#}"), "failed to open project URL");
+                                            }
+                                        });
+                                        glib::Propagation::Stop
+                                    },
                                 },
                             },
 
-                            gtk::LinkButton {
-                                set_label: "github.com/DawnMagnet/hearthstone-linux-gui",
-                                set_uri: PROJECT_URL,
-                                set_tooltip_text: Some(PROJECT_URL),
-
-                                // Open through our host-environment-aware
-                                // openers instead of GTK's default handler.
-                                connect_activate_link => move |button| {
-                                    let uri = button.uri().to_string();
-                                    std::thread::spawn(move || {
-                                        if let Err(error) = browser::open_url(&uri) {
-                                            tracing::warn!(error = %format!("{error:#}"), "failed to open project URL");
-                                        }
-                                    });
-                                    glib::Propagation::Stop
-                                },
-                            },
+                            // Launcher preferences sit in the bottom right corner.
+                            set_end_widget: Some(&preferences),
                         },
                     }
                 }
@@ -213,6 +222,12 @@ impl SimpleComponent for MainWindow {
             .launch(ActionBarState::default())
             .forward(sender.input_sender(), AppMsg::Action);
         let toaster = Toaster::default();
+        let preferences = {
+            let input = sender.input_sender().clone();
+            preferences_menu(init.config.ui_language.as_deref(), move |language| {
+                input.emit(AppMsg::UiLanguageChanged(language));
+            })
+        };
 
         let model = MainWindow {
             paths: init.paths,
@@ -244,6 +259,7 @@ impl SimpleComponent for MainWindow {
     fn update(&mut self, message: Self::Input, sender: ComponentSender<Self>) {
         match message {
             AppMsg::Settings(output) => self.handle_settings(output),
+            AppMsg::UiLanguageChanged(language) => self.handle_ui_language(language),
             AppMsg::Action(output) => self.handle_action(output, sender),
             AppMsg::InstallEvent(event) => self.handle_install_event(event),
             AppMsg::UninstallFinished(result) => self.handle_uninstall_finished(result),
@@ -267,11 +283,21 @@ impl MainWindow {
                 self.config.use_discrete_gpu = use_discrete_gpu;
             }
         }
+        self.save_settings();
+        self.refresh_details();
+    }
+
+    fn handle_ui_language(&mut self, language: Option<&'static str>) {
+        self.config.ui_language = language.map(str::to_owned);
+        self.save_settings();
+        self.refresh_details();
+    }
+
+    fn save_settings(&mut self) {
         if let Err(error) = self.config.save(&self.paths.config_file) {
             tracing::error!(error = %format!("{error:#}"), "failed to save settings");
-            self.status.headline = format!("Settings save failed: {error:#}");
+            self.status.headline = tr!("settings.save_failed", error = format!("{error:#}"));
         }
-        self.refresh_details();
     }
 
     fn handle_action(&mut self, output: ActionBarOutput, sender: ComponentSender<Self>) {
@@ -295,22 +321,21 @@ impl MainWindow {
         }
 
         let action = if self.paths.game_dir.join("Bin/Hearthstone.x86_64").exists() {
-            "Update"
+            InstallAction::Update
         } else {
-            "Install"
-        }
-        .to_string();
+            InstallAction::Install
+        };
         let cancel = CancellationToken::new();
-        self.install_state = InstallState::Running(action.clone());
+        self.install_state = InstallState::Running(action);
         self.install_cancel = Some(cancel.clone());
         self.progress = ProgressState {
             visible: true,
             fraction: Some(0.0),
             text: Some("0%".into()),
         };
-        self.status.headline = "Preparing".into();
+        self.status.headline = tr!("install.preparing");
 
-        tracing::info!(action = action, "install/update requested from UI");
+        tracing::info!(?action, "install/update requested from UI");
         let paths = self.paths.clone();
         let mut config = self.config.clone();
         let cancel_for_thread = cancel.clone();
@@ -326,7 +351,7 @@ impl MainWindow {
             if let Err(error) = result {
                 tracing::error!(error = %format!("{error:#}"), "install/update failed");
                 let event = if cancel_for_thread.is_cancelled() {
-                    TaskEvent::Cancelled("Installation cancelled".into())
+                    TaskEvent::Cancelled(tr!("install.cancelled"))
                 } else {
                     TaskEvent::Failed(format!("{error:#}"))
                 };
@@ -340,13 +365,13 @@ impl MainWindow {
         if let Some(cancel) = self.install_cancel.as_ref() {
             cancel.cancel();
             self.install_state = InstallState::Stopping;
-            self.status.headline = "Stopping installation".into();
+            self.status.headline = tr!("install.stopping");
         }
     }
 
     fn handle_uninstall_pressed(&mut self, sender: ComponentSender<Self>) {
         if self.game_session.is_some() {
-            self.status.headline = "Stop the game before uninstalling".into();
+            self.status.headline = tr!("install.stop_game_first");
             self.refresh_details();
             return;
         }
@@ -358,9 +383,9 @@ impl MainWindow {
         self.progress = ProgressState {
             visible: true,
             fraction: None,
-            text: Some("Removing game files".into()),
+            text: Some(tr!("install.removing")),
         };
-        self.status.headline = "Uninstalling".into();
+        self.status.headline = tr!("install.uninstalling");
 
         tracing::info!("uninstall requested from UI");
         let paths = self.paths.clone();
@@ -383,14 +408,14 @@ impl MainWindow {
         match result {
             Ok(()) => {
                 auth::sync_config_from_disk(&self.paths, &mut self.config);
-                self.refresh_status_with_headline("Uninstalled");
-                self.toast("Uninstalled");
+                self.refresh_status_with_headline(tr!("install.uninstalled"));
+                self.toast(&tr!("install.uninstalled"));
             }
             Err(message) => {
                 tracing::error!(error = %message, "uninstall failed in UI");
-                self.status.headline = format!("Uninstall failed: {message}");
+                self.status.headline = tr!("install.uninstall_failed", error = message);
                 self.refresh_details();
-                self.toast("Uninstall failed");
+                self.toast(&tr!("install.uninstall_failed_toast"));
             }
         }
     }
@@ -420,16 +445,16 @@ impl MainWindow {
                 };
                 auth::sync_config_from_disk(&self.paths, &mut self.config);
                 self.refresh_status_with_headline(message);
-                self.toast("Ready to play");
+                self.toast(&tr!("install.ready"));
             }
             TaskEvent::Failed(message) => {
                 tracing::error!(error = %message, "install/update failed in UI");
                 self.install_state = InstallState::Idle;
                 self.install_cancel = None;
                 self.progress.visible = false;
-                self.status.headline = format!("Failed: {message}");
+                self.status.headline = tr!("install.failed", error = message);
                 self.refresh_details();
-                self.toast("Install failed");
+                self.toast(&tr!("install.failed_toast"));
             }
             TaskEvent::Cancelled(message) => {
                 tracing::info!("install/update cancelled");
@@ -446,7 +471,7 @@ impl MainWindow {
         if let Some(session) = self.login_session.take() {
             tracing::info!("login wait cancelled from UI");
             session.cancel.cancel();
-            self.status.headline = "Login cancelled".into();
+            self.status.headline = tr!("login.cancelled");
             self.refresh_details();
             return;
         }
@@ -463,11 +488,11 @@ impl MainWindow {
         match auth::mark_logged_out(&self.paths, &mut self.config) {
             Ok(()) => {
                 auth::sync_config_from_disk(&self.paths, &mut self.config);
-                self.refresh_status_with_headline("Logged out");
+                self.refresh_status_with_headline(tr!("status.logged_out"));
             }
             Err(error) => {
                 tracing::error!(error = %format!("{error:#}"), "logout failed");
-                self.status.headline = format!("Logout failed: {error:#}");
+                self.status.headline = tr!("login.logout_failed", error = format!("{error:#}"));
                 self.refresh_details();
             }
         }
@@ -478,7 +503,7 @@ impl MainWindow {
             Ok(()) => self.begin_login(sender),
             Err(error) => {
                 tracing::error!(error = %format!("{error:#}"), "failed to clear previous login");
-                self.status.headline = format!("Switch account failed: {error:#}");
+                self.status.headline = tr!("login.switch_failed", error = format!("{error:#}"));
                 self.refresh_details();
             }
         }
@@ -494,7 +519,7 @@ impl MainWindow {
         current.game_dir = Some(self.paths.game_dir.clone());
         if let Err(error) = current.save(&self.paths.config_file) {
             tracing::error!(error = %format!("{error:#}"), "failed to save login settings");
-            self.status.headline = format!("Login setup failed: {error:#}");
+            self.status.headline = tr!("login.setup_failed", error = format!("{error:#}"));
             self.refresh_details();
             return;
         }
@@ -511,10 +536,9 @@ impl MainWindow {
 
         if let Err(error) = auth::ensure_auth_scheme_handlers() {
             tracing::warn!(error = %format!("{error:#}"), "failed to register auth URI handlers");
-            self.status.headline =
-                "Login handler registration failed; opening browser login anyway".into();
+            self.status.headline = tr!("login.handler_failed");
         } else {
-            self.status.headline = "Opening browser for login…".into();
+            self.status.headline = tr!("login.opening");
         }
         self.refresh_details();
 
@@ -547,8 +571,7 @@ impl MainWindow {
         match result {
             Ok(opener) => {
                 tracing::info!(opener = %opener, "opened login URL");
-                self.status.headline =
-                    "Complete login in your browser; waiting for desktop callback".into();
+                self.status.headline = tr!("login.waiting");
             }
             Err(error) => {
                 tracing::error!(
@@ -556,8 +579,7 @@ impl MainWindow {
                     error = %error,
                     "failed to open browser login"
                 );
-                self.status.headline =
-                    "Could not open a browser. Copy the login URL below into your browser".into();
+                self.status.headline = tr!("login.no_browser");
             }
         }
         self.refresh_details();
@@ -581,8 +603,8 @@ impl MainWindow {
                 session.cancel.cancel();
             }
             auth::sync_config_from_disk(&self.paths, &mut self.config);
-            self.refresh_status_with_headline("Login complete");
-            self.toast("Login complete");
+            self.refresh_status_with_headline(tr!("login.complete"));
+            self.toast(&tr!("login.complete"));
         }
     }
 
@@ -592,12 +614,12 @@ impl MainWindow {
             match session.child.kill() {
                 Ok(()) => {
                     session.stop_requested = true;
-                    self.status.headline = "Stopping game".into();
+                    self.status.headline = tr!("game.stopping");
                     self.refresh_details();
                 }
                 Err(error) => {
                     tracing::error!(error = %error, "failed to stop game");
-                    self.status.headline = format!("Failed to stop game: {error}");
+                    self.status.headline = tr!("game.stop_failed", error = error);
                     self.refresh_details();
                 }
             }
@@ -621,14 +643,14 @@ impl MainWindow {
                     stop_requested: false,
                     output_log,
                 });
-                self.status.headline = "Game running".into();
+                self.status.headline = tr!("game.running");
                 self.refresh_details();
 
                 Self::start_poll(&sender, AppMsg::GamePoll, poll_cancel);
             }
             Err(error) => {
                 tracing::error!(error = %format!("{error:#}"), "launch failed");
-                self.status.headline = format!("Launch failed: {error:#}");
+                self.status.headline = tr!("game.launch_failed", error = format!("{error:#}"));
                 self.refresh_details();
             }
         }
@@ -664,9 +686,9 @@ impl MainWindow {
                     Some(message) => {
                         tracing::warn!(%message, "game exited unexpectedly");
                         self.status.headline = message;
-                        self.toast("Game exited unexpectedly");
+                        self.toast(&tr!("game.exited_toast"));
                     }
-                    None => self.status.headline = "Game stopped".into(),
+                    None => self.status.headline = tr!("game.stopped"),
                 }
                 self.refresh_details();
             }
@@ -675,7 +697,7 @@ impl MainWindow {
                 tracing::error!(error = %error, "failed to poll game process");
                 session.poll_cancel.cancel();
                 self.game_session = None;
-                self.status.headline = format!("Game status error: {error}");
+                self.status.headline = tr!("game.status_error", error = error);
                 self.refresh_details();
             }
         }
@@ -732,10 +754,10 @@ impl MainWindow {
     }
 
     fn launch_state(&self) -> LaunchState {
-        match self.status.headline.as_str() {
-            "Stopping game" if self.game_session.is_some() => LaunchState::Stopping,
-            _ if self.game_session.is_some() => LaunchState::Running,
-            _ => LaunchState::Idle,
+        match self.game_session.as_ref() {
+            Some(session) if session.stop_requested => LaunchState::Stopping,
+            Some(_) => LaunchState::Running,
+            None => LaunchState::Idle,
         }
     }
 

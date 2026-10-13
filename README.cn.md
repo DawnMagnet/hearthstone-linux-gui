@@ -7,6 +7,8 @@
 <p align="center">
   <a href="README.md">English README</a>
   ·
+  <a href="README.de.md">Deutsch</a>
+  ·
   <a href="https://github.com/DawnMagnet/hearthstone-linux-gui/releases/latest">最新发布版</a>
 </p>
 
@@ -110,7 +112,7 @@ AppImage 使用固定版本的 **linuxdeploy** / **appimagetool** / **type2-runt
 
 应用打开后的正常流程是：
 
-1. 选择 **Region** 和 **Locale**。
+1. 选择**区服**和**游戏语言**。首次启动时会根据系统语言自动预选。
 2. 点击 **Install / Update**。
 3. 点击 **Login**，在浏览器里完成 Battle.net 登录。
 4. 回到应用，点击 **Play**。
@@ -303,6 +305,12 @@ shader 变体导致的,无法在启动器运行时修复,详见
 **Use discrete GPU** 可能有效。
 
 发布版本默认只输出 INFO 级别及以上日志。开发者本地排障时，可以使用标准 `RUST_LOG` 环境变量开启更详细日志。
+
+## 界面翻译
+
+界面文本位于 `locales/<语言>.toml`，并在构建时编译进二进制文件；英文（`en.toml`）是基准语言和回退语言。目前提供英文、德文和简体中文，启动器默认跟随系统语言，也可以在右下角的齿轮菜单中切换（重启后生效）。要添加新语言，请复制
+`en.toml`、翻译其中的值，并在 `src/i18n.rs` 中注册该文件。`cargo test`
+会报告缺失、未知或未使用的键，以及与英文目录不一致的占位符。
 
 ## 法律说明
 

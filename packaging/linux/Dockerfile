@@ -75,6 +75,7 @@ COPY Cargo.toml Cargo.lock ./
 COPY assets ./assets
 COPY crates ./crates
 COPY data ./data
+COPY locales ./locales
 COPY packaging ./packaging
 COPY src ./src
 COPY tests ./tests

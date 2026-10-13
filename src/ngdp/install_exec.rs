@@ -6,7 +6,7 @@ use super::{
     local_manifest::InstalledFileRecord,
     verify_md5, ProgressUpdate,
 };
-use crate::util;
+use crate::{tr, util};
 use anyhow::{Context, Result};
 use std::{
     path::{Path, PathBuf},
@@ -123,7 +123,7 @@ pub(super) async fn install_entries_parallel(
         }
     }
 
-    progress(ProgressUpdate::new("Installed Hearthstone files", 0.95));
+    progress(ProgressUpdate::new(tr!("ngdp.installed"), 0.95));
     Ok(installed)
 }
 
@@ -140,18 +140,14 @@ fn emit_install_progress(
         .saturating_add(in_flight_bytes)
         .min(total_bytes);
     let fraction = visible_bytes as f64 / total_bytes as f64;
-    let speed = if speed_bytes_per_second > 0.0 {
-        format!(" at {}/s", util::format_bytes(speed_bytes_per_second))
-    } else {
-        String::new()
-    };
     progress(ProgressUpdate::new(
-        format!(
-            "Downloading Hearthstone: {}/{} files, {}/{}{speed}",
-            completed_files,
-            total_files,
-            util::format_bytes(visible_bytes as f64),
-            util::format_bytes(total_bytes as f64)
+        tr!(
+            "ngdp.downloading",
+            files = completed_files,
+            total_files = total_files,
+            done = util::format_bytes(visible_bytes as f64),
+            total = util::format_bytes(total_bytes as f64),
+            speed = util::format_speed_suffix(speed_bytes_per_second)
         ),
         0.35 + fraction * 0.60,
     ));

@@ -1,5 +1,5 @@
 use super::{partition_hash, verify_md5};
-use crate::{download, util};
+use crate::{download, tr, util};
 use anyhow::{Context, Result};
 use std::{
     io::{ErrorKind, SeekFrom},
@@ -71,7 +71,7 @@ impl RemoteCdn {
     pub fn last_transfer_label(&self) -> Option<String> {
         let stats = self.last_transfer.lock().ok()?.clone()?;
         if stats.from_cache {
-            return Some("cache".to_string());
+            return Some(tr!("ngdp.from_cache"));
         }
 
         let seconds = stats.elapsed.as_secs_f64();

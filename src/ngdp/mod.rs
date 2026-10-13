@@ -10,7 +10,7 @@ pub mod installfile;
 mod local_manifest;
 pub mod psv;
 
-use crate::{util, Locale, Region};
+use crate::{tr, util, Locale, Region};
 use anyhow::{Context, Result};
 use cdn::RemoteCdn;
 use configfile::{BuildConfig, CdnConfig};
@@ -178,10 +178,7 @@ impl NgdpClient {
             verify = options.verify,
             "starting NGDP install"
         );
-        progress(ProgressUpdate::new(
-            "Checking latest Hearthstone version",
-            0.02,
-        ));
+        progress(ProgressUpdate::new(tr!("ngdp.checking_version"), 0.02));
         let version = self.latest_version(options.region).await?;
         check_cancelled(cancel.as_ref())?;
 
@@ -195,7 +192,7 @@ impl NgdpClient {
         debug!(cdn = %options.region.default_cdn(), "configured CDN");
 
         progress(ProgressUpdate::new(
-            format!("Fetching build config {}", version.build_config),
+            tr!("ngdp.build_config", id = version.build_config),
             0.06,
         ));
         let build_config = BuildConfig::parse(
@@ -215,7 +212,7 @@ impl NgdpClient {
         check_cancelled(cancel.as_ref())?;
 
         progress(ProgressUpdate::new(
-            format!("Fetching CDN config {}", version.cdn_config),
+            tr!("ngdp.cdn_config", id = version.cdn_config),
             0.10,
         ));
         let cdn_config = CdnConfig::parse(
@@ -230,13 +227,13 @@ impl NgdpClient {
         );
         check_cancelled(cancel.as_ref())?;
 
-        progress(ProgressUpdate::new("Fetching encoding table", 0.14));
+        progress(ProgressUpdate::new(tr!("ngdp.encoding_table"), 0.14));
         let encoding = self
             .fetch_encoding(&cdn, &build_config, options.verify)
             .await?;
         check_cancelled(cancel.as_ref())?;
 
-        progress(ProgressUpdate::new("Fetching install manifest", 0.18));
+        progress(ProgressUpdate::new(tr!("ngdp.install_manifest"), 0.18));
         let install = self
             .fetch_install_manifest(&cdn, &build_config, &encoding, options.verify)
             .await?;
@@ -250,7 +247,7 @@ impl NgdpClient {
             "filtered install manifest"
         );
         progress(ProgressUpdate::new(
-            format!("Checking {} local files", entries.len()),
+            tr!("ngdp.checking_files", count = entries.len()),
             0.22,
         ));
 
@@ -300,10 +297,7 @@ impl NgdpClient {
         );
 
         if install_scan.missing.is_empty() {
-            progress(ProgressUpdate::new(
-                "All Hearthstone files are already present",
-                0.95,
-            ));
+            progress(ProgressUpdate::new(tr!("ngdp.all_present"), 0.95));
             let manifest = InstalledManifest::for_version(&version, options, install_scan.records);
             let desired_paths = manifest.desired_paths();
             manifest.save(out_dir).await?;
@@ -312,7 +306,10 @@ impl NgdpClient {
         }
 
         progress(ProgressUpdate::new(
-            format!("Downloading {} changed files", install_scan.missing.len()),
+            tr!(
+                "ngdp.downloading_changed",
+                count = install_scan.missing.len()
+            ),
             0.24,
         ));
         let archive_map =

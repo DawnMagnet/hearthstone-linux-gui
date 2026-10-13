@@ -69,6 +69,13 @@ impl AppPaths {
     }
 }
 
+/// Location of `config.toml` under the preferred XDG config directory.
+/// Unlike [`AppPaths::discover`] this creates nothing on disk.
+pub fn preferred_config_file() -> Option<PathBuf> {
+    ProjectDirs::from("io.github", APP_DIR, APP_DIR)
+        .map(|dirs| dirs.config_dir().join("config.toml"))
+}
+
 fn writable_dir(kind: &str, preferred: &Path, fallback: Option<PathBuf>) -> Result<PathBuf> {
     match ensure_writable_dir(preferred) {
         Ok(()) => Ok(preferred.to_path_buf()),

@@ -50,6 +50,7 @@
               "assets"
               "crates"
               "data"
+              "locales"
               "src"
             ];
         };

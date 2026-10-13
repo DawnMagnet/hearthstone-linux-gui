@@ -1,4 +1,5 @@
 use super::{blte, cdn::RemoteCdn, configfile::CdnConfig, verify_md5};
+use crate::tr;
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use tracing::{debug, trace};
@@ -55,20 +56,21 @@ impl ArchiveMap {
                 idx as f64 / config.archives.len() as f64
             };
             progress(
-                format!(
-                    "Reading archive index {}/{}",
-                    idx + 1,
-                    config.archives.len()
+                tr!(
+                    "ngdp.archive_reading",
+                    current = idx + 1,
+                    total = config.archives.len()
                 ),
                 Some(fraction),
             );
             let index = cdn.fetch_data_index(archive_key, verify).await?;
             if let Some(transfer) = cdn.last_transfer_label() {
                 progress(
-                    format!(
-                        "Read archive index {}/{} ({transfer})",
-                        idx + 1,
-                        config.archives.len()
+                    tr!(
+                        "ngdp.archive_read",
+                        current = idx + 1,
+                        total = config.archives.len(),
+                        transfer = transfer
                     ),
                     Some(fraction),
                 );
@@ -91,7 +93,7 @@ impl ArchiveMap {
                 );
             }
         }
-        progress("Archive indices ready".into(), Some(1.0));
+        progress(tr!("ngdp.archive_ready"), Some(1.0));
         debug!(item_count = map.len(), "archive map ready");
 
         Ok(Self { items: map })
