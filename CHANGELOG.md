@@ -8,7 +8,7 @@
   "Unofficial community launcher" in the window title, the desktop entry and
   the AppStream metadata. Binary name, package name and application ID are
   unchanged.
-- New icon and logo: Tux playing cards at a table, an original drawing
+- New icon and logo: Tux playing cards at a table in a tavern, an original drawing
   without Blizzard material. The logo is shown below the window title.
 - The launcher is translatable. All interface texts, progress messages and
   command-line help come from locale catalogs in `locales/`, which are

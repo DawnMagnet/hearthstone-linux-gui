@@ -137,7 +137,8 @@ displayed name changes.
 
 ### Logo and icon
 
-- Motif: Tux playing cards at a tavern table. Tux only; glossy, rounded 3D
+- Motif: Tux playing cards at a table inside a tavern (fireplace, window,
+  lanterns). Tux is the only character; glossy, rounded 3D
   mascot style consistent with the author's other apps, slightly varied.
 - No Blizzard material: no Hearthstone logo or swirl, no card frames, card
   art, fonts or screenshots. The cards are an original design.

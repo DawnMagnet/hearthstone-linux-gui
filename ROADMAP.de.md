@@ -147,7 +147,8 @@ Login-Handler weiter funktionieren. Es ändert sich nur der angezeigte Name.
 
 ### Logo und Icon
 
-- Motiv: Tux spielt Karten an einem Tavernentisch. Nur Tux; glänzender,
+- Motiv: Tux spielt Karten an einem Tisch im Wirtshaus (Kamin, Fenster,
+  Laternen). Tux ist die einzige Figur; glänzender,
   runder 3D-Maskottchenstil, passend zu den anderen Apps des Autors, leicht
   abgewandelt.
 - Kein Blizzard-Material: kein Hearthstone-Logo oder -Wirbel, keine
