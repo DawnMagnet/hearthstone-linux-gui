@@ -4,9 +4,23 @@ name: Packaging
 # (glibc 2.34) and smoke-tests it on the oldest and newest mainstream
 # distributions. Smoke also runs the hidden --print-child-env probe so
 # AppImage children do not inherit bundled LD_LIBRARY_PATH / GTK paths.
+#
+# To keep pull requests quick, documentation-only and Nix-only changes skip
+# this workflow, the EL9 toolchain layer comes from the GitHub Actions layer
+# cache, and pull requests smoke-test one distribution per package format
+# (rpm, deb, pacman). Pushes to master and manual runs use the full matrix.
 
 on:
   pull_request:
+    paths-ignore:
+      - "**.md"
+      - docs/**
+      - LICENSE
+      - flake.nix
+      - flake.lock
+      - .envrc
+      - .github/workflows/flatpak.yml
+      - .github/workflows/release.yml
   push:
     branches:
       - master
@@ -27,15 +41,32 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - uses: docker/setup-buildx-action@v3
+
+      # dnf, rustup and nfpm rarely change; cache that layer on its own so a
+      # source-only commit does not reinstall the whole toolchain. A failed
+      # cache export (for example on fork pull requests) must not fail the run.
+      - name: Cache EL9 toolchain layer
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: packaging/linux/Dockerfile
+          target: toolchain
+          outputs: type=cacheonly
+          cache-from: type=gha,scope=el9-toolchain
+          cache-to: type=gha,mode=max,scope=el9-toolchain,ignore-error=true
+
       - name: Build deb, rpm, pacman and AppImage
-        run: |
-          set -euo pipefail
-          docker build \
-            -f packaging/linux/Dockerfile \
-            --target dist \
-            --output type=local,dest=dist \
-            .
-          ls -l dist
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: packaging/linux/Dockerfile
+          target: dist
+          outputs: type=local,dest=dist
+          cache-from: type=gha,scope=el9-toolchain
+
+      - name: List packages
+        run: ls -l dist
 
       - uses: actions/upload-artifact@v4
         with:
@@ -52,17 +83,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image:
-          # Oldest supported baselines (glibc 2.34 / 2.35 / 2.36).
-          - almalinux:9
-          - ubuntu:22.04
-          - debian:12
-          # Current releases.
-          - ubuntu:24.04
-          - debian:13
-          - fedora:latest
-          - archlinux:latest
-          - opensuse/tumbleweed:latest
+        # Pull requests: the EL9 baseline (rpm), a current deb distribution and
+        # Arch (pacman). Everything else: oldest baselines (glibc 2.34 / 2.35 /
+        # 2.36) and current releases.
+        image: ${{ fromJSON(github.event_name == 'pull_request'
+          && '["almalinux:9","ubuntu:24.04","archlinux:latest"]'
+          || '["almalinux:9","ubuntu:22.04","debian:12","ubuntu:24.04","debian:13","fedora:latest","archlinux:latest","opensuse/tumbleweed:latest"]') }}
     container:
       image: ${{ matrix.image }}
     steps:
