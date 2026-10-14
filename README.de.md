@@ -51,7 +51,7 @@ lässt.
   aus einem GTK4-Fenster.
 - **Übersetzte Oberfläche**: Englisch, Deutsch und vereinfachtes Chinesisch;
   der Launcher folgt der Systemsprache und lässt sich über das Zahnradmenü
-  unten rechts umstellen.
+  oben rechts umstellen.
 - **GameMode und MangoHud**: Optionale Schalter starten das Spiel über
   `gamemoderun` und mit dem MangoHud-Overlay, sofern beides installiert ist.
 - **Editor für Spieleinstellungen**: Bildratenbegrenzung, VSync und
