@@ -147,10 +147,23 @@ impl InstallManager {
             message: tr!("install.compatibility"),
             fraction: Some(0.99),
         });
+        let overrides = match std::fs::read_to_string(self.paths.client_config_overrides()) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "failed to read {}",
+                        self.paths.client_config_overrides().display()
+                    )
+                })
+            }
+        };
         compatibility::install_compatibility_files(
             &self.paths.game_dir,
             config.region,
             config.locale,
+            &overrides,
         )?;
 
         config.game_dir = Some(self.paths.game_dir.clone());
@@ -250,18 +263,23 @@ mod tests {
         let paths = paths_in(dir.path());
 
         // The install started from this copy ...
-        let mut install = AppConfig::default();
-        install.installed_version = Some("1.2.3".into());
-        install.game_dir = Some(paths.game_dir.clone());
+        let install = AppConfig {
+            installed_version: Some("1.2.3".into()),
+            game_dir: Some(paths.game_dir.clone()),
+            ..AppConfig::default()
+        };
 
         // ... while the user changed settings in the window.
-        let mut edited = AppConfig::default();
-        edited.use_discrete_gpu = true;
-        edited.use_gamemode = true;
-        edited.ui_language = Some("de".into());
-        edited.logged_in = true;
-        edited.last_login_at = Some("yesterday".into());
-        edited.save(&paths.config_file).unwrap();
+        AppConfig {
+            use_discrete_gpu: true,
+            use_gamemode: true,
+            ui_language: Some("de".into()),
+            logged_in: true,
+            last_login_at: Some("yesterday".into()),
+            ..AppConfig::default()
+        }
+        .save(&paths.config_file)
+        .unwrap();
 
         let merged = merge_into_saved_settings(&install, &paths);
         assert!(merged.use_discrete_gpu && merged.use_gamemode);
@@ -276,8 +294,10 @@ mod tests {
     fn install_result_stands_without_a_saved_config() {
         let dir = tempfile::tempdir().unwrap();
         let paths = paths_in(dir.path());
-        let mut install = AppConfig::default();
-        install.installed_version = Some("1.2.3".into());
+        let install = AppConfig {
+            installed_version: Some("1.2.3".into()),
+            ..AppConfig::default()
+        };
 
         let merged = merge_into_saved_settings(&install, &paths);
         assert_eq!(merged.installed_version.as_deref(), Some("1.2.3"));

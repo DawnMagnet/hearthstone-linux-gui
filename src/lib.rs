@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod config;
 pub mod download;
+pub mod game_options;
 pub mod host_env;
 pub mod i18n;
 pub mod install;

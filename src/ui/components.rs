@@ -629,17 +629,31 @@ fn index_of<T: Copy + Eq>(items: &[T], value: T) -> Option<usize> {
     items.iter().position(|item| *item == value)
 }
 
-/// Gear menu with launcher-level preferences: the UI language, each with its
-/// flag. `current` is the saved choice, `None` meaning the system language.
+/// Gear menu: the game settings dialog and the UI language, each language
+/// with its flag. `current` is the saved language, `None` meaning the system
+/// language.
 pub fn preferences_menu(
     current: Option<&str>,
+    on_game_settings: impl Fn() + 'static,
     on_language: impl Fn(Option<&'static str>) + 'static,
-) -> gtk::MenuButton {
+) -> PreferencesMenu {
     let content = gtk::Box::new(gtk::Orientation::Vertical, 6);
     content.set_margin_top(10);
     content.set_margin_bottom(10);
     content.set_margin_start(10);
     content.set_margin_end(10);
+
+    let popover = gtk::Popover::new();
+    let game_settings = gtk::Button::with_label(&tr!("game_settings.menu"));
+    {
+        let popover = popover.clone();
+        game_settings.connect_clicked(move |_| {
+            popover.popdown();
+            on_game_settings();
+        });
+    }
+    content.append(&game_settings);
+    content.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
 
     let title = gtk::Label::new(Some(&tr!("settings.language")));
     title.add_css_class(relm4::css::HEADING);
@@ -696,17 +710,25 @@ pub fn preferences_menu(
     hint.add_css_class(relm4::css::CAPTION);
     content.append(&hint);
 
-    let popover = gtk::Popover::new();
     popover.set_child(Some(&content));
 
     let button = gtk::MenuButton::new();
     button.set_icon_name("emblem-system-symbolic");
-    button.set_tooltip_text(Some(&tr!("settings.language")));
+    button.set_tooltip_text(Some(&tr!("settings.menu")));
     button.set_direction(gtk::ArrowType::Up);
     button.set_valign(gtk::Align::End);
     button.add_css_class(relm4::css::FLAT);
     button.set_popover(Some(&popover));
-    button
+    PreferencesMenu {
+        button,
+        game_settings,
+    }
+}
+
+/// The gear button and the entries the main window keeps updating.
+pub struct PreferencesMenu {
+    pub button: gtk::MenuButton,
+    pub game_settings: gtk::Button,
 }
 
 /// Decodes one of the embedded flag PNGs. PNG support is built into

@@ -14,6 +14,7 @@ use relm4::gtk::{
     glib,
 };
 use std::{
+    path::Path,
     process::{Child, Command},
     time::{Duration, Instant},
 };
@@ -26,8 +27,9 @@ const OPENER_GRACE: Duration = Duration::from_millis(1500);
 /// D-Bus-activated first, so this is a bit longer than the opener grace.
 const PORTAL_TIMEOUT_MS: i32 = 5000;
 
-/// Command-line openers, tried in order after `$BROWSER` and the portal.
-const OPENERS: &[(&str, &[&str])] = &[
+/// Command-line openers for the desktop's default handler, tried in order
+/// after `$BROWSER` and the portal; they also open local files.
+const DESKTOP_OPENERS: &[(&str, &[&str])] = &[
     ("xdg-open", &[]),
     ("gio", &["open"]),
     ("kioclient", &["exec"]),
@@ -36,6 +38,10 @@ const OPENERS: &[(&str, &[&str])] = &[
     ("kde-open", &[]),
     ("exo-open", &[]),
     ("gvfs-open", &[]),
+];
+
+/// Web browsers started directly as a last resort for URLs.
+const BROWSER_OPENERS: &[(&str, &[&str])] = &[
     ("sensible-browser", &[]),
     ("firefox", &[]),
     ("firefox-esr", &[]),
@@ -73,18 +79,56 @@ pub fn open_url(url: &str) -> anyhow::Result<String> {
         }
     }
 
-    for (command, args) in OPENERS {
+    for openers in [DESKTOP_OPENERS, BROWSER_OPENERS] {
+        if let Some(opener) = run_openers(openers, url, &mut errors) {
+            return Ok(opener);
+        }
+    }
+    if let Some(opener) = open_with_gio(url, &mut errors) {
+        return Ok(opener);
+    }
+
+    anyhow::bail!("could not open a browser ({})", errors.join("; "))
+}
+
+/// Opens a local file with the desktop's default application, for example a
+/// text editor for `options.txt`. Unlike [`open_url`] it never falls back to
+/// `$BROWSER` or a web browser, which would only display the file.
+///
+/// Blocks like [`open_url`], so call it off the GTK main thread.
+pub fn open_file(path: &Path) -> anyhow::Result<String> {
+    let mut errors = Vec::new();
+    if let Some(opener) = run_openers(DESKTOP_OPENERS, &path.to_string_lossy(), &mut errors) {
+        return Ok(opener);
+    }
+    if let Some(opener) = open_with_gio(&gio::File::for_path(path).uri(), &mut errors) {
+        return Ok(opener);
+    }
+    anyhow::bail!("could not open {} ({})", path.display(), errors.join("; "))
+}
+
+/// Runs each opener with `target` until one accepts it.
+fn run_openers(
+    openers: &[(&str, &[&str])],
+    target: &str,
+    errors: &mut Vec<String>,
+) -> Option<String> {
+    for (command, args) in openers {
         let mut process = host_env::host_command(command);
-        process.args(*args).arg(url);
+        process.args(*args).arg(target);
         match try_launch(process) {
-            Ok(()) => return Ok((*command).to_string()),
+            Ok(()) => return Some((*command).to_string()),
             Err(error) => {
-                tracing::debug!(opener = command, %error, "browser opener failed");
+                tracing::debug!(opener = command, %error, "opener failed");
                 errors.push(format!("{command}: {error}"));
             }
         }
     }
+    None
+}
 
+/// GIO's default handler for `uri`, started with the host environment.
+fn open_with_gio(uri: &str, errors: &mut Vec<String>) -> Option<String> {
     let context = gio::AppLaunchContext::new();
     for var in host_env::host_vars() {
         match var {
@@ -92,12 +136,13 @@ pub fn open_url(url: &str) -> anyhow::Result<String> {
             HostVar::Unset(name) => context.unsetenv(name),
         }
     }
-    match gio::AppInfo::launch_default_for_uri(url, Some(&context)) {
-        Ok(()) => return Ok("GIO default handler".into()),
-        Err(error) => errors.push(format!("gio: {error}")),
+    match gio::AppInfo::launch_default_for_uri(uri, Some(&context)) {
+        Ok(()) => Some("GIO default handler".into()),
+        Err(error) => {
+            errors.push(format!("gio: {error}"));
+            None
+        }
     }
-
-    anyhow::bail!("could not open a browser ({})", errors.join("; "))
 }
 
 /// Asks `org.freedesktop.portal.OpenURI` to open `url`.
