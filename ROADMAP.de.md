@@ -6,9 +6,8 @@ Ausgangspunkt ist v0.2.3: ein GTK4/libadwaita-Launcher (Rust, relm4), der die
 macOS-Spieldaten über NGDP installiert, sie mit dem Linux-Unity-Player
 kombiniert, den Battle.net-Login abwickelt und das Spiel startet. Dieser
 Fahrplan führt in vier Releases zu 1.0. Jedes Release ist für sich nutzbar.
-Die Releases 0.3.0 bis 0.5.0 entstehen auf einem Branch und werden als ein
-gemeinsamer Pull Request an Upstream gestellt, sobald 0.5.0 fertig ist; der
-Shop folgt getrennt.
+Die Releases 0.3.0 bis 0.5.0 gehen als Reihe kleiner, fokussierter Pull
+Requests an Upstream; der Shop folgt getrennt.
 
 | Release | Thema | Umfang |
 | --- | --- | --- |
@@ -50,7 +49,7 @@ Fallback; Deutsch ist vollständig.
   ein echtes Zustandsfeld ersetzt, sonst bricht die Logik in jeder anderen
   Sprache.
 - Die Oberflächensprache folgt der Systemsprache. Sie lässt sich über ein
-  Zahnradmenü unten rechts umstellen, das jede Sprache mit ihrer Flagge
+  Zahnradmenü oben rechts umstellen, das jede Sprache mit ihrer Flagge
   zeigt (als mitgelieferte Grafik, nicht als Emoji, damit es nicht von
   installierten Schriften abhängt). Sie ist unabhängig von der bereits
   vorhandenen Spielsprache.
@@ -65,7 +64,7 @@ Fallback; Deutsch ist vollständig.
 - Chinesisch wird als dritter Katalog mitgepflegt; neben das vorhandene
   chinesische README kommen `README.de.md` und ein deutscher Screenshot.
 
-Stand: auf dem Arbeitsbranch umgesetzt.
+Stand: upstream zusammengeführt (#29).
 
 Fertig, wenn: Die App läuft mit `LANG=de_DE.UTF-8` vollständig auf Deutsch,
 fällt bei einer nicht unterstützten Sprache auf Englisch zurück, und der
@@ -125,8 +124,9 @@ Fertig, wenn: Bildrate und VSync lassen sich im Launcher ändern, die Änderung
 ist im Spiel sichtbar (mit dem MangoHud-Overlay geprüft) und übersteht ein
 Update.
 
-Stand: auf dem Arbeitsbranch umgesetzt. Das Schreiben der Dateien ist
-geprüft; die Wirkung im laufenden Spiel muss noch bestätigt werden.
+Stand: upstream zusammengeführt (#30, #31). Die Bildratenbegrenzung wurde
+im laufenden Spiel mit dem MangoHud-Overlay geprüft; `vsync=0` schien zu
+wirken, wurde aber nicht gemessen.
 
 ## 0.5.0 Name, Logo und Icon
 
@@ -171,8 +171,10 @@ Fertig, wenn: Alle Paketformate zeigen das neue Icon und den neuen Namen im
 Anwendungsmenü, und das Logo wird im hellen und dunklen Modus korrekt
 dargestellt.
 
-Stand: auf dem Arbeitsbranch umgesetzt; das paketierte Icon muss noch in
-jedem Paketformat geprüft werden.
+Stand: Name, Logo und Icon sind upstream vorgeschlagen; Fensterlayout und
+Update-Prüfung folgen als eigene Pull Requests. Das Icon erscheint im DEB
+aus `packaging/appimage/build.sh` korrekt; die anderen Paketformate müssen
+noch geprüft werden.
 
 ## 1.0.0 Ingame-Shop
 
@@ -324,9 +326,9 @@ lässt, und ein Spielupdate erfordert keine Handarbeit.
 
 ## Entscheidungen
 
-1. **Repository.** Entschieden: Die Arbeit geht an das Upstream-Projekt. Die
-   Releases 0.3.0 bis 0.5.0 kommen in einen Pull Request, sobald 0.5.0 fertig
-   ist. Projekt-URL, Copyright-Zeile und Anwendungs-ID bleiben, wie sie sind.
+1. **Repository.** Entschieden: Die Arbeit geht als Reihe fokussierter Pull
+   Requests an das Upstream-Projekt. Projekt-URL, Copyright-Zeile und
+   Anwendungs-ID bleiben, wie sie sind.
 2. **Katalogformat.** Entschieden: in die Binärdatei eingebettete Kataloge,
    keine neue Abhängigkeit.
 3. **Shop.** Entschieden: die macOS-Umgebung für die originale

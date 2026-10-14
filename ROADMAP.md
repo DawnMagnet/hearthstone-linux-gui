@@ -6,8 +6,8 @@ Starting point is v0.2.3: a GTK4/libadwaita launcher (Rust, relm4) that
 installs the macOS game data through NGDP, pairs it with the Linux Unity
 player, handles the Battle.net login and starts the game. This roadmap takes it
 to 1.0 in four releases. Each release is usable on its own. Releases 0.3.0 to
-0.5.0 are developed on one branch and proposed upstream as a single pull
-request once 0.5.0 is complete; the shop follows separately.
+0.5.0 are proposed upstream as a series of small, focused pull requests; the
+shop follows separately.
 
 | Release | Theme | Size |
 | --- | --- | --- |
@@ -48,7 +48,7 @@ German ships complete.
   headline text (`"Stopping game"`). Replace that with a real state field
   before translating, otherwise the logic breaks in every other language.
 - UI language follows the system locale. It can be overridden in a gear menu
-  in the bottom right corner, which lists each language with its flag (shipped
+  at the top right, which lists each language with its flag (shipped
   as graphics, not emoji, so it does not depend on installed fonts). It is
   independent of the game language that already exists.
 - On first start, region and game language are preselected from the system
@@ -62,7 +62,7 @@ German ships complete.
 - Chinese is kept in sync as a third catalog; add `README.de.md` and a German
   screenshot next to the existing Chinese README.
 
-Status: implemented on the working branch.
+Status: merged upstream (#29).
 
 Done when: the app runs fully in German with `LANG=de_DE.UTF-8`, falls back to
 English for an unsupported locale, and the catalog test is part of CI.
@@ -116,8 +116,9 @@ Done when: frame rate and VSync can be changed from the launcher, the change
 is visible in the game (verified with the MangoHud overlay), and survives an
 update.
 
-Status: implemented on the working branch. Writing the files is verified;
-the effect inside the running game still has to be confirmed.
+Status: merged upstream (#30, #31). The frame-rate limit was verified in
+the running game with the MangoHud overlay; `vsync=0` appeared to take effect
+but was not measured.
 
 ## 0.5.0 Name, logo and icon
 
@@ -157,8 +158,10 @@ displayed name changes.
 Done when: all package formats show the new icon and name in the application
 menu, and the logo renders correctly in light and dark mode.
 
-Status: implemented on the working branch; the packaged icon still has to be
-checked in each package format.
+Status: name, logo and icon are proposed upstream; the window layout and the
+update check follow as separate pull requests. The icon renders correctly in
+the DEB built by `packaging/appimage/build.sh`; the other package formats
+still have to be checked.
 
 ## 1.0.0 In-game shop
 
@@ -296,9 +299,9 @@ update of the game does not need manual changes.
 
 ## Decisions
 
-1. **Repository.** Decided: the work is contributed to the upstream project.
-   Releases 0.3.0 to 0.5.0 go in one pull request once 0.5.0 is complete.
-   Project URL, copyright line and application ID stay as they are.
+1. **Repository.** Decided: the work is contributed to the upstream project
+   as a series of focused pull requests. Project URL, copyright line and
+   application ID stay as they are.
 2. **Catalog format.** Decided: catalogs embedded in the binary, no new
    dependency.
 3. **Shop.** Decided: emulate the macOS environment for the original macOS
