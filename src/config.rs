@@ -166,6 +166,10 @@ pub struct AppConfig {
     /// Start the game with the MangoHud overlay (`mangohud`).
     #[serde(default)]
     pub use_mangohud: bool,
+    /// Look for a newer launcher release at startup and point to its page.
+    /// Off by default: it contacts GitHub.
+    #[serde(default)]
+    pub check_for_updates: bool,
     /// Launcher UI language; `None` follows the system locale.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ui_language: Option<String>,
@@ -184,6 +188,7 @@ impl Default for AppConfig {
             use_discrete_gpu: false,
             use_gamemode: false,
             use_mangohud: false,
+            check_for_updates: false,
             ui_language: None,
         }
     }

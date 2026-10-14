@@ -34,6 +34,13 @@
   locked while the game runs because the game rewrites the file on exit.
 - Additional `client.config` entries are stored outside the game directory
   and re-applied on every Install / Update instead of being overwritten.
+- Optional update check, **off by default** (switch in the gear menu). When
+  it is on and a newer launcher release exists, a glowing upgrade button
+  appears below the gear menu and opens that release's page, which says how
+  to get it for each package format. Nothing is downloaded or installed by
+  the launcher, and the answer is reused for six hours. Packagers whose
+  distribution upgrades the launcher itself can build with
+  `HEARTHSTONE_LINUX_NO_UPDATE_CHECK=1` to remove the feature.
 - Translated desktop entry comment and AppStream summary and description.
 - German README (`README.de.md`).
 

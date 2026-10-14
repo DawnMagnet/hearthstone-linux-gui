@@ -31,6 +31,7 @@ version_missing = "未安装"
 details = "登录：{login} · {region} / {locale}\n游戏：{game} · Unity：{unity}"
 
 [settings]
+auto_update = "启动时检查启动器更新"
 region = "服务器区域"
 game_language = "游戏语言"
 language = "启动器语言"
@@ -142,6 +143,10 @@ missing_unity_player = "缺少 UnityPlayer.so；请运行“安装 / 更新”�
 missing_mono = "缺少 Unity Mono 运行时；请运行“安装 / 更新”以修复 Unity 运行时"
 missing_token = "缺少登录令牌"
 missing_client_config = "缺少 client.config"
+
+[update]
+available_tooltip = "启动器 {version} 可用；打开下载页面"
+failed = "无法打开下载页面：{error}"
 
 [game_settings]
 menu = "游戏设置…"

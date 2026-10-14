@@ -3,7 +3,7 @@ use hearthstone_linux::{
     config::{AppConfig, Locale, Region},
     host_env, i18n,
     install::launcher::LaunchTool,
-    tr,
+    tr, update,
 };
 use relm4::adw::prelude::*;
 use relm4::{adw, gtk, prelude::*, ComponentController, Controller, RelmWidgetExt, Sender};
@@ -636,13 +636,15 @@ fn index_of<T: Copy + Eq>(items: &[T], value: T) -> Option<usize> {
     items.iter().position(|item| *item == value)
 }
 
-/// Gear menu: the game settings dialog and the UI language, each language
-/// with its flag. `current` is the saved language, `None` meaning the system
+/// Gear menu: the game settings dialog, the UI language (each language with
+/// its flag) and the update check. `current` is the saved language, `None` meaning the system
 /// language.
 pub fn preferences_menu(
     current: Option<&str>,
+    check_for_updates: bool,
     on_game_settings: impl Fn() + 'static,
     on_language: impl Fn(Option<&'static str>) + 'static,
+    on_check_for_updates: impl Fn(bool) + 'static,
 ) -> PreferencesMenu {
     let content = gtk::Box::new(gtk::Orientation::Vertical, 6);
     content.set_margin_top(10);
@@ -716,6 +718,30 @@ pub fn preferences_menu(
     hint.add_css_class(relm4::css::DIM_LABEL);
     hint.add_css_class(relm4::css::CAPTION);
     content.append(&hint);
+
+    if update::enabled() {
+        content.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+        // A separate, wrapping label: the built-in one cannot wrap on GTK 4.0.
+        let updates = gtk::CheckButton::new();
+        updates.set_valign(gtk::Align::Start);
+        updates.set_active(check_for_updates);
+        updates.connect_toggled(move |button| on_check_for_updates(button.is_active()));
+        let updates_label = gtk::Label::new(Some(&tr!("settings.auto_update")));
+        updates_label.set_wrap(true);
+        updates_label.set_xalign(0.0);
+        updates_label.set_max_width_chars(30);
+        let label_click = gtk::GestureClick::new();
+        {
+            let updates = updates.clone();
+            label_click
+                .connect_released(move |_, _, _, _| updates.set_active(!updates.is_active()));
+        }
+        updates_label.add_controller(label_click);
+        let updates_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        updates_row.append(&updates);
+        updates_row.append(&updates_label);
+        content.append(&updates_row);
+    }
 
     popover.set_child(Some(&content));
 

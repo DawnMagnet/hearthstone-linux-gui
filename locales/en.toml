@@ -35,6 +35,7 @@ version_missing = "Not installed"
 details = "Login: {login} · {region} / {locale}\nGame: {game} · Unity: {unity}"
 
 [settings]
+auto_update = "Check for launcher updates at startup"
 region = "Region"
 game_language = "Game language"
 language = "Launcher language"
@@ -146,6 +147,10 @@ missing_unity_player = "UnityPlayer.so is missing; run Install / Update to repai
 missing_mono = "Unity Mono runtime is missing; run Install / Update to repair the Unity runtime"
 missing_token = "login token is missing"
 missing_client_config = "client.config is missing"
+
+[update]
+available_tooltip = "Launcher {version} is available; open its download page"
+failed = "Could not open the download page: {error}"
 
 [game_settings]
 menu = "Game settings…"
