@@ -113,6 +113,7 @@ installed = "Installed Hearthstone files"
 from_cache = "cache"
 
 [login]
+page_hint = "Blizzard's login page is made for the game's built-in browser, so its text can be hard to read in yours. The fields work as usual; select the text to see it."
 url_hint = "If no browser opened, copy this login URL into your browser:"
 copy = "Copy"
 copy_tooltip = "Copy the login URL to the clipboard"

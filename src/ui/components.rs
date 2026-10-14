@@ -56,6 +56,16 @@ impl SimpleComponent for StatusPanel {
                 #[watch]
                 set_visible: model.state.login_url.is_some(),
 
+                // Blizzard serves the Hearthstone login page for the game's
+                // built-in browser, with white text on a transparent
+                // background; in a regular browser that reads as blank.
+                gtk::Label {
+                    set_justify: gtk::Justification::Center,
+                    set_wrap: true,
+                    set_margin_bottom: 6,
+                    set_label: &tr!("login.page_hint"),
+                },
+
                 gtk::Label {
                     set_justify: gtk::Justification::Center,
                     set_wrap: true,
