@@ -174,7 +174,7 @@
               $out/share/applications/${desktopFile}
             install -Dm644 data/${appId}.metainfo.xml \
               $out/share/metainfo/${appId}.metainfo.xml
-            install -Dm644 ${./packaging/appimage/io.github.hearthstone_linux_gui.svg} \
+            install -Dm644 ${./data/icons/io.github.hearthstone_linux_gui.svg} \
               $out/share/icons/hicolor/scalable/apps/${iconFile}
             install -Dm644 assets/client.config.in \
               $out/share/hearthstone-linux-gui/client.config.in
