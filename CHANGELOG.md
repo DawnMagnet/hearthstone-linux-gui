@@ -31,6 +31,11 @@
   locked while the game runs because the game rewrites the file on exit.
 - Additional `client.config` entries are stored outside the game directory
   and re-applied on every Install / Update instead of being overwritten.
+- Optional update check at startup (switch in the gear menu). When a newer
+  launcher release exists, a glowing upgrade button appears below the gear
+  menu. It downloads the DEB or RPM for this installation and opens
+  it with the desktop's software installer; for AppImage, Flatpak, Nix and
+  Pacman it opens the release page.
 - Translated desktop entry comment and AppStream summary and description.
 - German README (`README.de.md`).
 

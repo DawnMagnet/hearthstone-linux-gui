@@ -31,6 +31,7 @@ version_missing = "Nicht installiert"
 details = "Anmeldung: {login} · {region} / {locale}\nSpiel: {game} · Unity: {unity}"
 
 [settings]
+auto_update = "Automatisch nach Updates suchen und Updateinstallation anbieten"
 region = "Region"
 game_language = "Spielsprache"
 language = "Sprache des Launchers"
@@ -141,6 +142,13 @@ missing_unity_player = "UnityPlayer.so fehlt; führe „Installieren / Aktualisi
 missing_mono = "Die Mono-Laufzeit von Unity fehlt; führe „Installieren / Aktualisieren“ aus, um die Unity-Laufzeit zu reparieren"
 missing_token = "Das Anmeldetoken fehlt"
 missing_client_config = "client.config fehlt"
+
+[update]
+install_tooltip = "Launcher-Upgrade installieren"
+downloading = "Launcher-Upgrade {version} wird heruntergeladen …"
+downloaded = "Launcher-Upgrade {version} heruntergeladen; folge dem Installationsprogramm, das sich öffnet"
+opened_page = "Die Download-Seite für Launcher {version} wurde geöffnet"
+failed = "Launcher-Upgrade fehlgeschlagen: {error}"
 
 [game_settings]
 menu = "Spieleinstellungen …"
