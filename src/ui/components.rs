@@ -606,8 +606,11 @@ impl ActionBar {
         self.state.launch != LaunchState::Idle || self.state.login == LoginState::Waiting
     }
 
+    /// Only the stopping phase disables the button. "Play" without an
+    /// installed game stays enabled so that the menu next to it (log out,
+    /// switch account) remains reachable; pressing it says to install first.
     fn account_button_sensitive(&self) -> bool {
-        self.state.launch != LaunchState::Stopping && (!self.offers_play() || self.state.installed)
+        self.state.launch != LaunchState::Stopping
     }
 
     fn account_tooltip(&self) -> String {
