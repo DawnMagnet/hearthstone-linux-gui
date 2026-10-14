@@ -10,7 +10,7 @@ use super::{
 use hearthstone_linux::{
     config::AppConfig,
     install::{
-        launcher,
+        launcher::{self, LaunchTool},
         manager::{InstallManager, TaskEvent},
     },
     paths::AppPaths,
@@ -282,12 +282,10 @@ impl MainWindow {
             SettingsOutput::DiscreteGpuChanged(use_discrete_gpu) => {
                 self.config.use_discrete_gpu = use_discrete_gpu;
             }
-            SettingsOutput::GameModeChanged(use_gamemode) => {
-                self.config.use_gamemode = use_gamemode;
-            }
-            SettingsOutput::MangoHudChanged(use_mangohud) => {
-                self.config.use_mangohud = use_mangohud;
-            }
+            SettingsOutput::LaunchToolChanged(tool, enabled) => match tool {
+                LaunchTool::GameMode => self.config.use_gamemode = enabled,
+                LaunchTool::MangoHud => self.config.use_mangohud = enabled,
+            },
         }
         self.save_settings();
         self.refresh_details();
