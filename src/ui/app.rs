@@ -136,9 +136,9 @@ fn fetch_update(
     };
     let runtime = tokio::runtime::Runtime::new()?;
     let package = runtime.block_on(update::download(asset, download_dir))?;
-    let url = url::Url::from_file_path(&package)
-        .map_err(|()| anyhow::anyhow!("{} is not an absolute path", package.display()))?;
-    browser::open_url(url.as_str())?;
+    // A file opener hands the package to the software installer; a web
+    // browser must not get it.
+    browser::open_file(&package)?;
     Ok(UpdateOutcome::PackageOpened)
 }
 
