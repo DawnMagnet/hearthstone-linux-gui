@@ -7,6 +7,8 @@
 <p align="center">
   <a href="README.cn.md">中文说明</a>
   ·
+  <a href="README.de.md">Deutsch</a>
+  ·
   <a href="https://github.com/DawnMagnet/hearthstone-linux-gui/releases/latest">Latest release</a>
 </p>
 
@@ -50,6 +52,9 @@ to distribute and maintain.
 
 - **One-click desktop experience**: install, update, login, and launch from a
   GTK4 window.
+- **Translated interface**: English, German and Simplified Chinese; the
+  launcher follows your system language and can be switched in the gear menu
+  in the bottom right corner.
 - **No command-line requirement**: release builds are meant for graphical
   installation and daily use.
 - **No Python/Bash runtime requirement**: the launcher is a native Rust binary
@@ -148,7 +153,8 @@ environment leaks into child processes.
 
 After the app opens, the normal flow is:
 
-1. Choose your **Region** and **Locale**.
+1. Choose your **Region** and **Game language**. On first start both are
+   preselected from your system language.
 2. Click **Install / Update**.
 3. Click **Login** and complete Battle.net login in your browser.
 4. Return to the app and click **Play**.
@@ -358,6 +364,14 @@ but enabling **Use discrete GPU** in the launcher may.
 Release builds default to INFO-level logging. Detailed diagnostic logs can be
 enabled by developers with the standard `RUST_LOG` environment variable when
 debugging locally.
+
+## Translations
+
+Interface texts live in `locales/<language>.toml` and are compiled into the
+binary; English (`en.toml`) is the base and the fallback. To add a language,
+copy `en.toml`, translate the values, and register the file in
+`src/i18n.rs`. `cargo test` reports missing, unknown or unused keys and
+placeholders that differ from the English catalog.
 
 ## Legal Notice
 

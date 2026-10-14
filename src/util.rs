@@ -9,6 +9,16 @@ pub fn check_cancelled(cancel: Option<&CancellationToken>, message: &'static str
     Ok(())
 }
 
+/// Localized transfer speed to append to a progress message, e.g.
+/// ` at 3.2 MiB/s`; empty while the speed is unknown.
+pub fn format_speed_suffix(bytes_per_second: f64) -> String {
+    if bytes_per_second > 0.0 {
+        crate::tr!("progress.speed", speed = format_bytes(bytes_per_second))
+    } else {
+        String::new()
+    }
+}
+
 pub fn format_bytes(bytes: f64) -> String {
     const UNITS: [&str; 4] = ["B", "KiB", "MiB", "GiB"];
     let mut value = bytes;

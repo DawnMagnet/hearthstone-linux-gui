@@ -1,5 +1,6 @@
 use anyhow::Result;
-use clap::Parser;
+use clap::{CommandFactory, FromArgMatches, Parser};
+use hearthstone_linux::tr;
 
 #[cfg(feature = "gui")]
 mod ui;
@@ -44,9 +45,36 @@ struct Args {
     uri: Option<String>,
 }
 
+/// Parses the command line with help texts taken from the locale catalog.
+/// The doc comments on [`Args`] are the untranslated originals.
+fn parse_args() -> Args {
+    let command = Args::command()
+        .about(tr!("cli.about"))
+        .mut_arg("auth_callback", |arg| {
+            arg.help(tr!("cli.help_auth_callback"))
+        })
+        .mut_arg("launch", |arg| arg.help(tr!("cli.help_launch")))
+        .mut_arg("install", |arg| arg.help(tr!("cli.help_install")))
+        .mut_arg("no_gui", |arg| arg.help(tr!("cli.help_no_gui")))
+        .mut_arg("region", |arg| arg.help(tr!("cli.help_region")))
+        .mut_arg("locale", |arg| arg.help(tr!("cli.help_locale")))
+        .mut_arg("write_token", |arg| arg.help(tr!("cli.help_write_token")))
+        .mut_arg("uri", |arg| arg.help(tr!("cli.help_uri")));
+    Args::from_arg_matches(&command.get_matches()).unwrap_or_else(|error| error.exit())
+}
+
+/// Launcher language chosen in the settings, if any.
+fn saved_ui_language() -> Option<String> {
+    let config_file = hearthstone_linux::paths::config_file().ok()?;
+    hearthstone_linux::AppConfig::load_or_default(&config_file)
+        .ok()?
+        .ui_language
+}
+
 fn main() -> Result<()> {
     let _log_guard = hearthstone_linux::logging::init();
-    let args = Args::parse();
+    hearthstone_linux::i18n::init(saved_ui_language().as_deref());
+    let args = parse_args();
     if args.print_child_env {
         return hearthstone_linux::host_env::print_child_env();
     }
@@ -58,11 +86,17 @@ fn main() -> Result<()> {
         match hearthstone_linux::auth::handle_callback_uri(&paths, &uri) {
             Ok(()) => {
                 tracing::info!(game_dir = %paths.game_dir.display(), "auth callback handled");
-                println!("Login token written for {:?}", paths.game_token());
+                println!(
+                    "{}",
+                    tr!("cli.token_written", path = paths.game_token().display())
+                );
             }
             Err(error) => {
                 tracing::error!(error = %format!("{error:#}"), "auth callback failed");
-                eprintln!("Login callback failed: {error:#}");
+                eprintln!(
+                    "{}",
+                    tr!("cli.callback_failed", error = format!("{error:#}"))
+                );
                 return Err(error);
             }
         }
@@ -81,7 +115,7 @@ fn main() -> Result<()> {
         config.game_dir = Some(game_dir.clone());
         config.logged_in = true;
         config.save(&paths.config_file)?;
-        println!("Login token written for {:?}", game_dir);
+        println!("{}", tr!("cli.token_written", path = game_dir.display()));
         return Ok(());
     }
 
@@ -117,7 +151,7 @@ fn main() -> Result<()> {
                 println!("{message}")
             }
             hearthstone_linux::install::manager::TaskEvent::Failed(message) => {
-                eprintln!("Failed: {message}")
+                eprintln!("{}", tr!("install.failed", error = message))
             }
             hearthstone_linux::install::manager::TaskEvent::Cancelled(message) => {
                 eprintln!("{message}")
@@ -138,7 +172,7 @@ fn main() -> Result<()> {
 
     if args.no_gui {
         tracing::info!("no-gui smoke check");
-        println!("hearthstone-linux-gui core is available");
+        println!("{}", tr!("cli.core_available"));
         return Ok(());
     }
 
@@ -151,6 +185,6 @@ fn main() -> Result<()> {
 
     #[cfg(not(feature = "gui"))]
     {
-        anyhow::bail!("this binary was built without the `gui` feature")
+        anyhow::bail!(tr!("cli.no_gui_feature"))
     }
 }

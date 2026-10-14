@@ -20,13 +20,8 @@ pub struct AppPaths {
 
 impl AppPaths {
     pub fn discover() -> Result<Self> {
-        let dirs = ProjectDirs::from(
-            "io.github",
-            "hearthstone-linux-gui",
-            "hearthstone-linux-gui",
-        )
-        .context("could not resolve XDG project directories")?;
-        let config_dir = writable_dir("config", dirs.config_dir(), fallback_config_dir())?;
+        let dirs = project_dirs()?;
+        let config_dir = resolve_config_dir(&dirs)?;
         let data_dir = writable_dir("data", dirs.data_dir(), fallback_data_dir())?;
         let cache_dir = writable_dir("cache", dirs.cache_dir(), fallback_cache_dir())?;
         let state_dir = writable_dir(
@@ -67,6 +62,22 @@ impl AppPaths {
     pub fn game_token(&self) -> PathBuf {
         self.game_dir.join("token")
     }
+}
+
+/// Location of `config.toml`, resolved exactly like [`AppPaths::discover`]
+/// does, including the fallback when the XDG config directory is not
+/// writable. For readers that need the file before the other paths exist.
+pub fn config_file() -> Result<PathBuf> {
+    Ok(resolve_config_dir(&project_dirs()?)?.join("config.toml"))
+}
+
+fn project_dirs() -> Result<ProjectDirs> {
+    ProjectDirs::from("io.github", APP_DIR, APP_DIR)
+        .context("could not resolve XDG project directories")
+}
+
+fn resolve_config_dir(dirs: &ProjectDirs) -> Result<PathBuf> {
+    writable_dir("config", dirs.config_dir(), fallback_config_dir())
 }
 
 fn writable_dir(kind: &str, preferred: &Path, fallback: Option<PathBuf>) -> Result<PathBuf> {

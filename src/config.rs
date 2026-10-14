@@ -155,6 +155,9 @@ pub struct AppConfig {
     pub last_login_at: Option<String>,
     #[serde(default)]
     pub use_discrete_gpu: bool,
+    /// Launcher UI language; `None` follows the system locale.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ui_language: Option<String>,
 }
 
 impl Default for AppConfig {
@@ -168,6 +171,7 @@ impl Default for AppConfig {
             logged_in: false,
             last_login_at: None,
             use_discrete_gpu: false,
+            ui_language: None,
         }
     }
 }
@@ -183,6 +187,23 @@ impl AppConfig {
         toml::from_str(&data).with_context(|| format!("failed to parse {}", path.display()))
     }
 
+    /// Defaults with region and game language guessed from `LC_ALL`,
+    /// `LC_MESSAGES` or `LANG`, whichever is set first. Meant for the first
+    /// start of the GUI, before anything is saved.
+    pub fn for_system_locale() -> Self {
+        let system_locale = ["LC_ALL", "LC_MESSAGES", "LANG"]
+            .into_iter()
+            .filter_map(|name| std::env::var(name).ok())
+            .find(|value| !value.is_empty())
+            .unwrap_or_default();
+        let (region, locale) = detect_region_and_locale(&system_locale);
+        Self {
+            region,
+            locale,
+            ..Self::default()
+        }
+    }
+
     pub fn save(&self, path: &std::path::Path) -> Result<()> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -192,9 +213,98 @@ impl AppConfig {
     }
 }
 
+/// Maps a POSIX locale such as `de_DE.UTF-8` to the Battle.net region and
+/// game language a player there most likely wants. Unknown locales give the
+/// regular defaults.
+fn detect_region_and_locale(system_locale: &str) -> (Region, Locale) {
+    let tag = system_locale
+        .split(['.', '@'])
+        .next()
+        .unwrap_or_default()
+        .replace('-', "_");
+    let (language, country) = match tag.split_once('_') {
+        Some((language, country)) => (language.to_ascii_lowercase(), country.to_ascii_uppercase()),
+        None => (tag.to_ascii_lowercase(), String::new()),
+    };
+    let country = country.as_str();
+
+    let locale = match (language.as_str(), country) {
+        ("de", _) => Locale::DeDe,
+        ("en", "GB" | "IE" | "AU" | "NZ" | "ZA" | "IN") => Locale::EnGb,
+        ("es", "" | "ES") => Locale::EsEs,
+        ("es", _) => Locale::EsMx,
+        ("fr", _) => Locale::FrFr,
+        ("it", _) => Locale::ItIt,
+        ("ja", _) => Locale::JaJp,
+        ("ko", _) => Locale::KoKr,
+        ("pl", _) => Locale::PlPl,
+        ("pt", _) => Locale::PtBr,
+        ("ru", _) => Locale::RuRu,
+        ("th", _) => Locale::ThTh,
+        ("zh", "TW" | "HK" | "MO") => Locale::ZhTw,
+        ("zh", _) => Locale::ZhCn,
+        _ => Locale::EnUs,
+    };
+
+    // Battle.net regions: Americas also covers Oceania and Southeast Asia,
+    // Asia covers Korea, Taiwan and Japan, Europe covers the rest of the
+    // countries known here.
+    let region = match country {
+        "CN" => Region::Cn,
+        "KR" | "TW" | "HK" | "MO" | "JP" => Region::Kr,
+        "US" | "CA" | "MX" | "BR" | "AR" | "CL" | "CO" | "PE" | "VE" | "UY" | "EC" | "BO"
+        | "PY" | "CR" | "PA" | "DO" | "GT" | "AU" | "NZ" | "SG" | "TH" | "MY" | "PH" | "ID"
+        | "VN" => Region::Us,
+        "" => match locale {
+            Locale::ZhCn => Region::Cn,
+            Locale::JaJp | Locale::KoKr | Locale::ZhTw => Region::Kr,
+            Locale::DeDe
+            | Locale::EnGb
+            | Locale::EsEs
+            | Locale::FrFr
+            | Locale::ItIt
+            | Locale::PlPl
+            | Locale::RuRu => Region::Eu,
+            _ => Region::Us,
+        },
+        _ => Region::Eu,
+    };
+    (region, locale)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Locale, Region};
+    use super::{detect_region_and_locale, Locale, Region};
+
+    #[test]
+    fn detects_region_and_game_language_from_system_locale() {
+        let cases = [
+            ("de_DE.UTF-8", Region::Eu, Locale::DeDe),
+            ("de_AT@euro", Region::Eu, Locale::DeDe),
+            ("en_US.UTF-8", Region::Us, Locale::EnUs),
+            ("en_GB.UTF-8", Region::Eu, Locale::EnGb),
+            ("en_AU.UTF-8", Region::Us, Locale::EnGb),
+            ("es_ES", Region::Eu, Locale::EsEs),
+            ("es_MX", Region::Us, Locale::EsMx),
+            ("pt_BR.UTF-8", Region::Us, Locale::PtBr),
+            ("pt_PT.UTF-8", Region::Eu, Locale::PtBr),
+            ("zh_CN.UTF-8", Region::Cn, Locale::ZhCn),
+            ("zh_TW.UTF-8", Region::Kr, Locale::ZhTw),
+            ("ja_JP.UTF-8", Region::Kr, Locale::JaJp),
+            ("ko_KR.UTF-8", Region::Kr, Locale::KoKr),
+            ("nl_NL.UTF-8", Region::Eu, Locale::EnUs),
+            ("fr", Region::Eu, Locale::FrFr),
+            ("C.UTF-8", Region::Us, Locale::EnUs),
+            ("", Region::Us, Locale::EnUs),
+        ];
+        for (system_locale, region, locale) in cases {
+            assert_eq!(
+                detect_region_and_locale(system_locale),
+                (region, locale),
+                "{system_locale}"
+            );
+        }
+    }
 
     #[test]
     fn parses_and_displays_regions() {

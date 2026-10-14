@@ -16,8 +16,6 @@ on:
   pull_request:
     paths:
       - packaging/flatpak/**
-      - packaging/linux/stage.sh
-      - data/**
       - .github/workflows/flatpak.yml
   workflow_dispatch:
     inputs:

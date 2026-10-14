@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+### Added
+
+- The launcher is translatable. All interface texts, progress messages and
+  command-line help come from locale catalogs in `locales/`, which are
+  compiled into the binary. English is the base and the fallback; German and
+  Simplified Chinese are included.
+- New launcher language selection in a gear menu in the bottom right corner,
+  with a flag per language (shipped as graphics, independent of emoji fonts). By default the launcher follows the system
+  locale; a change takes effect after a restart.
+- On first start, region and game language are preselected from the system
+  locale instead of always starting with `us` / `enUS`.
+- Translated desktop entry comment and AppStream summary and description.
+- German README (`README.de.md`).
+
+### Changed
+
+- The window content is centred: status, settings and actions form one
+  ordered column.
+- The **Locale** setting is now labelled **Game language** to tell it apart
+  from the launcher language.
+
+### Fixed
+
+- The Play button no longer derives its "stopping" state from the status
+  text.
+
+### Maintenance
+
+- `cargo test` fails when a catalog misses a key, has an unknown or unused
+  key, or uses different placeholders than the English catalog.
+
 ## v0.2.3 - 2026-10-11
 
 ### Fixed

@@ -1,5 +1,5 @@
 use super::compatibility;
-use crate::host_env;
+use crate::{host_env, tr};
 use anyhow::{Context, Result};
 use std::{
     collections::HashSet,
@@ -27,21 +27,24 @@ pub fn launch_game(
     output_log: Option<&Path>,
 ) -> Result<Child> {
     let exe = game_dir.join("Bin/Hearthstone.x86_64");
-    anyhow::ensure!(exe.exists(), "{} does not exist", exe.display());
+    anyhow::ensure!(
+        exe.exists(),
+        tr!("game.missing_executable", path = exe.display())
+    );
     anyhow::ensure!(
         game_dir.join("Bin/UnityPlayer.so").exists(),
-        "UnityPlayer.so is missing; run Install / Update to repair the Unity runtime"
+        tr!("game.missing_unity_player")
     );
     anyhow::ensure!(
         game_dir
             .join("Bin/Hearthstone_Data/MonoBleedingEdge/x86_64/libmonobdwgc-2.0.so")
             .exists(),
-        "Unity Mono runtime is missing; run Install / Update to repair the Unity runtime"
+        tr!("game.missing_mono")
     );
-    anyhow::ensure!(game_dir.join("token").exists(), "login token is missing");
+    anyhow::ensure!(game_dir.join("token").exists(), tr!("game.missing_token"));
     anyhow::ensure!(
         game_dir.join("client.config").exists(),
-        "client.config is missing"
+        tr!("game.missing_client_config")
     );
     compatibility::patch_corefoundation_imports(game_dir)?;
     let bundled_interpreter = ensure_bundled_interpreter(&exe);
@@ -121,13 +124,13 @@ pub fn describe_exit_status(status: &ExitStatus) -> String {
         use std::os::unix::process::ExitStatusExt;
         if let Some(signal) = status.signal() {
             return match signal_name(signal) {
-                Some(name) => format!("signal {signal} ({name})"),
-                None => format!("signal {signal}"),
+                Some(name) => tr!("game.signal_named", signal = signal, name = name),
+                None => tr!("game.signal", signal = signal),
             };
         }
     }
     match status.code() {
-        Some(code) => format!("exit code {code}"),
+        Some(code) => tr!("game.exit_code", code = code),
         None => status.to_string(),
     }
 }
@@ -162,21 +165,24 @@ pub fn unexpected_exit_message(
         return None;
     }
 
-    let mut message = format!(
-        "Game exited after {}s ({})",
-        elapsed.as_secs(),
-        describe_exit_status(status)
+    let message = tr!(
+        "game.exited",
+        seconds = elapsed.as_secs(),
+        status = describe_exit_status(status)
     );
     let logs: Vec<String> = [player_log, output_log]
         .into_iter()
         .flatten()
         .map(|path| path.display().to_string())
         .collect();
-    if !logs.is_empty() {
-        message.push_str(". Check ");
-        message.push_str(&logs.join(" and "));
+    if logs.is_empty() {
+        return Some(message);
     }
-    Some(message)
+    Some(tr!(
+        "game.check_logs",
+        message = message,
+        logs = logs.join(&tr!("game.logs_and"))
+    ))
 }
 
 /// Builds the game's `LD_LIBRARY_PATH`.

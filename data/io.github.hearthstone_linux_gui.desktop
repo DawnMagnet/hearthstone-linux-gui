@@ -1,6 +1,9 @@
 [Desktop Entry]
 Type=Application
 Name=hearthstone-linux-gui
+Comment=Install, update and launch Hearthstone on Linux
+Comment[de]=Hearthstone unter Linux installieren, aktualisieren und starten
+Comment[zh_CN]=在 Linux 上安装、更新并启动炉石传说
 Exec=hearthstone-linux-gui %u
 Icon=io.github.hearthstone_linux_gui
 Categories=Game;

@@ -1,5 +1,8 @@
 use super::{app::ProgressState, status::StatusSnapshot};
-use hearthstone_linux::config::{AppConfig, Locale, Region};
+use hearthstone_linux::{
+    config::{AppConfig, Locale, Region},
+    i18n, tr,
+};
 use relm4::adw::prelude::*;
 use relm4::{adw, gtk, prelude::*, ComponentController, Controller, RelmWidgetExt, Sender};
 use relm4_components::simple_combo_box::{SimpleComboBox, SimpleComboBoxMsg};
@@ -35,15 +38,17 @@ impl SimpleComponent for StatusPanel {
             set_spacing: 6,
 
             gtk::Label {
-                set_xalign: 0.0,
-                add_css_class: relm4::css::TITLE_3,
+                set_justify: gtk::Justification::Center,
+                set_wrap: true,
+                add_css_class: relm4::css::TITLE_2,
 
                 #[watch]
                 set_label: &model.state.snapshot.headline,
             },
 
             gtk::Label {
-                set_xalign: 0.0,
+                set_justify: gtk::Justification::Center,
+                set_wrap: true,
                 add_css_class: relm4::css::DIM_LABEL,
 
                 #[watch]
@@ -58,10 +63,10 @@ impl SimpleComponent for StatusPanel {
                 set_visible: model.state.login_url.is_some(),
 
                 gtk::Label {
-                    set_xalign: 0.0,
+                    set_justify: gtk::Justification::Center,
                     set_wrap: true,
                     add_css_class: relm4::css::DIM_LABEL,
-                    set_label: "If no browser opened, copy this login URL into your browser:",
+                    set_label: &tr!("login.url_hint"),
                 },
 
                 gtk::Box {
@@ -78,8 +83,8 @@ impl SimpleComponent for StatusPanel {
                     },
 
                     gtk::Button {
-                        set_label: "Copy",
-                        set_tooltip_text: Some("Copy the login URL to the clipboard"),
+                        set_label: &tr!("login.copy"),
+                        set_tooltip_text: Some(&tr!("login.copy_tooltip")),
                         connect_clicked => StatusPanelInput::CopyLoginUrl,
                     },
                 },
@@ -155,12 +160,14 @@ impl SimpleComponent for SettingsPanel {
 
     view! {
         gtk::Grid {
+            set_halign: gtk::Align::Center,
             set_column_spacing: 12,
             set_row_spacing: 8,
 
             attach[0, 0, 1, 1] = &gtk::Label {
-                set_label: "Region",
-                set_xalign: 0.0,
+                set_label: &tr!("settings.region"),
+                set_xalign: 1.0,
+                add_css_class: relm4::css::DIM_LABEL,
             },
 
             attach[1, 0, 1, 1] = &gtk::Box {
@@ -169,8 +176,9 @@ impl SimpleComponent for SettingsPanel {
             },
 
             attach[0, 1, 1, 1] = &gtk::Label {
-                set_label: "Locale",
-                set_xalign: 0.0,
+                set_label: &tr!("settings.game_language"),
+                set_xalign: 1.0,
+                add_css_class: relm4::css::DIM_LABEL,
             },
 
             attach[1, 1, 1, 1] = &gtk::Box {
@@ -179,13 +187,14 @@ impl SimpleComponent for SettingsPanel {
             },
 
             attach[0, 2, 1, 1] = &gtk::Label {
-                set_label: "Graphics",
-                set_xalign: 0.0,
+                set_label: &tr!("settings.graphics"),
+                set_xalign: 1.0,
+                add_css_class: relm4::css::DIM_LABEL,
             },
 
             attach[1, 2, 1, 1] = &gtk::CheckButton {
-                set_label: Some("Discrete GPU"),
-                set_tooltip_text: Some("Launch with PRIME/DRI GPU offload environment variables"),
+                set_label: Some(&tr!("settings.discrete_gpu")),
+                set_tooltip_text: Some(&tr!("settings.discrete_gpu_tooltip")),
 
                 #[watch]
                 set_active: model.config.use_discrete_gpu,
@@ -214,7 +223,6 @@ impl SimpleComponent for SettingsPanel {
                 active_index: index_of(&Locale::ALL, config.locale),
             })
             .forward(sender.input_sender(), SettingsPanelInput::LocaleChanged);
-
         let model = SettingsPanel {
             config,
             region,
@@ -277,10 +285,16 @@ impl SettingsPanel {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InstallAction {
+    Install,
+    Update,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum InstallState {
     Idle,
-    Running(String),
+    Running(InstallAction),
     Stopping,
     Uninstalling,
 }
@@ -350,11 +364,12 @@ impl SimpleComponent for ActionBar {
     view! {
         gtk::Box {
             set_orientation: gtk::Orientation::Horizontal,
+            set_halign: gtk::Align::Center,
             set_spacing: 8,
 
             #[name(install_button)]
             adw::SplitButton {
-                set_tooltip_text: Some("Install actions"),
+                set_tooltip_text: Some(&tr!("action.install_tooltip")),
                 #[watch]
                 set_label: &model.install_label(),
                 #[watch]
@@ -370,9 +385,9 @@ impl SimpleComponent for ActionBar {
 
             #[name(login_button)]
             adw::SplitButton {
-                set_tooltip_text: Some("Account actions"),
+                set_tooltip_text: Some(&tr!("action.account_tooltip")),
                 #[watch]
-                set_label: model.login_label(),
+                set_label: &model.login_label(),
                 #[watch]
                 set_class_active: (relm4::css::DESTRUCTIVE_ACTION, model.state.login == LoginState::Waiting),
                 connect_clicked[sender] => move |_| {
@@ -395,7 +410,7 @@ impl SimpleComponent for ActionBar {
             },
 
             gtk::Button {
-                set_label: "Refresh",
+                set_label: &tr!("action.refresh"),
                 connect_clicked[sender] => move |_| {
                     sender.output(ActionBarOutput::Refresh).ok();
                 },
@@ -456,10 +471,11 @@ impl SimpleComponent for ActionBar {
 impl ActionBar {
     fn install_label(&self) -> String {
         match &self.state.install {
-            InstallState::Idle => "Install / Update".into(),
-            InstallState::Running(action) => format!("Stop {action}"),
-            InstallState::Stopping => "Stopping...".into(),
-            InstallState::Uninstalling => "Uninstalling...".into(),
+            InstallState::Idle => tr!("action.install_update"),
+            InstallState::Running(InstallAction::Install) => tr!("action.stop_install"),
+            InstallState::Running(InstallAction::Update) => tr!("action.stop_update"),
+            InstallState::Stopping => tr!("action.stopping"),
+            InstallState::Uninstalling => tr!("action.uninstalling"),
         }
     }
 
@@ -485,25 +501,118 @@ impl ActionBar {
         }
     }
 
-    fn login_label(&self) -> &'static str {
+    fn login_label(&self) -> String {
         match self.state.login {
-            LoginState::Idle => "Login",
-            LoginState::Waiting => "Cancel Login",
-            LoginState::LoggedIn => "Log Out",
+            LoginState::Idle => tr!("action.login"),
+            LoginState::Waiting => tr!("action.cancel_login"),
+            LoginState::LoggedIn => tr!("action.log_out"),
         }
     }
 
-    fn launch_label(&self) -> &'static str {
+    fn launch_label(&self) -> String {
         match self.state.launch {
-            LaunchState::Idle => "Play",
-            LaunchState::Running => "Stop",
-            LaunchState::Stopping => "Stopping...",
+            LaunchState::Idle => tr!("action.play"),
+            LaunchState::Running => tr!("action.stop"),
+            LaunchState::Stopping => tr!("action.stopping"),
         }
     }
 }
 
 fn index_of<T: Copy + Eq>(items: &[T], value: T) -> Option<usize> {
     items.iter().position(|item| *item == value)
+}
+
+/// Gear menu with launcher-level preferences: the UI language, each with its
+/// flag. `current` is the saved choice, `None` meaning the system language.
+pub fn preferences_menu(
+    current: Option<&str>,
+    on_language: impl Fn(Option<&'static str>) + 'static,
+) -> gtk::MenuButton {
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    content.set_margin_top(10);
+    content.set_margin_bottom(10);
+    content.set_margin_start(10);
+    content.set_margin_end(10);
+
+    let title = gtk::Label::new(Some(&tr!("settings.language")));
+    title.add_css_class(relm4::css::HEADING);
+    content.append(&title);
+
+    let system_icon = gtk::Image::from_icon_name("preferences-desktop-locale-symbolic");
+    let system = (None, system_icon, tr!("settings.language_system"));
+    let languages = i18n::available().into_iter().map(|language| {
+        (
+            Some(language.code),
+            flag_image(language.flag),
+            language.name,
+        )
+    });
+
+    let list = gtk::ListBox::new();
+    list.set_selection_mode(gtk::SelectionMode::None);
+    list.add_css_class(relm4::css::BOXED_LIST);
+    let mut codes = Vec::new();
+    let mut checks = Vec::new();
+    for (code, icon, name) in std::iter::once(system).chain(languages) {
+        icon.set_pixel_size(24);
+        let label = gtk::Label::new(Some(&name));
+        label.set_xalign(0.0);
+        label.set_hexpand(true);
+        let check = gtk::Image::from_icon_name("object-select-symbolic");
+        check.set_opacity(if code == current { 1.0 } else { 0.0 });
+
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+        row.set_margin_top(8);
+        row.set_margin_bottom(8);
+        row.set_margin_start(10);
+        row.set_margin_end(10);
+        row.append(&icon);
+        row.append(&label);
+        row.append(&check);
+        list.append(&row);
+        codes.push(code);
+        checks.push(check);
+    }
+    list.connect_row_activated(move |_, row| {
+        let Some(code) = codes.get(row.index() as usize).copied() else {
+            return;
+        };
+        for (check, candidate) in checks.iter().zip(&codes) {
+            check.set_opacity(if *candidate == code { 1.0 } else { 0.0 });
+        }
+        on_language(code);
+    });
+    content.append(&list);
+
+    let hint = gtk::Label::new(Some(&tr!("settings.language_tooltip")));
+    hint.add_css_class(relm4::css::DIM_LABEL);
+    hint.add_css_class(relm4::css::CAPTION);
+    content.append(&hint);
+
+    let popover = gtk::Popover::new();
+    popover.set_child(Some(&content));
+
+    let button = gtk::MenuButton::new();
+    button.set_icon_name("emblem-system-symbolic");
+    button.set_tooltip_text(Some(&tr!("settings.language")));
+    button.set_direction(gtk::ArrowType::Up);
+    button.set_valign(gtk::Align::End);
+    button.add_css_class(relm4::css::FLAT);
+    button.set_popover(Some(&popover));
+    button
+}
+
+/// Decodes one of the embedded flag PNGs. PNG support is built into
+/// gdk-pixbuf, so this does not depend on an installed image loader.
+fn flag_image(png: &'static [u8]) -> gtk::Image {
+    let loader = gtk::gdk_pixbuf::PixbufLoader::new();
+    let decoded = loader.write(png).and_then(|()| loader.close());
+    match (decoded, loader.pixbuf()) {
+        (Ok(()), Some(pixbuf)) => {
+            gtk::Image::from_paintable(Some(&gtk::gdk::Texture::for_pixbuf(&pixbuf)))
+        }
+        _ => gtk::Image::new(),
+    }
 }
 
 struct PopoverButton {
@@ -520,7 +629,7 @@ fn install_popover(sender: ComponentSender<ActionBar>) -> PopoverButton {
     content.set_margin_start(10);
     content.set_margin_end(10);
 
-    let uninstall = gtk::Button::with_label("Uninstall");
+    let uninstall = gtk::Button::with_label(&tr!("action.uninstall"));
     uninstall.add_css_class(relm4::css::DESTRUCTIVE_ACTION);
     {
         let popover = popover.clone();
@@ -548,7 +657,7 @@ fn login_popover(sender: ComponentSender<ActionBar>) -> PopoverButton {
     content.set_margin_start(10);
     content.set_margin_end(10);
 
-    let switch_account = gtk::Button::with_label("Switch Account");
+    let switch_account = gtk::Button::with_label(&tr!("action.switch_account"));
     {
         let popover = popover.clone();
         let output = sender.output_sender().clone();
