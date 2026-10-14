@@ -271,6 +271,18 @@ scheme 的处理程序,并打开 Battle.net 登录页面。登录完成后,浏�
 合法的令牌格式为:两位区域前缀 + 短横线 + 32 位字母数字 + 短横线 + 数字账号
 ID。如果命令仍然拒绝,请检查复制时是否丢失了区域前缀。
 
+
+#### 可选的登录窗口
+
+Blizzard 的炉石传说登录页面是为游戏内置浏览器设计的，因此在普通浏览器中文字难以看清。如果安装了独立程序 `hearthstone-linux-gui-login`，点击**登录**会在它自己的深色窗口中显示该页面，并直接交回登录令牌。窗口始终提供**在浏览器中打开**按钮，便于使用 Google 或 Apple 登录、密码管理器和安全密钥；如果程序缺失或出错，则照旧使用浏览器。
+
+它位于 `login-helper/`，有自己的锁文件并需要 WebKitGTK 6，启动器及其安装包从不依赖它：
+
+```sh
+cargo build --release --manifest-path login-helper/Cargo.toml
+install -Dm755 login-helper/target/release/hearthstone-linux-gui-login ~/.local/bin/
+```
+
 ### 滚动发行版上的证书问题
 
 如果游戏可以启动但无法登录 Battle.net,且

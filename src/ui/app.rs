@@ -5,7 +5,7 @@ use super::{
         ActionBarState, InstallAction, InstallState, LaunchState, LoginState, SettingsOutput,
         SettingsPanel, SettingsPanelInput, StatusPanel, StatusPanelInput, StatusPanelState,
     },
-    game_settings, status,
+    game_settings, login_window, status,
 };
 use hearthstone_linux::{
     config::AppConfig,
@@ -87,6 +87,11 @@ pub enum AppMsg {
     InstallEvent(TaskEvent),
     UninstallFinished(Result<(), String>),
     LoginPoll,
+    /// The login window finished; see [`login_window::Outcome`].
+    LoginWindowClosed {
+        session: u64,
+        outcome: login_window::Outcome,
+    },
     BrowserOpened {
         session: u64,
         result: Result<String, String>,
@@ -344,6 +349,9 @@ impl SimpleComponent for MainWindow {
             AppMsg::InstallEvent(event) => self.handle_install_event(event),
             AppMsg::UninstallFinished(result) => self.handle_uninstall_finished(result),
             AppMsg::LoginPoll => self.handle_login_poll(),
+            AppMsg::LoginWindowClosed { session, outcome } => {
+                self.handle_login_window_closed(session, outcome, sender.clone())
+            }
             AppMsg::BrowserOpened { session, result } => {
                 self.handle_browser_opened(session, result)
             }
@@ -699,23 +707,89 @@ impl MainWindow {
         }
         self.refresh_details();
 
-        tracing::info!(
-            region = %current.region,
-            url = %login_url,
-            "opening browser login with desktop callback handler"
-        );
+        // The optional login window shows Blizzard's page on a dark window;
+        // without it, or when it gives up, the system browser is used.
+        if let Some(program) = login_window::find() {
+            tracing::info!(program = %program.display(), "opening the login window");
+            self.status.headline = tr!("login.window_open");
+            self.refresh_details();
+            let input = sender.input_sender().clone();
+            let cancel = cancel.clone();
+            std::thread::spawn(move || {
+                let outcome = login_window::run(&program, &login_url, &cancel);
+                input.emit(AppMsg::LoginWindowClosed {
+                    session: session_id,
+                    outcome,
+                });
+            });
+        } else {
+            Self::open_browser_login(&sender, session_id, login_url);
+        }
+
+        Self::start_poll(&sender, AppMsg::LoginPoll, cancel);
+    }
+
+    /// Opens the login URL in the system browser; the desktop callback
+    /// handler then writes the token.
+    fn open_browser_login(sender: &ComponentSender<Self>, session: u64, url: String) {
+        tracing::info!(url = %url, "opening browser login with desktop callback handler");
         // Openers are waited on to detect failures, so keep them off the GTK
         // main thread.
         let input = sender.input_sender().clone();
         std::thread::spawn(move || {
-            let result = browser::open_url(&login_url).map_err(|error| format!("{error:#}"));
-            input.emit(AppMsg::BrowserOpened {
-                session: session_id,
-                result,
-            });
+            let result = browser::open_url(&url).map_err(|error| format!("{error:#}"));
+            input.emit(AppMsg::BrowserOpened { session, result });
         });
+    }
 
-        Self::start_poll(&sender, AppMsg::LoginPoll, cancel);
+    fn handle_login_window_closed(
+        &mut self,
+        session: u64,
+        outcome: login_window::Outcome,
+        sender: ComponentSender<Self>,
+    ) {
+        let Some(current) = self.login_session.as_ref() else {
+            return;
+        };
+        if current.id != session || current.cancel.is_cancelled() {
+            return;
+        }
+        match outcome {
+            login_window::Outcome::Callback(uri) => {
+                if let Err(error) = hearthstone_linux::auth::handle_callback_uri(&self.paths, &uri)
+                {
+                    tracing::error!(error = %format!("{error:#}"), "login window callback failed");
+                    if let Some(session) = self.login_session.take() {
+                        session.cancel.cancel();
+                    }
+                    self.status.headline = tr!("login.setup_failed", error = format!("{error:#}"));
+                    self.refresh_details();
+                    return;
+                }
+                // The token is on disk now; finish as the browser flow does.
+                self.handle_login_poll();
+            }
+            login_window::Outcome::OpenBrowser => {
+                let url = current.url.clone();
+                self.status.headline = tr!("login.opening");
+                self.refresh_details();
+                Self::open_browser_login(&sender, session, url);
+            }
+            login_window::Outcome::Closed => {
+                if let Some(session) = self.login_session.take() {
+                    session.cancel.cancel();
+                }
+                self.status.headline = tr!("login.cancelled");
+                self.refresh_details();
+            }
+            login_window::Outcome::Failed(error) => {
+                tracing::warn!(%error, "login window failed; using the browser");
+                let url = current.url.clone();
+                self.status.headline = tr!("login.window_failed");
+                self.refresh_details();
+                Self::open_browser_login(&sender, session, url);
+            }
+        }
     }
 
     fn handle_browser_opened(&mut self, session: u64, result: Result<String, String>) {

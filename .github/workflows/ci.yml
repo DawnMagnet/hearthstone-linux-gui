@@ -52,3 +52,30 @@ jobs:
       # catch GUI compile errors without a full build.
       - name: Type-check workspace, GUI and tests
         run: cargo check --workspace --all-targets --locked
+
+  login-window:
+    name: Optional login window
+    # Its own workspace with WebKitGTK 6, which ubuntu-24.04 ships; the
+    # launcher and its packages do not depend on it.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@1.92.0
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: login-helper
+
+      - name: Install GTK 4, libadwaita and WebKitGTK 6 headers
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            libgtk-4-dev libadwaita-1-dev libwebkitgtk-6.0-dev pkg-config
+
+      - name: Unit tests
+        run: cargo test --manifest-path login-helper/Cargo.toml --locked
+
+      - name: Type-check
+        run: cargo check --manifest-path login-helper/Cargo.toml --all-targets --locked

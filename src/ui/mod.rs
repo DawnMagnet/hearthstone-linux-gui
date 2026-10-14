@@ -3,6 +3,7 @@ mod auth;
 mod browser;
 mod components;
 mod game_settings;
+mod login_window;
 mod status;
 
 use relm4::gtk::prelude::*;

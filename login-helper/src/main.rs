@@ -1,0 +1,169 @@
+//! Optional Battle.net login window for hearthstone-linux-gui.
+//!
+//! Blizzard serves the Hearthstone login page (`app=wtcg`) for the game's
+//! built-in browser: light text on a transparent background. In a regular
+//! browser it looks blank, so this small program shows the page the way it
+//! is meant to be shown, on a dark window.
+//!
+//! The page is Blizzard's own and is loaded from Blizzard. The program only
+//! waits for the redirect that carries the login token and reports it to the
+//! launcher; it injects nothing into the page and reads nothing that is typed
+//! into it. The web session is ephemeral.
+//!
+//! Usage: `hearthstone-linux-gui-login <login-url>`
+//!
+//! Result, read by the launcher:
+//! - exit 0 and `callback <uri>` on stdout: the login finished;
+//! - exit 3: the user asked for the system browser instead;
+//! - exit 1: the window was closed without a login;
+//! - exit 2: wrong usage.
+
+use adw::prelude::*;
+use hearthstone_linux::{config::AppConfig, i18n, paths, tr};
+use std::{cell::Cell, process::ExitCode, rc::Rc};
+use webkit6::prelude::*;
+
+/// URL schemes Blizzard redirects to once the login succeeded.
+const CALLBACK_SCHEMES: [&str; 2] = ["blizzard-hearthstone:", "wtcg:"];
+
+const EXIT_LOGGED_IN: u8 = 0;
+const EXIT_CLOSED: u8 = 1;
+const EXIT_USAGE: u8 = 2;
+const EXIT_OPEN_BROWSER: u8 = 3;
+
+fn main() -> ExitCode {
+    let mut args = std::env::args().skip(1);
+    let (Some(url), None) = (args.next(), args.next()) else {
+        eprintln!("usage: hearthstone-linux-gui-login <login-url>");
+        return ExitCode::from(EXIT_USAGE);
+    };
+
+    // Same language as the launcher: its saved choice, else the system's.
+    let saved_language = paths::config_file()
+        .ok()
+        .and_then(|path| AppConfig::load_or_default(&path).ok())
+        .and_then(|config| config.ui_language);
+    i18n::select(saved_language.as_deref());
+
+    let app = adw::Application::builder()
+        .application_id("io.github.hearthstone_linux_gui.Login")
+        .flags(gtk::gio::ApplicationFlags::NON_UNIQUE)
+        .build();
+    let outcome = Rc::new(Cell::new(EXIT_CLOSED));
+    {
+        let outcome = outcome.clone();
+        app.connect_activate(move |app| build_window(app, &url, outcome.clone()));
+    }
+    // GTK must not see the login URL as a file to open.
+    app.run_with_args::<&str>(&[]);
+    ExitCode::from(outcome.get())
+}
+
+fn build_window(app: &adw::Application, url: &str, outcome: Rc<Cell<u8>>) {
+    // The page uses light text and has no background of its own.
+    adw::StyleManager::default().set_color_scheme(adw::ColorScheme::ForceDark);
+
+    // Nothing of the login is kept on disk.
+    let session = webkit6::NetworkSession::new_ephemeral();
+    let context = webkit6::WebContext::new();
+    context.set_preferred_languages(&[i18n::current()]);
+    let web_view = webkit6::WebView::builder()
+        .network_session(&session)
+        .web_context(&context)
+        .build();
+    // The dark window shows through the page's transparent background.
+    web_view.set_background_color(&gtk::gdk::RGBA::new(0.0, 0.0, 0.0, 0.0));
+    web_view.set_vexpand(true);
+
+    let window = adw::ApplicationWindow::new(app);
+    window.set_title(Some(&tr!("login_window.title")));
+    window.set_default_size(520, 760);
+
+    {
+        let window = window.clone();
+        let outcome = outcome.clone();
+        web_view.connect_decide_policy(move |_, decision, _| {
+            let Some(navigation) = decision.downcast_ref::<webkit6::NavigationPolicyDecision>()
+            else {
+                return false;
+            };
+            let uri = navigation
+                .navigation_action()
+                .and_then(|mut action| action.request())
+                .and_then(|request| request.uri());
+            match uri {
+                Some(uri) if is_callback(&uri) => {
+                    decision.ignore();
+                    finish_with_callback(&window, &outcome, &uri);
+                    true
+                }
+                _ => false,
+            }
+        });
+    }
+    {
+        // A server-side redirect to the callback scheme surfaces as a
+        // failed load.
+        let window = window.clone();
+        let outcome = outcome.clone();
+        web_view.connect_load_failed(move |_, _, uri, _| {
+            if is_callback(uri) {
+                finish_with_callback(&window, &outcome, uri);
+                return true;
+            }
+            false
+        });
+    }
+    web_view.load_uri(url);
+
+    // Always available: sign-ins through Google, Apple and other providers,
+    // password managers and security keys work better in the real browser.
+    let open_browser = gtk::Button::with_label(&tr!("login_window.open_browser"));
+    open_browser.set_tooltip_text(Some(&tr!("login_window.open_browser_tooltip")));
+    {
+        let window = window.clone();
+        let outcome = outcome.clone();
+        open_browser.connect_clicked(move |_| {
+            outcome.set(EXIT_OPEN_BROWSER);
+            window.close();
+        });
+    }
+    let header = adw::HeaderBar::new();
+    header.pack_start(&open_browser);
+
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    content.append(&header);
+    content.append(&web_view);
+    window.set_content(Some(&content));
+    window.present();
+}
+
+fn finish_with_callback(window: &adw::ApplicationWindow, outcome: &Cell<u8>, uri: &str) {
+    if outcome.get() == EXIT_LOGGED_IN {
+        return;
+    }
+    println!("callback {uri}");
+    outcome.set(EXIT_LOGGED_IN);
+    window.close();
+}
+
+fn is_callback(uri: &str) -> bool {
+    CALLBACK_SCHEMES
+        .iter()
+        .any(|scheme| uri.starts_with(scheme))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_callback;
+
+    #[test]
+    fn recognises_only_the_callback_schemes() {
+        assert!(is_callback(
+            "blizzard-hearthstone://localhost:0/?ST=EU-abc-1"
+        ));
+        assert!(is_callback("wtcg://localhost:0/?ST=EU-abc-1"));
+        assert!(!is_callback("https://account.battle.net/login/"));
+        assert!(!is_callback("about:blank"));
+    }
+}

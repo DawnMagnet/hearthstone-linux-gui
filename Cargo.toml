@@ -27,6 +27,9 @@ default-members = [
     "crates/stubs/osx-window-management",
 ]
 resolver = "2"
+# The optional login window has its own workspace and lock file, so nothing
+# here depends on WebKitGTK.
+exclude = ["login-helper"]
 
 [workspace.package]
 version = "0.2.3"

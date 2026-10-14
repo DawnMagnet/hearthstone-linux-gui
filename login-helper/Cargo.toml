@@ -1,0 +1,30 @@
+# Optional Battle.net login window for hearthstone-linux-gui.
+#
+# A separate program with its own workspace and lock file, so the launcher,
+# its release packages and its Cargo.lock never depend on WebKitGTK. The
+# launcher uses it when it is installed and falls back to the system browser
+# otherwise. Build it with:
+#
+#     cargo build --release --manifest-path login-helper/Cargo.toml
+#
+# It needs GTK 4, libadwaita and WebKitGTK 6 (libwebkitgtk-6.0-dev,
+# webkitgtk6.0-devel).
+
+[package]
+name = "hearthstone-linux-gui-login"
+version = "0.2.3"
+edition = "2021"
+license = "MIT"
+description = "Optional Battle.net login window for hearthstone-linux-gui"
+
+[dependencies]
+# Shared locale catalogs and settings; no GUI parts of the launcher.
+hearthstone-linux-gui = { path = "..", default-features = false }
+gtk = { package = "gtk4", version = "0.10" }
+adw = { package = "libadwaita", version = "0.8" }
+webkit6 = "0.5"
+
+[workspace]
+
+[profile.release]
+strip = "symbols"

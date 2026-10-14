@@ -251,9 +251,15 @@ mod tests {
 
     /// Keys used through `tr!("...")` anywhere under `src/`.
     fn keys_used_in_sources() -> BTreeSet<String> {
-        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        // The optional login window (`login-helper/`) uses the same catalogs.
+        let sources = [root.join("src"), root.join("login-helper/src")];
         let mut keys = BTreeSet::new();
-        for entry in walkdir::WalkDir::new(&src) {
+        for entry in sources
+            .iter()
+            .filter(|dir| dir.is_dir())
+            .flat_map(walkdir::WalkDir::new)
+        {
             let entry = entry.unwrap();
             let path = entry.path();
             if path.extension().and_then(|ext| ext.to_str()) != Some("rs")
