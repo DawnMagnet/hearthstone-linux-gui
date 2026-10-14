@@ -1,4 +1,4 @@
-use crate::{util, Locale, Region};
+use crate::{game_options, util, Locale, Region};
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 use tracing::{debug, info};
@@ -49,17 +49,37 @@ const STUBS: &[StubSpec] = &[
     },
 ];
 
-pub fn install_compatibility_files(game_dir: &Path, region: Region, locale: Locale) -> Result<()> {
+/// Writes `client.config` from the template and applies the user's
+/// `overrides` (`key=value` lines) on top of it.
+pub fn write_client_config(
+    game_dir: &Path,
+    region: Region,
+    locale: Locale,
+    overrides: &str,
+) -> Result<()> {
+    let config = include_str!("../../assets/client.config.in")
+        .replace("{{aurora_env}}", region.aurora_env())
+        .replace("{{locale}}", locale.as_str());
+    std::fs::write(
+        game_dir.join("client.config"),
+        game_options::apply_overrides(&config, overrides),
+    )?;
+    Ok(())
+}
+
+pub fn install_compatibility_files(
+    game_dir: &Path,
+    region: Region,
+    locale: Locale,
+    client_config_overrides: &str,
+) -> Result<()> {
     info!(
         game_dir = %game_dir.display(),
         region = %region,
         locale = %locale,
         "installing compatibility files"
     );
-    let config = include_str!("../../assets/client.config.in")
-        .replace("{{aurora_env}}", region.aurora_env())
-        .replace("{{locale}}", locale.as_str());
-    std::fs::write(game_dir.join("client.config"), config)?;
+    write_client_config(game_dir, region, locale, client_config_overrides)?;
 
     for stub in stub_files()? {
         for target in stub.spec.targets {

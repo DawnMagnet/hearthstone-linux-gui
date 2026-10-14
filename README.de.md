@@ -49,6 +49,9 @@ lässt.
   unten rechts umstellen.
 - **GameMode und MangoHud**: Optionale Schalter starten das Spiel über
   `gamemoderun` und mit dem MangoHud-Overlay, sofern beides installiert ist.
+- **Editor für Spieleinstellungen**: Bildratenbegrenzung, VSync und
+  Grafikqualität ändern oder `options.txt` und zusätzliche
+  `client.config`-Einträge bearbeiten, alles über das Zahnradmenü.
 - **Kein Terminal nötig**: Die Release-Pakete sind für die grafische
   Installation und den täglichen Gebrauch gedacht.
 - **Keine Python/Bash-Laufzeit nötig**: Der Launcher ist eine native

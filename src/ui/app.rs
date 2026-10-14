@@ -5,7 +5,7 @@ use super::{
         InstallAction, InstallState, LaunchState, LoginState, SettingsOutput, SettingsPanel,
         SettingsPanelInput, StatusPanel, StatusPanelInput, StatusPanelState,
     },
-    status,
+    game_settings, status,
 };
 use hearthstone_linux::{
     config::AppConfig,
@@ -69,12 +69,16 @@ struct MainWindow {
     settings_panel: Controller<SettingsPanel>,
     actions: Controller<ActionBar>,
     toaster: Toaster,
+    window: adw::ApplicationWindow,
+    game_settings_button: gtk::Button,
 }
 
 #[derive(Clone, Debug)]
 pub enum AppMsg {
     Settings(SettingsOutput),
     UiLanguageChanged(Option<&'static str>),
+    OpenGameSettings,
+    GameSettingsSaved,
     Action(ActionBarOutput),
     InstallEvent(TaskEvent),
     UninstallFinished(Result<(), String>),
@@ -203,7 +207,7 @@ impl SimpleComponent for MainWindow {
 
     fn init(
         init: Self::Init,
-        _root: Self::Root,
+        root: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
         tracing::debug!("building Relm4 main window");
@@ -222,12 +226,16 @@ impl SimpleComponent for MainWindow {
             .launch(ActionBarState::default())
             .forward(sender.input_sender(), AppMsg::Action);
         let toaster = Toaster::default();
-        let preferences = {
-            let input = sender.input_sender().clone();
-            preferences_menu(init.config.ui_language.as_deref(), move |language| {
-                input.emit(AppMsg::UiLanguageChanged(language));
-            })
+        let preferences_menu = {
+            let open_input = sender.input_sender().clone();
+            let language_input = sender.input_sender().clone();
+            preferences_menu(
+                init.config.ui_language.as_deref(),
+                move || open_input.emit(AppMsg::OpenGameSettings),
+                move |language| language_input.emit(AppMsg::UiLanguageChanged(language)),
+            )
         };
+        let preferences = preferences_menu.button.clone();
 
         let model = MainWindow {
             paths: init.paths,
@@ -243,6 +251,8 @@ impl SimpleComponent for MainWindow {
             settings_panel,
             actions,
             toaster,
+            window: root.clone(),
+            game_settings_button: preferences_menu.game_settings,
         };
 
         let toast_overlay = model.toaster.overlay_widget();
@@ -260,6 +270,8 @@ impl SimpleComponent for MainWindow {
         match message {
             AppMsg::Settings(output) => self.handle_settings(output),
             AppMsg::UiLanguageChanged(language) => self.handle_ui_language(language),
+            AppMsg::OpenGameSettings => self.open_game_settings(sender),
+            AppMsg::GameSettingsSaved => self.toast(&tr!("game_settings.saved")),
             AppMsg::Action(output) => self.handle_action(output, sender),
             AppMsg::InstallEvent(event) => self.handle_install_event(event),
             AppMsg::UninstallFinished(result) => self.handle_uninstall_finished(result),
@@ -295,6 +307,18 @@ impl MainWindow {
         self.config.ui_language = language.map(str::to_owned);
         self.save_settings();
         self.refresh_details();
+    }
+
+    fn open_game_settings(&mut self, sender: ComponentSender<Self>) {
+        // The game rewrites its options on exit, so edits made meanwhile
+        // would be lost.
+        if self.game_session.is_some() {
+            return;
+        }
+        let input = sender.input_sender().clone();
+        game_settings::open(&self.window, &self.paths, &self.config, move || {
+            input.emit(AppMsg::GameSettingsSaved);
+        });
     }
 
     fn save_settings(&mut self) {
@@ -736,6 +760,13 @@ impl MainWindow {
             }));
         self.settings_panel
             .emit(SettingsPanelInput::SetConfig(self.config.clone()));
+        let game_running = self.game_session.is_some();
+        self.game_settings_button.set_sensitive(!game_running);
+        self.game_settings_button.set_tooltip_text(
+            game_running
+                .then(|| tr!("game_settings.running_tooltip"))
+                .as_deref(),
+        );
         self.actions.emit(ActionBarInput::Render(ActionBarState {
             install: self.install_state.clone(),
             installed: self.is_installed(),

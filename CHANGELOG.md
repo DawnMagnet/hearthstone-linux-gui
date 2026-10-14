@@ -17,6 +17,13 @@
   `gamemoderun mangohud <game>`; a switch is disabled with an explanation
   when the tool is not installed or, in the Flatpak, not reachable from the
   sandbox.
+- **Game settings** dialog in the gear menu: frame-rate limit, VSync and
+  graphics quality, plus plain editors for the game's `options.txt` and for
+  additional `client.config` entries. VSync is switched off by writing
+  `vsync=0`. Unknown keys and their order are preserved, and the dialog is
+  locked while the game runs because the game rewrites the file on exit.
+- Additional `client.config` entries are stored outside the game directory
+  and re-applied on every Install / Update instead of being overwritten.
 - Translated desktop entry comment and AppStream summary and description.
 - German README (`README.de.md`).
 
