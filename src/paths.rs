@@ -66,6 +66,11 @@ impl AppPaths {
         self.config_dir.join("client.config.overrides")
     }
 
+    /// The last answer of the launcher update check.
+    pub fn update_check_cache(&self) -> PathBuf {
+        self.cache_dir.join("update-check.json")
+    }
+
     pub fn game_token(&self) -> PathBuf {
         self.game_dir.join("token")
     }

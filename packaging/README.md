@@ -163,3 +163,11 @@ gh workflow run flatpak.yml -f release_tag=v0.2.3
 nix build .#default   # native Nix package
 nix build .#runtime   # FHS runtime wrapper used to launch the Unity player
 ```
+
+## Update check
+
+The launcher can look for a newer release on GitHub (off by default, a
+switch in the gear menu) and then points to the release page. A package that
+the distribution upgrades itself should not offer that: build it with
+`HEARTHSTONE_LINUX_NO_UPDATE_CHECK=1` in the environment of `cargo build`,
+which removes the switch and the check.

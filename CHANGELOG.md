@@ -10,6 +10,9 @@
   always offers **Open in browser**, and the browser flow is used whenever the
   program is missing, fails or the user asks for it. The launcher and its
   packages do not depend on WebKitGTK; a CI job builds the program.
+- While a login is pending, a short hint explains that Blizzard's login page
+  is made for the game's built-in browser and its text can be hard to read in
+  a regular browser.
 - New display name **Hearthstone Linux Launcher** with the subtitle
   "Unofficial community launcher" in the window title, the desktop entry and
   the AppStream metadata. Binary name, package name and application ID are
@@ -37,6 +40,13 @@
   locked while the game runs because the game rewrites the file on exit.
 - Additional `client.config` entries are stored outside the game directory
   and re-applied on every Install / Update instead of being overwritten.
+- Optional update check, **off by default** (switch in the gear menu). When
+  it is on and a newer launcher release exists, a glowing upgrade button
+  appears below the gear menu and opens that release's page, which says how
+  to get it for each package format. Nothing is downloaded or installed by
+  the launcher, and the answer is reused for six hours. Packagers whose
+  distribution upgrades the launcher itself can build with
+  `HEARTHSTONE_LINUX_NO_UPDATE_CHECK=1` to remove the feature.
 - Translated desktop entry comment and AppStream summary and description.
 - German README (`README.de.md`).
 

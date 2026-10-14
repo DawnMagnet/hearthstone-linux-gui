@@ -31,6 +31,7 @@ version_missing = "Nicht installiert"
 details = "Anmeldung: {login} · {region} / {locale}\nSpiel: {game} · Unity: {unity}"
 
 [settings]
+auto_update = "Beim Start nach Launcher-Updates suchen"
 region = "Region"
 game_language = "Spielsprache"
 language = "Sprache des Launchers"
@@ -109,6 +110,7 @@ installed = "Hearthstone-Dateien installiert"
 from_cache = "Cache"
 
 [login]
+page_hint = "Blizzards Anmeldeseite ist für den Browser im Spiel gemacht, daher ist ihr Text in deinem Browser schwer lesbar. Die Felder funktionieren wie gewohnt; markiere den Text, um ihn zu sehen."
 url_hint = "Falls sich kein Browser geöffnet hat, kopiere diese Anmelde-URL in deinen Browser:"
 copy = "Kopieren"
 copy_tooltip = "Anmelde-URL in die Zwischenablage kopieren"
@@ -148,6 +150,10 @@ missing_unity_player = "UnityPlayer.so fehlt; führe „Installieren / Aktualisi
 missing_mono = "Die Mono-Laufzeit von Unity fehlt; führe „Installieren / Aktualisieren“ aus, um die Unity-Laufzeit zu reparieren"
 missing_token = "Das Anmeldetoken fehlt"
 missing_client_config = "client.config fehlt"
+
+[update]
+available_tooltip = "Launcher {version} ist verfügbar; Download-Seite öffnen"
+failed = "Die Download-Seite konnte nicht geöffnet werden: {error}"
 
 [game_settings]
 menu = "Spieleinstellungen …"
