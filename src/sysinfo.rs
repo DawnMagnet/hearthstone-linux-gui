@@ -4,7 +4,16 @@
 //! output of host programs; nothing is sent anywhere.
 
 use crate::host_env;
-use std::{path::Path, process::Stdio};
+use std::{
+    io::Read,
+    path::Path,
+    process::{ExitStatus, Stdio},
+    time::{Duration, Instant},
+};
+
+/// How long a host program may run. A hung `glxinfo` must not leave the
+/// dialog collecting forever.
+const PROGRAM_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// One collected value. `None` means it could not be determined (or the
 /// program is not installed); the UI shows that in words.
@@ -47,8 +56,42 @@ impl SystemInfo {
     }
 }
 
+/// A package manager that can say which package owns a file.
+struct Manager {
+    /// What the install is called in the report.
+    kind: &'static str,
+    /// Program and arguments that succeed when a package owns the file.
+    owner_query: &'static str,
+    owner_args: &'static [&'static str],
+    /// Program whose `--version` names the manager's version.
+    name: &'static str,
+}
+
+const MANAGERS: [Manager; 3] = [
+    Manager {
+        kind: "DEB",
+        owner_query: "dpkg-query",
+        owner_args: &["-S"],
+        name: "dpkg",
+    },
+    Manager {
+        kind: "RPM",
+        owner_query: "rpm",
+        owner_args: &["-qf"],
+        name: "rpm",
+    },
+    Manager {
+        kind: "Pacman",
+        owner_query: "pacman",
+        owner_args: &["-Qo"],
+        name: "pacman",
+    },
+];
+
 fn install_kind() -> Option<String> {
-    if host_env::is_active() || std::env::var_os("APPIMAGE").is_some() {
+    // Not the `APPIMAGE` variable: every program started from an AppImage
+    // application inherits it.
+    if host_env::is_active() {
         return Some("AppImage".into());
     }
     if host_env::is_flatpak() {
@@ -58,20 +101,30 @@ fn install_kind() -> Option<String> {
     if exe.starts_with("/nix/store") {
         return Some("Nix".into());
     }
-    let owners: [(&str, &str, &[&str], &str, &[&str]); 3] = [
-        ("DEB", "dpkg-query", &["-S"], "dpkg", &["--version"]),
-        ("RPM", "rpm", &["-qf"], "rpm", &["--version"]),
-        ("Pacman", "pacman", &["-Qo"], "pacman", &["--version"]),
-    ];
-    for (kind, query, args, manager, version_args) in owners {
-        if succeeds(query, args, &exe) {
-            return Some(match first_line_of(manager, version_args) {
-                Some(version) => format!("{kind} · {version}"),
-                None => kind.into(),
+    for manager in MANAGERS {
+        if succeeds(manager.owner_query, manager.owner_args, &exe) {
+            return Some(match first_line_of(manager.name, &["--version"]) {
+                Some(version) => format!("{} · {version}", manager.kind),
+                None => manager.kind.into(),
             });
         }
     }
-    Some(exe.display().to_string())
+    Some(shown_path(
+        &exe,
+        std::env::var_os("HOME").as_deref().map(Path::new),
+    ))
+}
+
+/// `path` with the home directory written as `~`: the text ends up in public
+/// bug reports and must not carry the user name.
+fn shown_path(path: &Path, home: Option<&Path>) -> String {
+    match home.filter(|home| !home.as_os_str().is_empty()) {
+        Some(home) => match path.strip_prefix(home) {
+            Ok(rest) => Path::new("~").join(rest).display().to_string(),
+            Err(_) => path.display().to_string(),
+        },
+        None => path.display().to_string(),
+    }
 }
 
 fn os_name() -> Option<String> {
@@ -129,31 +182,32 @@ fn gpu_driver() -> Option<String> {
     (!drivers.is_empty()).then(|| drivers.join(", "))
 }
 
-/// Renderer and version from `glxinfo -B` (mesa-utils), else the installed
-/// Mesa package.
+/// Renderer and version from `glxinfo -B` (mesa-utils). Without it the
+/// installed Mesa package is named, which says what is installed, not what
+/// the game renders with.
 fn opengl() -> Option<String> {
-    if let Some(output) = output_of("glxinfo", &["-B"]) {
-        let field = |key: &str| {
-            output
-                .lines()
-                .find_map(|line| line.trim().strip_prefix(key))
-                .map(|value| value.trim().to_string())
-        };
-        let renderer = field("OpenGL renderer string:");
-        let version = field("OpenGL version string:");
-        match (renderer, version) {
-            (Some(renderer), Some(version)) => return Some(format!("{renderer} · {version}")),
-            (renderer, version) => {
-                if let Some(value) = renderer.or(version) {
-                    return Some(value);
-                }
-            }
-        }
+    if let Some(value) = output_of("glxinfo", &["-B"]).and_then(|output| parse_glxinfo(&output)) {
+        return Some(value);
     }
     ["libgl1-mesa-dri", "mesa-dri-drivers", "mesa", "Mesa-dri"]
         .into_iter()
-        .find_map(package_version)
-        .map(|version| format!("Mesa {version}"))
+        .find_map(|package| package_version(package).map(|version| format!("{package} {version}")))
+}
+
+/// `renderer · version` from the output of `glxinfo -B`.
+fn parse_glxinfo(output: &str) -> Option<String> {
+    let field = |key: &str| {
+        output
+            .lines()
+            .find_map(|line| line.trim().strip_prefix(key))
+            .map(|value| value.trim().to_string())
+    };
+    let renderer = field("OpenGL renderer string:");
+    let version = field("OpenGL version string:");
+    match (renderer, version) {
+        (Some(renderer), Some(version)) => Some(format!("{renderer} · {version}")),
+        (renderer, version) => renderer.or(version),
+    }
 }
 
 /// Version of an installed distribution package, from whichever package
@@ -179,27 +233,50 @@ fn first_line_of(program: &str, args: &[&str]) -> Option<String> {
 
 /// Stdout of a host program that exited successfully.
 fn output_of(program: &str, args: &[&str]) -> Option<String> {
-    let output = host_env::host_command(program)
-        .args(args)
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
-    output
-        .status
+    let (status, stdout) = run(program, args, None)?;
+    status
         .success()
-        .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+        .then(|| String::from_utf8_lossy(&stdout).into_owned())
 }
 
 fn succeeds(program: &str, args: &[&str], path: &Path) -> bool {
-    host_env::host_command(program)
-        .args(args)
-        .arg(path)
+    run(program, args, Some(path)).is_some_and(|(status, _)| status.success())
+}
+
+/// Runs a host program for at most [`PROGRAM_TIMEOUT`] and returns its exit
+/// status and stdout; `None` when it cannot be started or runs too long.
+fn run(program: &str, args: &[&str], path: Option<&Path>) -> Option<(ExitStatus, Vec<u8>)> {
+    let mut command = host_env::host_command(program);
+    command.args(args);
+    if let Some(path) = path {
+        command.arg(path);
+    }
+    let mut child = command
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
+        .spawn()
+        .ok()?;
+    let mut stdout = child.stdout.take()?;
+    let reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = stdout.read_to_end(&mut bytes);
+        bytes
+    });
+
+    let deadline = Instant::now() + PROGRAM_TIMEOUT;
+    let status = loop {
+        match child.try_wait().ok()? {
+            Some(status) => break status,
+            None if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            None => std::thread::sleep(Duration::from_millis(20)),
+        }
+    };
+    Some((status, reader.join().ok()?))
 }
 
 fn read_trimmed(path: &str) -> Option<String> {
@@ -211,7 +288,8 @@ fn read_trimmed(path: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::os_release_field;
+    use super::{os_release_field, parse_glxinfo, run, shown_path};
+    use std::path::Path;
 
     #[test]
     fn reads_os_release_values() {
@@ -222,5 +300,47 @@ mod tests {
         );
         assert_eq!(os_release_field(text, "ID").as_deref(), Some("linuxmint"));
         assert_eq!(os_release_field(text, "VERSION_ID"), None);
+    }
+
+    #[test]
+    fn reads_the_renderer_and_version_from_glxinfo() {
+        let output = "name of display: :0\nOpenGL vendor string: AMD\n\
+                      OpenGL renderer string: AMD Radeon 680M (radeonsi)\n\
+                      OpenGL core profile version string: 4.6 (Core Profile) Mesa 24.0.9\n\
+                      OpenGL version string: 4.6 (Compatibility Profile) Mesa 24.0.9\n";
+        assert_eq!(
+            parse_glxinfo(output).as_deref(),
+            Some("AMD Radeon 680M (radeonsi) · 4.6 (Compatibility Profile) Mesa 24.0.9")
+        );
+        assert_eq!(
+            parse_glxinfo("OpenGL renderer string: llvmpipe\n").as_deref(),
+            Some("llvmpipe")
+        );
+        assert_eq!(parse_glxinfo("Error: unable to open display\n"), None);
+    }
+
+    #[test]
+    fn the_home_directory_is_not_shown() {
+        let home = Path::new("/home/alice");
+        assert_eq!(
+            shown_path(Path::new("/home/alice/build/launcher"), Some(home)),
+            "~/build/launcher"
+        );
+        assert_eq!(
+            shown_path(Path::new("/opt/launcher/bin/launcher"), Some(home)),
+            "/opt/launcher/bin/launcher"
+        );
+        assert_eq!(
+            shown_path(Path::new("/home/alice/launcher"), None),
+            "/home/alice/launcher"
+        );
+    }
+
+    #[test]
+    fn a_program_that_runs_too_long_is_given_up_on() {
+        let (status, output) = run("echo", &["hello"], None).unwrap();
+        assert!(status.success());
+        assert_eq!(String::from_utf8_lossy(&output).trim(), "hello");
+        assert!(run("no-such-program-for-sysinfo", &[], None).is_none());
     }
 }

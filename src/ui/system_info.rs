@@ -45,6 +45,10 @@ pub fn open(parent: &impl IsA<gtk::Window>) {
         let _ = sender.send(SystemInfo::collect());
     });
     gtk::glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
+        // Stop waiting when the dialog was closed before the answer came.
+        if !window.is_visible() {
+            return gtk::glib::ControlFlow::Break;
+        }
         let Ok(info) = receiver.try_recv() else {
             return gtk::glib::ControlFlow::Continue;
         };
