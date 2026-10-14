@@ -152,6 +152,23 @@ missing_client_config = "client.config is missing"
 available_tooltip = "Launcher {version} is available; open its download page"
 failed = "Could not open the download page: {error}"
 
+[sysinfo]
+menu = "System information…"
+title = "System information"
+copy = "Copy for a bug report"
+copied = "Copied"
+loading = "Collecting…"
+launcher = "Launcher"
+install = "Installed as"
+os = "System"
+kernel = "Kernel"
+session = "Session"
+gpu_driver = "Graphics driver"
+opengl = "OpenGL"
+toolkit = "Toolkit"
+unknown = "unknown"
+not_installed = "not installed"
+
 [game_settings]
 menu = "Game settings…"
 running_tooltip = "Stop the game to edit its settings"
