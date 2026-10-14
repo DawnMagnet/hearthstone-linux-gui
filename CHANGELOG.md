@@ -4,6 +4,12 @@
 
 ### Added
 
+- New display name **Hearthstone Linux Launcher** with the subtitle
+  "Unofficial community launcher" in the window title, the desktop entry and
+  the AppStream metadata. Binary name, package name and application ID are
+  unchanged.
+- New icon and logo: Tux playing cards at a table in a tavern, an original drawing
+  without Blizzard material. The logo is shown below the window title.
 - The launcher is translatable. All interface texts, progress messages and
   command-line help come from locale catalogs in `locales/`, which are
   compiled into the binary. English is the base and the fallback; German and
@@ -41,6 +47,8 @@
 
 ### Maintenance
 
+- The icon moved from `packaging/appimage/` to `data/icons/` as the single
+  source for all package formats.
 - `cargo test` fails when a catalog misses a key, has an unknown or unused
   key, or uses different placeholders than the English catalog.
 

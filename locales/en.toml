@@ -5,6 +5,10 @@
 [meta]
 name = "English"
 
+[app]
+name = "Hearthstone Linux Launcher"
+unofficial = "Unofficial community launcher"
+
 [cli]
 about = "Native Linux manager for Hearthstone"
 help_auth_callback = "Battle.net browser callback URI."

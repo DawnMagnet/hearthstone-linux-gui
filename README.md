@@ -1,4 +1,8 @@
-# hearthstone-linux-gui
+# Hearthstone Linux Launcher
+
+<p align="center">
+  <img src="data/icons/io.github.hearthstone_linux_gui.svg" alt="Tux playing cards: the launcher icon" width="160">
+</p>
 
 <p align="center">
   <img src="docs/images/readme-hero.svg" alt="hearthstone-linux-gui desktop launcher preview" width="920">
@@ -19,7 +23,8 @@
   <img alt="Packages" src="https://img.shields.io/badge/AppImage%20%7C%20DEB%20%7C%20RPM%20%7C%20Nix-ready-6750a4?style=flat-square">
 </p>
 
-**hearthstone-linux-gui** is a native GTK4 desktop manager for installing,
+**Hearthstone Linux Launcher** (`hearthstone-linux-gui`) is an unofficial,
+community-made native GTK4 desktop manager for installing,
 updating, logging into, and launching Hearthstone on Linux. It is migrated from
 the original [`hearthstone-linux`](https://github.com/0xf4b1/hearthstone-linux)
 project, but the old script-driven workflow has been replaced by a packaged
@@ -154,7 +159,7 @@ environment leaks into child processes.
      `flatpak run io.github.hearthstone_linux_gui`. Game files and settings
      live in `~/.var/app/io.github.hearthstone_linux_gui/`.
    - Nix/NixOS: install the native Nix package through your normal Nix workflow.
-4. Launch **hearthstone-linux-gui** from the application menu.
+4. Launch **Hearthstone Linux Launcher** from the application menu.
 
 After the app opens, the normal flow is:
 

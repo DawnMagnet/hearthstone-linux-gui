@@ -1,6 +1,10 @@
 [Desktop Entry]
 Type=Application
-Name=hearthstone-linux-gui
+Name=Hearthstone Linux Launcher
+Name[zh_CN]=炉石传说 Linux 启动器
+GenericName=Unofficial community launcher
+GenericName[de]=Inoffizieller Community-Launcher
+GenericName[zh_CN]=非官方社区启动器
 Comment=Install, update and launch Hearthstone on Linux
 Comment[de]=Hearthstone unter Linux installieren, aktualisieren und starten
 Comment[zh_CN]=在 Linux 上安装、更新并启动炉石传说
