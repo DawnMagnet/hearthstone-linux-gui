@@ -76,7 +76,6 @@ impl SimpleComponent for StatusPanel {
                 gtk::Label {
                     set_justify: gtk::Justification::Center,
                     set_wrap: true,
-                    add_css_class: relm4::css::DIM_LABEL,
                     set_margin_bottom: 6,
                     set_label: &tr!("login.page_hint"),
                 },
