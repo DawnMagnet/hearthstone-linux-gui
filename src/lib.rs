@@ -8,6 +8,7 @@ pub mod install;
 pub mod logging;
 pub mod ngdp;
 pub mod paths;
+pub mod sysinfo;
 pub mod update;
 pub mod util;
 

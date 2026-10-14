@@ -10,6 +10,10 @@
   always offers **Open in browser**, and the browser flow is used whenever the
   program is missing, fails or the user asks for it. The launcher and its
   packages do not depend on WebKitGTK; a CI job builds the program.
+- **System information** in the gear menu: launcher version, install kind and
+  package manager, distribution, kernel, session, graphics driver module,
+  OpenGL renderer and driver/Mesa version, GameMode, MangoHud and the GTK and
+  libadwaita versions, with a button that copies them for a bug report.
 - While a login is pending, a short hint explains that Blizzard's login page
   is made for the game's built-in browser and its text can be hard to read in
   a regular browser.

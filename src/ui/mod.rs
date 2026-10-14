@@ -5,6 +5,7 @@ mod components;
 mod game_settings;
 mod login_window;
 mod status;
+mod system_info;
 
 use relm4::gtk::prelude::*;
 use relm4::{

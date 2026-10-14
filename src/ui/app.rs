@@ -85,6 +85,7 @@ pub enum AppMsg {
     Settings(SettingsOutput),
     UiLanguageChanged(Option<&'static str>),
     OpenGameSettings,
+    OpenSystemInfo,
     GameSettingsSaved,
     Refresh,
     CheckForUpdatesChanged(bool),
@@ -303,6 +304,10 @@ impl SimpleComponent for MainWindow {
                 init.config.ui_language.as_deref(),
                 init.config.check_for_updates,
                 move || open_input.emit(AppMsg::OpenGameSettings),
+                {
+                    let input = sender.input_sender().clone();
+                    move || input.emit(AppMsg::OpenSystemInfo)
+                },
                 move |language| language_input.emit(AppMsg::UiLanguageChanged(language)),
                 move |enabled| updates_input.emit(AppMsg::CheckForUpdatesChanged(enabled)),
             )
@@ -386,6 +391,7 @@ impl SimpleComponent for MainWindow {
             AppMsg::Settings(output) => self.handle_settings(output),
             AppMsg::UiLanguageChanged(language) => self.handle_ui_language(language),
             AppMsg::OpenGameSettings => self.open_game_settings(sender),
+            AppMsg::OpenSystemInfo => super::system_info::open(&self.window),
             AppMsg::GameSettingsSaved => self.toast(&tr!("game_settings.saved")),
             AppMsg::Refresh => self.refresh_from_disk(),
             AppMsg::CheckForUpdatesChanged(enabled) => {
