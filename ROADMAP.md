@@ -1,5 +1,7 @@
 # Roadmap
 
+[Deutsche Fassung](ROADMAP.de.md)
+
 Starting point is v0.2.3: a GTK4/libadwaita launcher (Rust, relm4) that
 installs the macOS game data through NGDP, pairs it with the Linux Unity
 player, handles the Battle.net login and starts the game. Each step below is
