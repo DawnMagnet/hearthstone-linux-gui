@@ -10,7 +10,7 @@ use super::{
 use hearthstone_linux::{
     config::AppConfig,
     install::{
-        launcher,
+        launcher::{self, LaunchTool},
         manager::{InstallManager, TaskEvent},
     },
     paths::AppPaths,
@@ -211,6 +211,10 @@ impl SimpleComponent for MainWindow {
                                 details -> gtk::Label {
                                     set_hexpand: true,
                                     set_xalign: 0.0,
+                                    // A longer text is cut short instead of
+                                    // widening the window, and stays
+                                    // readable in the tooltip.
+                                    set_ellipsize: gtk::pango::EllipsizeMode::End,
                                     add_css_class: relm4::css::DIM_LABEL,
                                 },
 
@@ -438,12 +442,10 @@ impl MainWindow {
             SettingsOutput::DiscreteGpuChanged(use_discrete_gpu) => {
                 self.config.use_discrete_gpu = use_discrete_gpu;
             }
-            SettingsOutput::GameModeChanged(use_gamemode) => {
-                self.config.use_gamemode = use_gamemode;
-            }
-            SettingsOutput::MangoHudChanged(use_mangohud) => {
-                self.config.use_mangohud = use_mangohud;
-            }
+            SettingsOutput::LaunchToolChanged(tool, enabled) => match tool {
+                LaunchTool::GameMode => self.config.use_gamemode = enabled,
+                LaunchTool::MangoHud => self.config.use_mangohud = enabled,
+            },
         }
         self.save_settings();
         self.refresh_details();
@@ -998,6 +1000,7 @@ impl MainWindow {
 
     fn render_children(&self) {
         self.details.set_label(&self.status.details);
+        self.details.set_tooltip_text(Some(&self.status.details));
         self.status_panel
             .emit(StatusPanelInput::Render(StatusPanelState {
                 snapshot: self.status.clone(),
