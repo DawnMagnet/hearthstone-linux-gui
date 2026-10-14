@@ -13,13 +13,17 @@
   locale; a change takes effect after a restart.
 - On first start, region and game language are preselected from the system
   locale instead of always starting with `us` / `enUS`.
+- **GameMode** and **MangoHud** switches. The game is started as
+  `gamemoderun mangohud <game>`; a switch is disabled with an explanation
+  when the tool is not installed or, in the Flatpak, not reachable from the
+  sandbox.
 - Translated desktop entry comment and AppStream summary and description.
 - German README (`README.de.md`).
 
 ### Changed
 
 - The window content is centred: status, settings and actions form one
-  ordered column.
+  ordered column, and the status line stays on one line.
 - The **Locale** setting is now labelled **Game language** to tell it apart
   from the launcher language.
 

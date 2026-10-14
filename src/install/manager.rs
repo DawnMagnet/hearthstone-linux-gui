@@ -164,9 +164,11 @@ impl InstallManager {
 
 fn preserve_saved_settings(config: &mut AppConfig, paths: &AppPaths) {
     let saved = AppConfig::load_or_default(&paths.config_file).ok();
-    // The launcher language can change while the install runs.
+    // These settings stay editable in the window while the install runs.
     if let Some(saved) = saved.as_ref() {
         config.ui_language = saved.ui_language.clone();
+        config.use_gamemode = saved.use_gamemode;
+        config.use_mangohud = saved.use_mangohud;
     }
     let token_exists = paths.game_token().exists();
     if saved.as_ref().is_some_and(|saved| saved.logged_in) || token_exists {

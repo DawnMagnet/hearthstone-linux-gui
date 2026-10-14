@@ -282,6 +282,12 @@ impl MainWindow {
             SettingsOutput::DiscreteGpuChanged(use_discrete_gpu) => {
                 self.config.use_discrete_gpu = use_discrete_gpu;
             }
+            SettingsOutput::GameModeChanged(use_gamemode) => {
+                self.config.use_gamemode = use_gamemode;
+            }
+            SettingsOutput::MangoHudChanged(use_mangohud) => {
+                self.config.use_mangohud = use_mangohud;
+            }
         }
         self.save_settings();
         self.refresh_details();
@@ -633,7 +639,7 @@ impl MainWindow {
             .unwrap_or_else(|| self.paths.game_dir.clone());
         tracing::info!(game_dir = %game_dir.display(), "launch requested from UI");
         let output_log = self.paths.log_dir.join("game.log");
-        match launcher::launch_game(&game_dir, self.config.use_discrete_gpu, Some(&output_log)) {
+        match launcher::launch_game(&game_dir, (&self.config).into(), Some(&output_log)) {
             Ok(child) => {
                 let poll_cancel = CancellationToken::new();
                 self.game_session = Some(GameSession {
@@ -708,6 +714,7 @@ impl MainWindow {
         let (config, snapshot) = status::reconcile(&self.paths);
         self.config = config;
         self.status = snapshot;
+        self.settings_panel.emit(SettingsPanelInput::DetectTools);
     }
 
     fn refresh_status_with_headline(&mut self, headline: impl Into<String>) {

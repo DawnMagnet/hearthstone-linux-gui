@@ -35,6 +35,11 @@ language_tooltip = "重启启动器后生效"
 graphics = "图形"
 discrete_gpu = "独立显卡"
 discrete_gpu_tooltip = "使用 PRIME/DRI 显卡切换环境变量启动"
+performance = "性能"
+gamemode_tooltip = "通过 Feral GameMode（gamemoderun）启动游戏"
+mangohud_tooltip = "显示 MangoHud 浮层，包含帧率和系统负载"
+tool_missing = "未找到 {tool}。请先安装以启用此选项。"
+tool_flatpak = "{tool} 在 Flatpak 沙盒中不可用。"
 save_failed = "保存设置失败：{error}"
 
 [action]
