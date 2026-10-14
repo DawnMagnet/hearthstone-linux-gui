@@ -9,6 +9,7 @@ use super::{
 };
 use hearthstone_linux::{
     config::AppConfig,
+    game_options,
     install::{
         launcher::{self, LaunchTool},
         manager::{InstallManager, TaskEvent},
@@ -315,10 +316,18 @@ impl MainWindow {
         if self.game_session.is_some() {
             return;
         }
+        let Some(options_path) = game_options::options_path() else {
+            self.toast(&tr!("game_settings.no_home"));
+            return;
+        };
         let input = sender.input_sender().clone();
-        game_settings::open(&self.window, &self.paths, &self.config, move || {
-            input.emit(AppMsg::GameSettingsSaved);
-        });
+        game_settings::open(
+            &self.window,
+            &self.paths,
+            &self.config,
+            options_path,
+            move || input.emit(AppMsg::GameSettingsSaved),
+        );
     }
 
     fn save_settings(&mut self) {

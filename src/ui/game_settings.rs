@@ -5,29 +5,31 @@
 use super::browser;
 use hearthstone_linux::{
     config::AppConfig,
-    game_options::{self, GameOptions, Quality},
+    game_options::{GameOptions, Quality},
     install::compatibility,
     paths::AppPaths,
     tr,
 };
 use relm4::adw::prelude::*;
 use relm4::{adw, gtk};
-use std::{cell::Cell, path::Path, rc::Rc};
+use std::{
+    cell::Cell,
+    path::{Path, PathBuf},
+    rc::Rc,
+};
 
 const DEFAULT_FRAME_RATE: u32 = 60;
 
-/// Opens the dialog on top of `parent`. `on_saved` runs after the files were
-/// written.
+/// Opens the dialog on top of `parent`, editing the game's `options_path`.
+/// `on_saved` runs after the files were written.
 pub fn open(
     parent: &impl IsA<gtk::Window>,
     paths: &AppPaths,
     config: &AppConfig,
+    options_path: PathBuf,
     on_saved: impl Fn() + 'static,
 ) {
-    let Some(options_path) = game_options::options_path() else {
-        tracing::error!("HOME is not set; cannot locate options.txt");
-        return;
-    };
+    let on_saved = Rc::new(on_saved);
     let overrides_path = paths.client_config_overrides();
     let game_dir = config
         .game_dir
@@ -35,14 +37,20 @@ pub fn open(
         .unwrap_or_else(|| paths.game_dir.clone());
     let (region, locale) = (config.region, config.locale);
 
-    let options = GameOptions::load(&options_path).unwrap_or_else(|error| {
-        tracing::warn!(error = %format!("{error:#}"), "failed to read options.txt");
-        GameOptions::default()
-    });
+    // A file that exists but cannot be read must not be replaced by the
+    // edits alone; the dialog then only reports the problem.
+    let (options, read_error) = match GameOptions::load(&options_path) {
+        Ok(options) => (options, None),
+        Err(error) => {
+            tracing::warn!(error = %format!("{error:#}"), "failed to read options.txt");
+            (GameOptions::default(), Some(error))
+        }
+    };
     let options_buffer = gtk::TextBuffer::new(None);
     options_buffer.set_text(&options.to_text());
     let overrides_buffer = gtk::TextBuffer::new(None);
-    overrides_buffer.set_text(&std::fs::read_to_string(&overrides_path).unwrap_or_default());
+    let initial_overrides = std::fs::read_to_string(&overrides_path).unwrap_or_default();
+    overrides_buffer.set_text(&initial_overrides);
 
     let frame_rate = gtk::SpinButton::with_range(30.0, 360.0, 1.0);
     frame_rate.set_valign(gtk::Align::Center);
@@ -158,6 +166,19 @@ pub fn open(
     buttons.append(&open_external);
     buttons.append(&save);
 
+    if let Some(error) = read_error {
+        status.set_label(&tr!(
+            "game_settings.read_failed",
+            error = format!("{error:#}")
+        ));
+        status.set_visible(true);
+        graphics.set_sensitive(false);
+        advanced.set_sensitive(false);
+        for button in [&reset, &open_external, &save] {
+            button.set_sensitive(false);
+        }
+    }
+
     let page = gtk::Box::new(gtk::Orientation::Vertical, 18);
     page.set_margin_top(18);
     page.set_margin_bottom(18);
@@ -199,47 +220,59 @@ pub fn open(
             overrides_buffer.set_text("");
         });
     }
+    // Writes everything the dialog edits. `client.config` is only rewritten
+    // when its entries changed, so saving a graphics setting never applies a
+    // Region / Language change that is waiting for the next Install.
+    let save_files = {
+        let (options_buffer, overrides_buffer, options_path) = (
+            options_buffer.clone(),
+            overrides_buffer.clone(),
+            options_path.clone(),
+        );
+        Rc::new(move || -> anyhow::Result<()> {
+            let overrides = buffer_text(&overrides_buffer);
+            GameOptions::parse(&buffer_text(&options_buffer)).save(&options_path)?;
+            save_overrides(&overrides_path, &overrides)?;
+            // Not installed yet: Install / Update applies the entries.
+            if overrides != initial_overrides && game_dir.join("client.config").exists() {
+                compatibility::write_client_config(&game_dir, region, locale, &overrides)?;
+            }
+            Ok(())
+        })
+    };
     {
-        let (options_buffer, options_path, status) =
-            (options_buffer.clone(), options_path.clone(), status.clone());
+        let (save_files, on_saved, status, window) = (
+            save_files.clone(),
+            on_saved.clone(),
+            status.clone(),
+            window.clone(),
+        );
         open_external.connect_clicked(move |_| {
-            // An external editor needs the file on disk, with the current text.
-            let saved = GameOptions::parse(&buffer_text(&options_buffer)).save(&options_path);
-            if let Err(error) = saved {
+            // The editor works on the file itself, so everything is saved
+            // first and the dialog closes: its text would otherwise go stale
+            // and a later Save would overwrite what the editor wrote.
+            if let Err(error) = save_files() {
                 show_error(&status, &error);
                 return;
             }
-            let Ok(url) = url::Url::from_file_path(&options_path) else {
-                return;
-            };
+            let options_path = options_path.clone();
             std::thread::spawn(move || {
-                if let Err(error) = browser::open_url(url.as_str()) {
+                if let Err(error) = browser::open_file(&options_path) {
                     tracing::warn!(error = %format!("{error:#}"), "failed to open options.txt");
                 }
             });
+            on_saved();
+            window.close();
         });
     }
     {
         let window = window.clone();
-        save.connect_clicked(move |_| {
-            let overrides = buffer_text(&overrides_buffer);
-            let saved = GameOptions::parse(&buffer_text(&options_buffer))
-                .save(&options_path)
-                .and_then(|()| save_overrides(&overrides_path, &overrides))
-                .and_then(|()| {
-                    // Not installed yet: Install / Update applies the entries.
-                    if !game_dir.join("client.config").exists() {
-                        return Ok(());
-                    }
-                    compatibility::write_client_config(&game_dir, region, locale, &overrides)
-                });
-            match saved {
-                Ok(()) => {
-                    on_saved();
-                    window.close();
-                }
-                Err(error) => show_error(&status, &error),
+        save.connect_clicked(move |_| match save_files() {
+            Ok(()) => {
+                on_saved();
+                window.close();
             }
+            Err(error) => show_error(&status, &error),
         });
     }
 
