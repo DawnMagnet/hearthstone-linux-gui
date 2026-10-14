@@ -39,6 +39,11 @@ language_tooltip = "Takes effect after restarting the launcher"
 graphics = "Graphics"
 discrete_gpu = "Discrete GPU"
 discrete_gpu_tooltip = "Launch with PRIME/DRI GPU offload environment variables"
+performance = "Performance"
+gamemode_tooltip = "Run the game through Feral GameMode (gamemoderun)"
+mangohud_tooltip = "Show the MangoHud overlay with frame rate and system load"
+tool_missing = "{tool} was not found. Install it to enable this option."
+tool_flatpak = "{tool} is not available inside the Flatpak sandbox."
 save_failed = "Settings save failed: {error}"
 
 [action]

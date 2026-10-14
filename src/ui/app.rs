@@ -10,7 +10,7 @@ use super::{
 use hearthstone_linux::{
     config::AppConfig,
     install::{
-        launcher,
+        launcher::{self, LaunchTool},
         manager::{InstallManager, TaskEvent},
     },
     paths::AppPaths,
@@ -282,6 +282,10 @@ impl MainWindow {
             SettingsOutput::DiscreteGpuChanged(use_discrete_gpu) => {
                 self.config.use_discrete_gpu = use_discrete_gpu;
             }
+            SettingsOutput::LaunchToolChanged(tool, enabled) => match tool {
+                LaunchTool::GameMode => self.config.use_gamemode = enabled,
+                LaunchTool::MangoHud => self.config.use_mangohud = enabled,
+            },
         }
         self.save_settings();
         self.refresh_details();
@@ -633,7 +637,7 @@ impl MainWindow {
             .unwrap_or_else(|| self.paths.game_dir.clone());
         tracing::info!(game_dir = %game_dir.display(), "launch requested from UI");
         let output_log = self.paths.log_dir.join("game.log");
-        match launcher::launch_game(&game_dir, self.config.use_discrete_gpu, Some(&output_log)) {
+        match launcher::launch_game(&game_dir, (&self.config).into(), Some(&output_log)) {
             Ok(child) => {
                 let poll_cancel = CancellationToken::new();
                 self.game_session = Some(GameSession {
@@ -708,6 +712,7 @@ impl MainWindow {
         let (config, snapshot) = status::reconcile(&self.paths);
         self.config = config;
         self.status = snapshot;
+        self.settings_panel.emit(SettingsPanelInput::DetectTools);
     }
 
     fn refresh_status_with_headline(&mut self, headline: impl Into<String>) {

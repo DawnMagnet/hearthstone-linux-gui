@@ -1,5 +1,5 @@
 use super::compatibility;
-use crate::{host_env, tr};
+use crate::{config::AppConfig, host_env, tr};
 use anyhow::{Context, Result};
 use std::{
     collections::HashSet,
@@ -23,7 +23,7 @@ pub const QUICK_EXIT_THRESHOLD: Duration = Duration::from_secs(15);
 /// `Player.log` are not lost. Otherwise the game inherits the caller's stdio.
 pub fn launch_game(
     game_dir: &Path,
-    use_discrete_gpu: bool,
+    options: LaunchOptions,
     output_log: Option<&Path>,
 ) -> Result<Child> {
     let exe = game_dir.join("Bin/Hearthstone.x86_64");
@@ -52,37 +52,129 @@ pub fn launch_game(
     info!(
         exe = %exe.display(),
         game_dir = %game_dir.display(),
-        use_discrete_gpu,
+        ?options,
         bundled_interpreter,
         "launching Hearthstone"
     );
     let library_path = game_library_path(game_dir, bundled_interpreter);
-    let graphics_env = graphics_env(use_discrete_gpu);
+    let graphics_env = graphics_env(options.use_discrete_gpu);
+    let wrappers = wrapper_chain(options, find_in_path);
+    let runner = find_runtime_runner();
     debug!(ld_library_path = ?library_path, "configured game library path");
-    if let Some(runner) = find_runtime_runner() {
-        info!(runner = %runner.display(), "launching Hearthstone through runtime");
-        let mut command = Command::new(&runner);
-        host_env::apply(&mut command);
-        command
-            .arg(&exe)
-            .current_dir(game_dir)
-            .env("LD_LIBRARY_PATH", library_path)
-            .envs(graphics_env);
-        redirect_output(&mut command, output_log);
-        return command
-            .spawn()
-            .with_context(|| format!("failed to launch Hearthstone through {}", runner.display()));
+    match runner.as_ref() {
+        Some(runner) => {
+            info!(runner = %runner.display(), "launching Hearthstone through runtime")
+        }
+        None => debug!("no runtime runner configured; launching directly"),
     }
 
-    debug!("no runtime runner configured; launching directly");
-    let mut command = Command::new(exe);
+    let mut command = game_command(runner.as_deref(), &wrappers, &exe, &library_path);
     host_env::apply(&mut command);
-    command
-        .current_dir(game_dir)
-        .env("LD_LIBRARY_PATH", library_path)
-        .envs(graphics_env);
+    command.current_dir(game_dir).envs(graphics_env);
     redirect_output(&mut command, output_log);
-    command.spawn().context("failed to launch Hearthstone")
+    command.spawn().with_context(|| match runner.as_ref() {
+        Some(runner) => format!("failed to launch Hearthstone through {}", runner.display()),
+        None => "failed to launch Hearthstone".to_string(),
+    })
+}
+
+/// Per-launch switches from the launcher settings.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct LaunchOptions {
+    pub use_discrete_gpu: bool,
+    pub use_gamemode: bool,
+    pub use_mangohud: bool,
+}
+
+impl From<&AppConfig> for LaunchOptions {
+    fn from(config: &AppConfig) -> Self {
+        Self {
+            use_discrete_gpu: config.use_discrete_gpu,
+            use_gamemode: config.use_gamemode,
+            use_mangohud: config.use_mangohud,
+        }
+    }
+}
+
+/// A host program put in front of the game.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LaunchTool {
+    /// Feral GameMode.
+    GameMode,
+    /// The MangoHud overlay.
+    MangoHud,
+}
+
+impl LaunchTool {
+    /// Name of the wrapper program.
+    pub fn program(self) -> &'static str {
+        match self {
+            Self::GameMode => "gamemoderun",
+            Self::MangoHud => "mangohud",
+        }
+    }
+
+    /// Whether the program is installed on the host.
+    pub fn is_installed(self) -> bool {
+        find_in_path(self.program()).is_some()
+    }
+}
+
+/// The enabled wrappers in the order they are put in front of the game:
+/// `gamemoderun mangohud <game>`. A wrapper that is enabled but not
+/// installed is skipped, so a removed tool never prevents the launch.
+fn wrapper_chain(options: LaunchOptions, find: impl Fn(&str) -> Option<PathBuf>) -> Vec<PathBuf> {
+    [
+        (LaunchTool::GameMode, options.use_gamemode),
+        (LaunchTool::MangoHud, options.use_mangohud),
+    ]
+    .into_iter()
+    .filter(|(_, enabled)| *enabled)
+    .filter_map(|(tool, _)| {
+        let path = find(tool.program());
+        if path.is_none() {
+            warn!(
+                tool = tool.program(),
+                "launch wrapper is enabled but not installed; skipping"
+            );
+        }
+        path
+    })
+    .collect()
+}
+
+/// `[runner] [wrappers...] game`, as one command.
+///
+/// Without wrappers the game's `LD_LIBRARY_PATH` goes on the command itself.
+/// With wrappers it must not: `gamemoderun` and `mangohud` are host scripts,
+/// and the game's library directories (possibly with a bundled glibc) would
+/// break the host shell they run in (issue #22). `env` hands the variable to
+/// the game alone. The wrappers sit behind the runner so they run inside its
+/// environment, where their preloaded libraries can be found.
+fn game_command(
+    runner: Option<&Path>,
+    wrappers: &[PathBuf],
+    exe: &Path,
+    library_path: &OsStr,
+) -> Command {
+    let mut argv: Vec<OsString> = runner.into_iter().map(|path| path.into()).collect();
+    if wrappers.is_empty() {
+        argv.push(exe.into());
+    } else {
+        let mut library_var = OsString::from("LD_LIBRARY_PATH=");
+        library_var.push(library_path);
+        argv.extend(wrappers.iter().map(OsString::from));
+        argv.extend(["env".into(), library_var, exe.into()]);
+    }
+
+    let mut argv = argv.into_iter();
+    let program = argv.next().unwrap_or_else(|| exe.into());
+    let mut command = Command::new(program);
+    command.args(argv);
+    if wrappers.is_empty() {
+        command.env("LD_LIBRARY_PATH", library_path);
+    }
+    command
 }
 
 fn redirect_output(command: &mut Command, output_log: Option<&Path>) {
@@ -421,10 +513,16 @@ fn print_interpreter(candidates: &[PathBuf], exe: &Path) -> Option<String> {
 /// Looks `command` up in the host `PATH`, so the AppImage's own `usr/bin`
 /// is not mistaken for a system installation.
 fn find_in_path(command: &str) -> Option<PathBuf> {
-    env::split_paths(&host_env::host_var("PATH")?).find_map(|dir| {
-        let path = dir.join(command);
-        path.exists().then_some(path)
-    })
+    env::split_paths(&host_env::host_var("PATH")?)
+        .find_map(|dir| executable_file(&dir.join(command)))
+}
+
+/// `path` itself when it is a regular file that can be executed.
+fn executable_file(path: &Path) -> Option<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let metadata = path.metadata().ok()?;
+    (metadata.is_file() && metadata.permissions().mode() & 0o111 != 0).then(|| path.to_path_buf())
 }
 
 fn graphics_env(use_discrete_gpu: bool) -> Vec<(&'static str, OsString)> {
@@ -482,6 +580,122 @@ fn dedupe_paths(paths: &mut Vec<PathBuf>) {
 mod tests {
     use super::*;
     use std::os::unix::process::ExitStatusExt;
+
+    #[test]
+    fn builds_wrapper_chain_in_order_and_skips_missing_tools() {
+        use std::path::PathBuf;
+
+        let installed = |tool: &str| Some(PathBuf::from("/usr/bin").join(tool));
+        let both = LaunchOptions {
+            use_gamemode: true,
+            use_mangohud: true,
+            ..LaunchOptions::default()
+        };
+        let chain = wrapper_chain(both, installed);
+        assert_eq!(
+            chain,
+            [
+                PathBuf::from("/usr/bin/gamemoderun"),
+                PathBuf::from("/usr/bin/mangohud")
+            ]
+        );
+
+        let only_mangohud =
+            |tool: &str| (tool == "mangohud").then(|| PathBuf::from("/bin/mangohud"));
+        assert_eq!(
+            wrapper_chain(both, only_mangohud),
+            [PathBuf::from("/bin/mangohud")]
+        );
+        assert!(wrapper_chain(LaunchOptions::default(), installed).is_empty());
+    }
+
+    fn argv(command: &std::process::Command) -> Vec<String> {
+        std::iter::once(command.get_program())
+            .chain(command.get_args())
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    fn library_path_of(command: &std::process::Command) -> Option<String> {
+        command
+            .get_envs()
+            .find(|(name, _)| *name == "LD_LIBRARY_PATH")
+            .and_then(|(_, value)| value)
+            .map(|value| value.to_string_lossy().into_owned())
+    }
+
+    #[test]
+    fn game_command_keeps_the_library_path_on_the_game_only() {
+        use super::game_command;
+        use std::path::{Path, PathBuf};
+
+        let exe = Path::new("/game/Hearthstone.x86_64");
+        let runner = Path::new("/run/runtime");
+        let wrappers = [
+            PathBuf::from("/usr/bin/gamemoderun"),
+            PathBuf::from("/usr/bin/mangohud"),
+        ];
+        let libs = std::ffi::OsStr::new("/game/Bin:/lib");
+
+        // Without wrappers nothing changes: the variable is on the command.
+        let plain = game_command(None, &[], exe, libs);
+        assert_eq!(argv(&plain), ["/game/Hearthstone.x86_64"]);
+        assert_eq!(library_path_of(&plain).as_deref(), Some("/game/Bin:/lib"));
+        let runner_only = game_command(Some(runner), &[], exe, libs);
+        assert_eq!(
+            argv(&runner_only),
+            ["/run/runtime", "/game/Hearthstone.x86_64"]
+        );
+        assert_eq!(
+            library_path_of(&runner_only).as_deref(),
+            Some("/game/Bin:/lib")
+        );
+
+        // With wrappers only the game gets it, through `env`.
+        let direct = game_command(None, &wrappers, exe, libs);
+        assert_eq!(
+            argv(&direct),
+            [
+                "/usr/bin/gamemoderun",
+                "/usr/bin/mangohud",
+                "env",
+                "LD_LIBRARY_PATH=/game/Bin:/lib",
+                "/game/Hearthstone.x86_64"
+            ]
+        );
+        assert_eq!(library_path_of(&direct), None);
+
+        // Behind a runner the wrappers run inside the runner's environment.
+        let through_runner = game_command(Some(runner), &wrappers, exe, libs);
+        assert_eq!(
+            argv(&through_runner),
+            [
+                "/run/runtime",
+                "/usr/bin/gamemoderun",
+                "/usr/bin/mangohud",
+                "env",
+                "LD_LIBRARY_PATH=/game/Bin:/lib",
+                "/game/Hearthstone.x86_64"
+            ]
+        );
+        assert_eq!(library_path_of(&through_runner), None);
+    }
+
+    #[test]
+    fn finds_only_executable_files_in_path() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let tool = dir.path().join("tool");
+        std::fs::write(&tool, "#!/bin/sh\n").unwrap();
+        let find = |name: &str| super::executable_file(&dir.path().join(name));
+        assert_eq!(find("tool"), None, "not executable yet");
+        std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(find("tool"), Some(tool));
+        std::fs::create_dir(dir.path().join("folder")).unwrap();
+        assert_eq!(find("folder"), None, "directories are no tools");
+        assert_eq!(find("missing"), None);
+    }
 
     #[test]
     fn describes_exit_codes_and_signals() {

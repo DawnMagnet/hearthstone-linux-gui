@@ -155,6 +155,12 @@ pub struct AppConfig {
     pub last_login_at: Option<String>,
     #[serde(default)]
     pub use_discrete_gpu: bool,
+    /// Start the game through Feral GameMode (`gamemoderun`).
+    #[serde(default)]
+    pub use_gamemode: bool,
+    /// Start the game with the MangoHud overlay (`mangohud`).
+    #[serde(default)]
+    pub use_mangohud: bool,
     /// Launcher UI language; `None` follows the system locale.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ui_language: Option<String>,
@@ -171,6 +177,8 @@ impl Default for AppConfig {
             logged_in: false,
             last_login_at: None,
             use_discrete_gpu: false,
+            use_gamemode: false,
+            use_mangohud: false,
             ui_language: None,
         }
     }

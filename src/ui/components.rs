@@ -1,7 +1,9 @@
 use super::{app::ProgressState, status::StatusSnapshot};
 use hearthstone_linux::{
     config::{AppConfig, Locale, Region},
-    i18n, tr,
+    host_env, i18n,
+    install::launcher::LaunchTool,
+    tr,
 };
 use relm4::adw::prelude::*;
 use relm4::{adw, gtk, prelude::*, ComponentController, Controller, RelmWidgetExt, Sender};
@@ -40,6 +42,7 @@ impl SimpleComponent for StatusPanel {
             gtk::Label {
                 set_justify: gtk::Justification::Center,
                 set_wrap: true,
+                set_margin_top: 12,
                 add_css_class: relm4::css::TITLE_2,
 
                 #[watch]
@@ -47,12 +50,17 @@ impl SimpleComponent for StatusPanel {
             },
 
             gtk::Label {
-                set_justify: gtk::Justification::Center,
-                set_wrap: true,
+                // One line; a longer text is cut short instead of widening
+                // the window, and stays readable in the tooltip.
+                set_ellipsize: gtk::pango::EllipsizeMode::End,
+                set_margin_top: 6,
+                set_margin_bottom: 6,
                 add_css_class: relm4::css::DIM_LABEL,
 
                 #[watch]
                 set_label: &model.state.snapshot.details,
+                #[watch]
+                set_tooltip_text: Some(&model.state.snapshot.details),
             },
 
             gtk::Box {
@@ -133,6 +141,8 @@ impl SimpleComponent for StatusPanel {
 
 pub struct SettingsPanel {
     config: AppConfig,
+    gamemode_available: bool,
+    mangohud_available: bool,
     region: Controller<SimpleComboBox<Region>>,
     locale: Controller<SimpleComboBox<Locale>>,
 }
@@ -143,6 +153,9 @@ pub enum SettingsPanelInput {
     RegionChanged(usize),
     LocaleChanged(usize),
     DiscreteGpuChanged(bool),
+    LaunchToolChanged(LaunchTool, bool),
+    /// Look again for the optional launch tools on the host.
+    DetectTools,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -150,6 +163,7 @@ pub enum SettingsOutput {
     RegionChanged(Region),
     LocaleChanged(Locale),
     DiscreteGpuChanged(bool),
+    LaunchToolChanged(LaunchTool, bool),
 }
 
 #[relm4::component(pub)]
@@ -203,6 +217,63 @@ impl SimpleComponent for SettingsPanel {
                     sender.input(SettingsPanelInput::DiscreteGpuChanged(button.is_active()));
                 },
             },
+
+            attach[0, 3, 1, 1] = &gtk::Label {
+                set_label: &tr!("settings.performance"),
+                set_xalign: 1.0,
+                add_css_class: relm4::css::DIM_LABEL,
+            },
+
+            attach[1, 3, 1, 1] = &gtk::Box {
+                set_orientation: gtk::Orientation::Horizontal,
+                set_spacing: 12,
+
+                gtk::CheckButton {
+                    set_label: Some("GameMode"),
+
+                    #[watch]
+                    set_sensitive: model.gamemode_available,
+                    #[watch]
+                    set_tooltip_text: Some(&tool_tooltip(
+                        LaunchTool::GameMode,
+                        model.gamemode_available,
+                        tr!("settings.gamemode_tooltip"),
+                    )),
+                    // A tool that has gone missing shows as off, but the saved
+                    // choice is kept for when it is installed again.
+                    #[watch]
+                    set_active: model.config.use_gamemode && model.gamemode_available,
+
+                    connect_toggled[sender] => move |button| {
+                        sender.input(SettingsPanelInput::LaunchToolChanged(
+                            LaunchTool::GameMode,
+                            button.is_active(),
+                        ));
+                    },
+                },
+
+                gtk::CheckButton {
+                    set_label: Some("MangoHud"),
+
+                    #[watch]
+                    set_sensitive: model.mangohud_available,
+                    #[watch]
+                    set_tooltip_text: Some(&tool_tooltip(
+                        LaunchTool::MangoHud,
+                        model.mangohud_available,
+                        tr!("settings.mangohud_tooltip"),
+                    )),
+                    #[watch]
+                    set_active: model.config.use_mangohud && model.mangohud_available,
+
+                    connect_toggled[sender] => move |button| {
+                        sender.input(SettingsPanelInput::LaunchToolChanged(
+                            LaunchTool::MangoHud,
+                            button.is_active(),
+                        ));
+                    },
+                },
+            },
         }
     }
 
@@ -225,6 +296,8 @@ impl SimpleComponent for SettingsPanel {
             .forward(sender.input_sender(), SettingsPanelInput::LocaleChanged);
         let model = SettingsPanel {
             config,
+            gamemode_available: LaunchTool::GameMode.is_installed(),
+            mangohud_available: LaunchTool::MangoHud.is_installed(),
             region,
             locale,
         };
@@ -263,6 +336,28 @@ impl SimpleComponent for SettingsPanel {
                     sender.output(SettingsOutput::LocaleChanged(locale)).ok();
                 }
             }
+            SettingsPanelInput::LaunchToolChanged(tool, enabled) => {
+                let (current, available) = match tool {
+                    LaunchTool::GameMode => {
+                        (&mut self.config.use_gamemode, self.gamemode_available)
+                    }
+                    LaunchTool::MangoHud => {
+                        (&mut self.config.use_mangohud, self.mangohud_available)
+                    }
+                };
+                // A switch shown as off because its tool is missing reports
+                // itself too; that must not clear the saved choice.
+                if available && *current != enabled {
+                    *current = enabled;
+                    sender
+                        .output(SettingsOutput::LaunchToolChanged(tool, enabled))
+                        .ok();
+                }
+            }
+            SettingsPanelInput::DetectTools => {
+                self.gamemode_available = LaunchTool::GameMode.is_installed();
+                self.mangohud_available = LaunchTool::MangoHud.is_installed();
+            }
             SettingsPanelInput::DiscreteGpuChanged(use_discrete_gpu) => {
                 if self.config.use_discrete_gpu != use_discrete_gpu {
                     self.config.use_discrete_gpu = use_discrete_gpu;
@@ -272,6 +367,17 @@ impl SimpleComponent for SettingsPanel {
                 }
             }
         }
+    }
+}
+
+/// Tooltip of a launch tool switch: what it does, or why it is disabled.
+fn tool_tooltip(tool: LaunchTool, available: bool, description: String) -> String {
+    if available {
+        description
+    } else if host_env::is_flatpak() {
+        tr!("settings.tool_flatpak", tool = tool.program())
+    } else {
+        tr!("settings.tool_missing", tool = tool.program())
     }
 }
 
@@ -366,6 +472,7 @@ impl SimpleComponent for ActionBar {
             set_orientation: gtk::Orientation::Horizontal,
             set_halign: gtk::Align::Center,
             set_spacing: 8,
+            set_margin_top: 10,
 
             #[name(install_button)]
             adw::SplitButton {

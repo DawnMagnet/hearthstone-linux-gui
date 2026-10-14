@@ -35,6 +35,11 @@ language_tooltip = "Wird nach einem Neustart des Launchers wirksam"
 graphics = "Grafik"
 discrete_gpu = "Dedizierte GPU"
 discrete_gpu_tooltip = "Mit den Umgebungsvariablen für PRIME/DRI-GPU-Offload starten"
+performance = "Leistung"
+gamemode_tooltip = "Das Spiel über Feral GameMode starten (gamemoderun)"
+mangohud_tooltip = "Das MangoHud-Overlay mit Bildrate und Systemlast einblenden"
+tool_missing = "{tool} wurde nicht gefunden. Installiere es, um diese Option zu nutzen."
+tool_flatpak = "{tool} steht in der Flatpak-Sandbox nicht zur Verfügung."
 save_failed = "Einstellungen konnten nicht gespeichert werden: {error}"
 
 [action]
