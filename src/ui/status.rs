@@ -8,7 +8,11 @@ pub struct StatusSnapshot {
 
 pub fn reconcile(paths: &AppPaths) -> (AppConfig, StatusSnapshot) {
     let token_exists = paths.game_token().exists();
-    let mut config = AppConfig::load_or_default(&paths.config_file).unwrap_or_default();
+    let mut config = if paths.config_file.exists() {
+        AppConfig::load_or_default(&paths.config_file).unwrap_or_default()
+    } else {
+        AppConfig::for_system_locale()
+    };
     let should_save = config.logged_in != token_exists || config.game_dir.is_none();
     config.logged_in = token_exists;
     if config.game_dir.is_none() {

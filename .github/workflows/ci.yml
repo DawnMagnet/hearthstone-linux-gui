@@ -1,0 +1,54 @@
+name: CI
+
+# Minimal pull request check: type-check everything (GUI included) and run the
+# unit tests. No packages are built here; packaging.yml builds and smoke-tests
+# them on master, on manual runs, and on pull requests that touch the packaging
+# pipeline itself.
+
+on:
+  pull_request:
+    paths-ignore:
+      - "**.md"
+      - docs/**
+      - LICENSE
+      - flake.nix
+      - flake.lock
+      - .envrc
+      - .github/workflows/flatpak.yml
+      - .github/workflows/packaging.yml
+      - .github/workflows/release.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Check and unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@1.92.0
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install GTK 4 and libadwaita headers
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            libgtk-4-dev libadwaita-1-dev pkg-config
+
+      # The library does not depend on GTK, so this needs no GUI build.
+      - name: Unit tests
+        run: cargo test -p hearthstone-linux-gui --lib --locked
+
+      # `check` stops before code generation and linking, which is enough to
+      # catch GUI compile errors without a full build.
+      - name: Type-check workspace, GUI and tests
+        run: cargo check --workspace --all-targets --locked

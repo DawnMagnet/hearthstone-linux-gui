@@ -193,11 +193,9 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
-    /// Loads the saved settings. On first start, when nothing is saved yet,
-    /// region and game language are preselected from the system locale.
     pub fn load_or_default(path: &std::path::Path) -> Result<Self> {
         if !path.exists() {
-            return Ok(Self::for_system_locale());
+            return Ok(Self::default());
         }
 
         let data = std::fs::read_to_string(path)
@@ -206,7 +204,8 @@ impl AppConfig {
     }
 
     /// Defaults with region and game language guessed from `LC_ALL`,
-    /// `LC_MESSAGES` or `LANG`, whichever is set first.
+    /// `LC_MESSAGES` or `LANG`, whichever is set first. Meant for the first
+    /// start of the GUI, before anything is saved.
     pub fn for_system_locale() -> Self {
         let system_locale = ["LC_ALL", "LC_MESSAGES", "LANG"]
             .into_iter()
