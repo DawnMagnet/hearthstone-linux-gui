@@ -16,7 +16,7 @@ use hearthstone_linux::{
     },
     paths::AppPaths,
     tr,
-    update::{self, PackageKind, Release},
+    update::{self, Release},
 };
 use relm4::adw::prelude::*;
 use relm4::{
@@ -78,7 +78,6 @@ struct MainWindow {
     update_button: gtk::Button,
     /// Newer launcher release found by the update check.
     update: Option<Release>,
-    update_in_progress: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -90,8 +89,8 @@ pub enum AppMsg {
     Refresh,
     CheckForUpdatesChanged(bool),
     UpdateFound(Release),
-    InstallUpdate,
-    UpdateFetched(Result<UpdateOutcome, String>),
+    OpenUpdatePage,
+    UpdatePageOpened(Result<(), String>),
     Action(ActionBarOutput),
     InstallEvent(TaskEvent),
     UninstallFinished(Result<(), String>),
@@ -115,31 +114,6 @@ struct GameSession {
     started: Instant,
     stop_requested: bool,
     output_log: PathBuf,
-}
-
-/// What clicking the upgrade button led to.
-#[derive(Clone, Copy, Debug)]
-pub enum UpdateOutcome {
-    /// The package was downloaded and opened with the desktop's installer.
-    PackageOpened,
-    /// No package fits this installation; the release page was opened.
-    PageOpened,
-}
-
-fn fetch_update(
-    release: &Release,
-    download_dir: &std::path::Path,
-) -> anyhow::Result<UpdateOutcome> {
-    let Some(asset) = release.asset_for(PackageKind::detect()) else {
-        browser::open_url(&release.page_url)?;
-        return Ok(UpdateOutcome::PageOpened);
-    };
-    let runtime = tokio::runtime::Runtime::new()?;
-    let package = runtime.block_on(update::download(asset, download_dir))?;
-    // A file opener hands the package to the software installer; a web
-    // browser must not get it.
-    browser::open_file(&package)?;
-    Ok(UpdateOutcome::PackageOpened)
 }
 
 /// Makes the upgrade button pulse so it is noticed without moving anything.
@@ -337,9 +311,11 @@ impl SimpleComponent for MainWindow {
             refresh.connect_clicked(move |_| input.emit(AppMsg::Refresh));
         }
 
-        relm4::set_global_css(UPDATE_BUTTON_CSS);
+        // The window is built again on a language change; the style sheet
+        // must not be added again each time.
+        static UPDATE_BUTTON_STYLE: std::sync::Once = std::sync::Once::new();
+        UPDATE_BUTTON_STYLE.call_once(|| relm4::set_global_css(UPDATE_BUTTON_CSS));
         let update_button = gtk::Button::from_icon_name("software-update-available-symbolic");
-        update_button.set_tooltip_text(Some(&tr!("update.install_tooltip")));
         update_button.add_css_class(relm4::css::CIRCULAR);
         update_button.add_css_class(relm4::css::SUGGESTED_ACTION);
         update_button.add_css_class("update-available");
@@ -347,10 +323,10 @@ impl SimpleComponent for MainWindow {
         update_button.set_visible(false);
         {
             let input = sender.input_sender().clone();
-            update_button.connect_clicked(move |_| input.emit(AppMsg::InstallUpdate));
+            update_button.connect_clicked(move |_| input.emit(AppMsg::OpenUpdatePage));
         }
-        if init.config.check_for_updates {
-            Self::check_for_updates(&sender);
+        if update::enabled() && init.config.check_for_updates {
+            Self::check_for_updates(&sender, init.paths.update_check_cache());
         }
 
         let model = MainWindow {
@@ -372,7 +348,6 @@ impl SimpleComponent for MainWindow {
             game_settings_button: preferences_menu.game_settings,
             update_button: update_button.clone(),
             update: None,
-            update_in_progress: false,
         };
 
         let logo_image = embedded_image(include_bytes!("../../data/icons/logo.png"));
@@ -412,14 +387,25 @@ impl SimpleComponent for MainWindow {
                 self.config.check_for_updates = enabled;
                 self.save_settings();
                 if enabled {
-                    Self::check_for_updates(&sender);
+                    Self::check_for_updates(&sender, self.paths.update_check_cache());
                 } else {
                     self.update = None;
                 }
             }
-            AppMsg::UpdateFound(release) => self.update = Some(release),
-            AppMsg::InstallUpdate => self.install_update(sender),
-            AppMsg::UpdateFetched(result) => self.handle_update_fetched(result),
+            AppMsg::UpdateFound(release) => {
+                // A check that was still running when the option was switched
+                // off must not bring the button back.
+                if self.config.check_for_updates {
+                    self.update = Some(release);
+                }
+            }
+            AppMsg::OpenUpdatePage => self.open_update_page(sender),
+            AppMsg::UpdatePageOpened(result) => {
+                if let Err(error) = result {
+                    tracing::error!(%error, "failed to open the launcher release page");
+                    self.toast(&tr!("update.failed", error = error));
+                }
+            }
             AppMsg::Action(output) => self.handle_action(output, sender),
             AppMsg::InstallEvent(event) => self.handle_install_event(event),
             AppMsg::UninstallFinished(result) => self.handle_uninstall_finished(result),
@@ -497,11 +483,11 @@ impl MainWindow {
 
     /// Asks for the latest release in the background. Failures only go to
     /// the log: being offline must not disturb the launcher.
-    fn check_for_updates(sender: &ComponentSender<Self>) {
+    fn check_for_updates(sender: &ComponentSender<Self>, cache_file: PathBuf) {
         let input = sender.input_sender().clone();
         std::thread::spawn(move || {
             let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
-            match runtime.block_on(update::latest_release()) {
+            match runtime.block_on(update::latest_release(&cache_file)) {
                 Ok(release) if release.is_upgrade() => {
                     tracing::info!(version = %release.version, "launcher upgrade available");
                     input.emit(AppMsg::UpdateFound(release));
@@ -516,46 +502,19 @@ impl MainWindow {
         });
     }
 
-    /// Downloads the package for this installation and hands it to the
-    /// desktop's installer, or opens the release page when there is none.
-    fn install_update(&mut self, sender: ComponentSender<Self>) {
-        let Some(release) = self.update.clone() else {
+    /// Opens the page of the newer release, which says how to get it.
+    fn open_update_page(&self, sender: ComponentSender<Self>) {
+        let Some(release) = self.update.as_ref() else {
             return;
         };
-        if self.update_in_progress {
-            return;
-        }
-        self.update_in_progress = true;
-        self.status.headline = tr!("update.downloading", version = release.version);
-        self.refresh_details();
-
-        let download_dir = directories::UserDirs::new()
-            .and_then(|dirs| dirs.download_dir().map(PathBuf::from))
-            .unwrap_or_else(|| self.paths.cache_dir.clone());
+        let url = release.page_url.clone();
         let input = sender.input_sender().clone();
         std::thread::spawn(move || {
-            let result =
-                fetch_update(&release, &download_dir).map_err(|error| format!("{error:#}"));
-            input.emit(AppMsg::UpdateFetched(result));
+            let result = browser::open_url(&url)
+                .map(|_| ())
+                .map_err(|error| format!("{error:#}"));
+            input.emit(AppMsg::UpdatePageOpened(result));
         });
-    }
-
-    fn handle_update_fetched(&mut self, result: Result<UpdateOutcome, String>) {
-        self.update_in_progress = false;
-        let version = self
-            .update
-            .as_ref()
-            .map(|release| release.version.clone())
-            .unwrap_or_default();
-        self.status.headline = match result {
-            Ok(UpdateOutcome::PackageOpened) => tr!("update.downloaded", version = version),
-            Ok(UpdateOutcome::PageOpened) => tr!("update.opened_page", version = version),
-            Err(error) => {
-                tracing::error!(%error, "launcher upgrade failed");
-                tr!("update.failed", error = error)
-            }
-        };
-        self.refresh_details();
     }
 
     fn open_game_settings(&mut self, sender: ComponentSender<Self>) {
@@ -1042,7 +1001,12 @@ impl MainWindow {
                 .as_deref(),
         );
         self.update_button.set_visible(self.update.is_some());
-        self.update_button.set_sensitive(!self.update_in_progress);
+        if let Some(release) = self.update.as_ref() {
+            self.update_button.set_tooltip_text(Some(&tr!(
+                "update.available_tooltip",
+                version = release.version
+            )));
+        }
         self.actions.emit(ActionBarInput::Render(ActionBarState {
             install: self.install_state.clone(),
             installed: self.is_installed(),

@@ -3,7 +3,7 @@ use hearthstone_linux::{
     config::{AppConfig, Locale, Region},
     host_env, i18n,
     install::launcher::LaunchTool,
-    tr,
+    tr, update,
 };
 use relm4::adw::prelude::*;
 use relm4::{adw, gtk, prelude::*, ComponentController, Controller, RelmWidgetExt, Sender};
@@ -719,26 +719,29 @@ pub fn preferences_menu(
     hint.add_css_class(relm4::css::CAPTION);
     content.append(&hint);
 
-    content.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
-    // A separate, wrapping label: the built-in one cannot wrap on GTK 4.0.
-    let updates = gtk::CheckButton::new();
-    updates.set_valign(gtk::Align::Start);
-    updates.set_active(check_for_updates);
-    updates.connect_toggled(move |button| on_check_for_updates(button.is_active()));
-    let updates_label = gtk::Label::new(Some(&tr!("settings.auto_update")));
-    updates_label.set_wrap(true);
-    updates_label.set_xalign(0.0);
-    updates_label.set_max_width_chars(30);
-    let label_click = gtk::GestureClick::new();
-    {
-        let updates = updates.clone();
-        label_click.connect_released(move |_, _, _, _| updates.set_active(!updates.is_active()));
+    if update::enabled() {
+        content.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+        // A separate, wrapping label: the built-in one cannot wrap on GTK 4.0.
+        let updates = gtk::CheckButton::new();
+        updates.set_valign(gtk::Align::Start);
+        updates.set_active(check_for_updates);
+        updates.connect_toggled(move |button| on_check_for_updates(button.is_active()));
+        let updates_label = gtk::Label::new(Some(&tr!("settings.auto_update")));
+        updates_label.set_wrap(true);
+        updates_label.set_xalign(0.0);
+        updates_label.set_max_width_chars(30);
+        let label_click = gtk::GestureClick::new();
+        {
+            let updates = updates.clone();
+            label_click
+                .connect_released(move |_, _, _, _| updates.set_active(!updates.is_active()));
+        }
+        updates_label.add_controller(label_click);
+        let updates_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        updates_row.append(&updates);
+        updates_row.append(&updates_label);
+        content.append(&updates_row);
     }
-    updates_label.add_controller(label_click);
-    let updates_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    updates_row.append(&updates);
-    updates_row.append(&updates_label);
-    content.append(&updates_row);
 
     popover.set_child(Some(&content));
 

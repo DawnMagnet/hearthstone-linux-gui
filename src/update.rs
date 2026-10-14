@@ -1,146 +1,120 @@
-//! Looks for a newer launcher release and fetches the matching package.
+//! Looks for a newer launcher release.
 //!
 //! Releases are read from the project's GitHub repository. Nothing is
-//! installed from here: a downloaded package is handed to the desktop's
-//! software installer, and package kinds that cannot be upgraded this way
-//! (AppImage, Flatpak, Nix) get the release page instead.
+//! downloaded or installed from here: the user is pointed to the release
+//! page and follows its instructions, because how a launcher is upgraded
+//! depends on how it was installed (AppImage, DEB, RPM, Pacman, Flatpak, Nix,
+//! a distribution's own package, ...).
 
-use crate::host_env;
 use anyhow::{Context, Result};
-use serde::Deserialize;
-use std::path::{Path, PathBuf};
+use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 const LATEST_RELEASE_URL: &str =
     "https://api.github.com/repos/DawnMagnet/hearthstone-linux-gui/releases/latest";
 const USER_AGENT: &str = concat!("hearthstone-linux-gui/", env!("CARGO_PKG_VERSION"));
 
+/// How long a stored answer is reused. Anonymous GitHub API calls are limited
+/// per IP address, and every start of the launcher asks.
+const CACHE_TTL_SECS: u64 = 6 * 60 * 60;
+
+/// Whether this build offers the update check at all. Packagers whose
+/// distribution upgrades the launcher itself build with
+/// `HEARTHSTONE_LINUX_NO_UPDATE_CHECK=1` to remove it.
+pub const fn enabled() -> bool {
+    option_env!("HEARTHSTONE_LINUX_NO_UPDATE_CHECK").is_none()
+}
+
 /// A published launcher release.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Release {
     /// Version as tagged, e.g. `v0.5.0`.
     #[serde(rename = "tag_name")]
     pub version: String,
-    /// Release page for a manual download.
+    /// Release page with the download instructions.
     #[serde(rename = "html_url")]
     pub page_url: String,
-    #[serde(default)]
-    pub assets: Vec<Asset>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
-pub struct Asset {
-    pub name: String,
-    #[serde(rename = "browser_download_url")]
-    pub url: String,
-}
-
-/// How this launcher was installed, as far as it matters for an upgrade.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PackageKind {
-    Deb,
-    Rpm,
-    /// AppImage, Flatpak, Nix, Pacman or a local build: upgraded by hand or
-    /// by its own package manager.
-    Other,
-}
-
-impl PackageKind {
-    /// Detects the package that owns the running executable.
-    pub fn detect() -> Self {
-        if host_env::is_active() || host_env::is_flatpak() {
-            return Self::Other;
-        }
-        let Ok(exe) = std::env::current_exe() else {
-            return Self::Other;
-        };
-        if owned_by(&exe, "dpkg-query", &["-S"]) {
-            Self::Deb
-        } else if owned_by(&exe, "rpm", &["-qf"]) {
-            Self::Rpm
-        } else {
-            Self::Other
-        }
-    }
-
-    fn asset_suffix(self) -> Option<&'static str> {
-        match self {
-            Self::Deb => Some("_amd64.deb"),
-            Self::Rpm => Some(".x86_64.rpm"),
-            Self::Other => None,
-        }
-    }
-}
-
-fn owned_by(exe: &Path, program: &str, args: &[&str]) -> bool {
-    host_env::host_command(program)
-        .args(args)
-        .arg(exe)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
 }
 
 impl Release {
-    /// The package of this release for `kind`, if the release has one.
-    pub fn asset_for(&self, kind: PackageKind) -> Option<&Asset> {
-        let suffix = kind.asset_suffix()?;
-        self.assets
-            .iter()
-            .find(|asset| asset.name.ends_with(suffix))
-    }
-
     /// Whether this release is newer than the running launcher.
     pub fn is_upgrade(&self) -> bool {
         is_newer(&self.version, env!("CARGO_PKG_VERSION"))
     }
 }
 
-/// Fetches the latest published release.
-pub async fn latest_release() -> Result<Release> {
-    let response = client()?
+#[derive(Deserialize, Serialize)]
+struct Stored {
+    checked_at: u64,
+    release: Release,
+}
+
+/// The latest published release. A stored answer in `cache_file` that is
+/// younger than six hours is used instead of asking GitHub; when GitHub
+/// cannot be reached an older stored answer is better than none.
+pub async fn latest_release(cache_file: &Path) -> Result<Release> {
+    let stored: Option<Stored> = std::fs::read_to_string(cache_file)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok());
+    let now = unix_time();
+    if let Some(stored) = stored.as_ref() {
+        if now.saturating_sub(stored.checked_at) < CACHE_TTL_SECS {
+            return Ok(stored.release.clone());
+        }
+    }
+
+    match fetch_latest().await {
+        Ok(release) => {
+            store(cache_file, now, &release);
+            Ok(release)
+        }
+        Err(error) => match stored {
+            Some(stored) => {
+                tracing::warn!(error = %format!("{error:#}"), "using the stored launcher release");
+                Ok(stored.release)
+            }
+            None => Err(error),
+        },
+    }
+}
+
+async fn fetch_latest() -> Result<Release> {
+    let client = reqwest::Client::builder()
+        .user_agent(USER_AGENT)
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .context("failed to set up the HTTP client")?;
+    client
         .get(LATEST_RELEASE_URL)
         .header("Accept", "application/vnd.github+json")
         .send()
         .await
         .context("failed to query the latest launcher release")?
         .error_for_status()
-        .context("the release query was rejected")?;
-    response
+        .context("the release query was rejected")?
         .json()
         .await
         .context("the release query returned an unexpected response")
 }
 
-/// Downloads `asset` into `dir` and returns the file's path.
-pub async fn download(asset: &Asset, dir: &Path) -> Result<PathBuf> {
-    // The name comes from the network; keep only its final component.
-    let name = Path::new(&asset.name)
-        .file_name()
-        .context("release asset has no file name")?;
-    let bytes = client()?
-        .get(&asset.url)
-        .send()
-        .await
-        .with_context(|| format!("failed to download {}", asset.url))?
-        .error_for_status()?
-        .bytes()
-        .await
-        .with_context(|| format!("failed to download {}", asset.url))?;
-    tokio::fs::create_dir_all(dir).await?;
-    let path = dir.join(name);
-    tokio::fs::write(&path, &bytes)
-        .await
-        .with_context(|| format!("failed to write {}", path.display()))?;
-    Ok(path)
+fn store(cache_file: &Path, checked_at: u64, release: &Release) {
+    let stored = Stored {
+        checked_at,
+        release: release.clone(),
+    };
+    let written = cache_file
+        .parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|()| std::fs::write(cache_file, serde_json::to_string(&stored)?));
+    if let Err(error) = written {
+        tracing::debug!(%error, "could not store the launcher release");
+    }
 }
 
-fn client() -> Result<reqwest::Client> {
-    reqwest::Client::builder()
-        .user_agent(USER_AGENT)
-        .timeout(std::time::Duration::from_secs(120))
-        .build()
-        .context("failed to set up the HTTP client")
+fn unix_time() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs())
 }
 
 /// Compares two versions such as `v0.5.0` and `0.5.0-test.1`. With equal
@@ -171,7 +145,7 @@ fn parse_version(version: &str) -> ([u64; 3], bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_newer, Asset, PackageKind, Release};
+    use super::{is_newer, latest_release, unix_time, Release, Stored, CACHE_TTL_SECS};
 
     #[test]
     fn compares_versions() {
@@ -186,30 +160,33 @@ mod tests {
     }
 
     #[test]
-    fn parses_release_and_picks_the_matching_package() {
+    fn parses_the_release_and_ignores_other_fields() {
         let release: Release = serde_json::from_str(
             r#"{
                 "tag_name": "v0.5.0",
                 "html_url": "https://example.invalid/releases/v0.5.0",
-                "assets": [
-                    {"name": "launcher-0.5.0-x86_64.AppImage", "browser_download_url": "https://example.invalid/a"},
-                    {"name": "launcher_0.5.0_amd64.deb", "browser_download_url": "https://example.invalid/d"},
-                    {"name": "launcher-0.5.0-1.x86_64.rpm", "browser_download_url": "https://example.invalid/r"}
-                ]
+                "assets": [{"name": "launcher.deb"}]
             }"#,
         )
         .unwrap();
-
         assert_eq!(release.version, "v0.5.0");
-        let name = |asset: Option<&Asset>| asset.map(|asset| asset.name.clone());
-        assert_eq!(
-            name(release.asset_for(PackageKind::Deb)).as_deref(),
-            Some("launcher_0.5.0_amd64.deb")
-        );
-        assert_eq!(
-            name(release.asset_for(PackageKind::Rpm)).as_deref(),
-            Some("launcher-0.5.0-1.x86_64.rpm")
-        );
-        assert_eq!(release.asset_for(PackageKind::Other), None);
+        assert_eq!(release.page_url, "https://example.invalid/releases/v0.5.0");
+    }
+
+    #[tokio::test]
+    async fn a_recent_stored_answer_is_used_without_asking_github() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = dir.path().join("update-check.json");
+        let release = Release {
+            version: "v9.9.9".into(),
+            page_url: "https://example.invalid/releases/v9.9.9".into(),
+        };
+        let stored = Stored {
+            checked_at: unix_time() - CACHE_TTL_SECS / 2,
+            release: release.clone(),
+        };
+        std::fs::write(&cache, serde_json::to_string(&stored).unwrap()).unwrap();
+
+        assert_eq!(latest_release(&cache).await.unwrap(), release);
     }
 }

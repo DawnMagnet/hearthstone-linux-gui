@@ -31,7 +31,7 @@ version_missing = "未安装"
 details = "登录：{login} · {region} / {locale}\n游戏：{game} · Unity：{unity}"
 
 [settings]
-auto_update = "自动检查更新并提示安装"
+auto_update = "启动时检查启动器更新"
 region = "服务器区域"
 game_language = "游戏语言"
 language = "启动器语言"
@@ -145,11 +145,8 @@ missing_token = "缺少登录令牌"
 missing_client_config = "缺少 client.config"
 
 [update]
-install_tooltip = "安装启动器升级"
-downloading = "正在下载启动器升级 {version}…"
-downloaded = "启动器升级 {version} 已下载；请按打开的安装程序操作"
-opened_page = "已打开启动器 {version} 的下载页面"
-failed = "启动器升级失败：{error}"
+available_tooltip = "启动器 {version} 可用；打开下载页面"
+failed = "无法打开下载页面：{error}"
 
 [game_settings]
 menu = "游戏设置…"

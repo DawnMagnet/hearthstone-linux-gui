@@ -35,7 +35,7 @@ version_missing = "Not installed"
 details = "Login: {login} · {region} / {locale}\nGame: {game} · Unity: {unity}"
 
 [settings]
-auto_update = "Automatically check for updates and offer to install them"
+auto_update = "Check for launcher updates at startup"
 region = "Region"
 game_language = "Game language"
 language = "Launcher language"
@@ -149,11 +149,8 @@ missing_token = "login token is missing"
 missing_client_config = "client.config is missing"
 
 [update]
-install_tooltip = "Install launcher upgrade"
-downloading = "Downloading launcher upgrade {version}…"
-downloaded = "Launcher upgrade {version} downloaded; follow the installer that opens"
-opened_page = "Opened the download page for launcher {version}"
-failed = "Launcher upgrade failed: {error}"
+available_tooltip = "Launcher {version} is available; open its download page"
+failed = "Could not open the download page: {error}"
 
 [game_settings]
 menu = "Game settings…"
