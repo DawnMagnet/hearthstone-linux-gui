@@ -4,6 +4,9 @@
 
 ### Added
 
+- While a login is pending, a short hint explains that Blizzard's login page
+  is made for the game's built-in browser and its text can be hard to read in
+  a regular browser.
 - New display name **Hearthstone Linux Launcher** with the subtitle
   "Unofficial community launcher" in the window title, the desktop entry and
   the AppStream metadata. Binary name, package name and application ID are
