@@ -14,9 +14,9 @@
   command-line help come from locale catalogs in `locales/`, which are
   compiled into the binary. English is the base and the fallback; German and
   Simplified Chinese are included.
-- New launcher language selection in a gear menu in the bottom right corner,
+- New launcher language selection in a gear menu at the top right,
   with a flag per language (shipped as graphics, independent of emoji fonts). By default the launcher follows the system
-  locale; a change takes effect after a restart.
+  locale; after a change the launcher restarts itself to apply it.
 - On first start, region and game language are preselected from the system
   locale instead of always starting with `us` / `enUS`.
 - **GameMode** and **MangoHud** switches. The game is started as
@@ -37,6 +37,13 @@
 
 - The window content is centred: status, settings and actions form one
   ordered column, and the status line stays on one line.
+- Login and Play share one button: it shows **Login** while logged out and
+  **Play** once logged in; **Log Out** and **Switch Account** are in its
+  menu.
+- **Refresh** is an icon button next to the status line.
+- The window opens at its smallest size.
+- The status line sits above the logo on two lines; it and the settings
+  start flush with the first action button.
 - The **Locale** setting is now labelled **Game language** to tell it apart
   from the launcher language.
 

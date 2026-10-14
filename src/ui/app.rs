@@ -71,6 +71,8 @@ struct MainWindow {
     actions: Controller<ActionBar>,
     toaster: Toaster,
     window: adw::ApplicationWindow,
+    /// Status line above the logo.
+    details: gtk::Label,
     game_settings_button: gtk::Button,
 }
 
@@ -80,6 +82,7 @@ pub enum AppMsg {
     UiLanguageChanged(Option<&'static str>),
     OpenGameSettings,
     GameSettingsSaved,
+    Refresh,
     Action(ActionBarOutput),
     InstallEvent(TaskEvent),
     UninstallFinished(Result<(), String>),
@@ -121,7 +124,9 @@ impl SimpleComponent for MainWindow {
     view! {
         main_window = adw::ApplicationWindow {
             set_title: Some(&tr!("app.name")),
-            set_default_size: (680, 360),
+            // Smaller than any layout: the window opens at its minimum size
+            // instead of the wider natural size of the header bar.
+            set_default_size: (1, 1),
 
             #[local_ref]
             toast_overlay -> adw::ToastOverlay {
@@ -145,19 +150,55 @@ impl SimpleComponent for MainWindow {
                         set_margin_start: 18,
                         set_margin_end: 18,
 
-                        #[local_ref]
-                        logo -> gtk::Image {
-                            set_pixel_size: 128,
+                        // One centred block. Status line, settings and
+                        // actions start flush at its left edge; the logo and
+                        // the headline are centred in it.
+                        gtk::Box {
+                            set_orientation: gtk::Orientation::Vertical,
+                            set_halign: gtk::Align::Center,
+
+                            // Status line with refresh to its right.
+                            gtk::Box {
+                                set_orientation: gtk::Orientation::Horizontal,
+                                set_spacing: 12,
+                                set_margin_bottom: 16,
+
+                                #[local_ref]
+                                details -> gtk::Label {
+                                    set_hexpand: true,
+                                    set_xalign: 0.0,
+                                    // A longer text is cut short instead of
+                                    // widening the window, and stays
+                                    // readable in the tooltip.
+                                    set_ellipsize: gtk::pango::EllipsizeMode::End,
+                                    add_css_class: relm4::css::DIM_LABEL,
+                                },
+
+                                #[local_ref]
+                                refresh -> gtk::Button {
+                                    set_valign: gtk::Align::Center,
+                                },
+                            },
+
+                            // The logo spans the block. On its right, below
+                            // refresh: the settings menu and, once a newer
+                            // release was found, the upgrade button.
+                            #[local_ref]
+                            logo -> gtk::Overlay {},
+
+                            #[local_ref]
+                            status_panel -> gtk::Box {
+                                set_margin_bottom: 32,
+                            },
+
+                            #[local_ref]
+                            settings_panel -> gtk::Grid {},
+
+                            #[local_ref]
+                            actions -> gtk::Box {
+                                set_margin_top: 16,
+                            },
                         },
-
-                        #[local_ref]
-                        status_panel -> gtk::Box {},
-
-                        #[local_ref]
-                        settings_panel -> gtk::Grid {},
-
-                        #[local_ref]
-                        actions -> gtk::Box {},
 
                         gtk::CenterBox {
                             set_margin_top: 4,
@@ -203,9 +244,6 @@ impl SimpleComponent for MainWindow {
                                     },
                                 },
                             },
-
-                            // Launcher preferences sit in the bottom right corner.
-                            set_end_widget: Some(&preferences),
                         },
                     }
                 }
@@ -243,7 +281,14 @@ impl SimpleComponent for MainWindow {
                 move |language| language_input.emit(AppMsg::UiLanguageChanged(language)),
             )
         };
-        let preferences = preferences_menu.button.clone();
+
+        let refresh = gtk::Button::from_icon_name("view-refresh-symbolic");
+        refresh.set_tooltip_text(Some(&tr!("action.refresh")));
+        refresh.add_css_class(relm4::css::FLAT);
+        {
+            let input = sender.input_sender().clone();
+            refresh.connect_clicked(move |_| input.emit(AppMsg::Refresh));
+        }
 
         let model = MainWindow {
             paths: init.paths,
@@ -260,10 +305,24 @@ impl SimpleComponent for MainWindow {
             actions,
             toaster,
             window: root.clone(),
+            details: gtk::Label::new(None),
             game_settings_button: preferences_menu.game_settings,
         };
 
-        let logo = embedded_image(include_bytes!("../../data/icons/logo.png"));
+        let logo_image = embedded_image(include_bytes!("../../data/icons/logo.png"));
+        logo_image.set_pixel_size(184);
+        logo_image.set_halign(gtk::Align::Center);
+        // Room on both sides keeps the corner buttons outside the picture.
+        logo_image.set_margin_start(48);
+        logo_image.set_margin_end(48);
+        let logo = gtk::Overlay::new();
+        logo.set_child(Some(&logo_image));
+        let side = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        side.set_halign(gtk::Align::End);
+        side.set_valign(gtk::Align::Start);
+        side.append(&preferences_menu.button);
+        logo.add_overlay(&side);
+        let details = &model.details;
         let toast_overlay = model.toaster.overlay_widget();
         let status_panel = model.status_panel.widget();
         let settings_panel = model.settings_panel.widget();
@@ -281,6 +340,7 @@ impl SimpleComponent for MainWindow {
             AppMsg::UiLanguageChanged(language) => self.handle_ui_language(language),
             AppMsg::OpenGameSettings => self.open_game_settings(sender),
             AppMsg::GameSettingsSaved => self.toast(&tr!("game_settings.saved")),
+            AppMsg::Refresh => self.refresh_from_disk(),
             AppMsg::Action(output) => self.handle_action(output, sender),
             AppMsg::InstallEvent(event) => self.handle_install_event(event),
             AppMsg::UninstallFinished(result) => self.handle_uninstall_finished(result),
@@ -313,9 +373,40 @@ impl MainWindow {
     }
 
     fn handle_ui_language(&mut self, language: Option<&'static str>) {
+        if self.config.ui_language.as_deref() == language {
+            return;
+        }
         self.config.ui_language = language.map(str::to_owned);
         self.save_settings();
         self.refresh_details();
+
+        // Texts are fixed once the window is built, so the language is
+        // applied by restarting. Never interrupt an install, a pending login
+        // or a running game for that.
+        let busy = self.install_state != InstallState::Idle
+            || self.login_session.is_some()
+            || self.game_session.is_some();
+        if busy {
+            self.toast(&tr!("settings.language_after_restart"));
+        } else if let Err(error) = self.restart() {
+            tracing::error!(%error, "failed to restart the launcher");
+            self.toast(&tr!("settings.language_after_restart"));
+        }
+    }
+
+    /// Starts a new launcher and closes this one.
+    fn restart(&self) -> std::io::Result<()> {
+        let launcher = auth::launcher_executable()?;
+        tracing::info!(launcher = %launcher.display(), "restarting the launcher");
+        // The new instance has to start after this one has gone, otherwise
+        // it only activates this window and exits.
+        hearthstone_linux::host_env::host_command("sh")
+            .args(["-c", "sleep 0.7; exec \"$0\""])
+            .arg(launcher)
+            .stdin(std::process::Stdio::null())
+            .spawn()?;
+        self.window.close();
+        Ok(())
     }
 
     fn open_game_settings(&mut self, sender: ComponentSender<Self>) {
@@ -349,9 +440,8 @@ impl MainWindow {
         match output {
             ActionBarOutput::Install => self.handle_install_pressed(sender),
             ActionBarOutput::Uninstall => self.handle_uninstall_pressed(sender),
-            ActionBarOutput::Login => self.handle_login_pressed(sender),
-            ActionBarOutput::Launch => self.handle_launch_pressed(sender),
-            ActionBarOutput::Refresh => self.refresh_from_disk(),
+            ActionBarOutput::Account => self.handle_account_pressed(sender),
+            ActionBarOutput::Logout => self.handle_logout(),
             ActionBarOutput::SwitchAccount => self.handle_switch_account(sender),
         }
     }
@@ -512,7 +602,14 @@ impl MainWindow {
         }
     }
 
-    fn handle_login_pressed(&mut self, sender: ComponentSender<Self>) {
+    /// The combined account button: stop a running game, cancel a pending
+    /// login, play when logged in, otherwise log in.
+    fn handle_account_pressed(&mut self, sender: ComponentSender<Self>) {
+        if self.game_session.is_some() {
+            self.handle_launch_pressed(sender);
+            return;
+        }
+
         if let Some(session) = self.login_session.take() {
             tracing::info!("login wait cancelled from UI");
             session.cancel.cancel();
@@ -522,14 +619,16 @@ impl MainWindow {
         }
 
         if self.paths.game_token().exists() {
-            self.handle_logout();
-            return;
+            self.handle_launch_pressed(sender);
+        } else {
+            self.begin_login(sender);
         }
-
-        self.begin_login(sender);
     }
 
     fn handle_logout(&mut self) {
+        if self.game_session.is_some() {
+            return;
+        }
         match auth::mark_logged_out(&self.paths, &mut self.config) {
             Ok(()) => {
                 auth::sync_config_from_disk(&self.paths, &mut self.config);
@@ -766,6 +865,8 @@ impl MainWindow {
     }
 
     fn render_children(&self) {
+        self.details.set_label(&self.status.details);
+        self.details.set_tooltip_text(Some(&self.status.details));
         self.status_panel
             .emit(StatusPanelInput::Render(StatusPanelState {
                 snapshot: self.status.clone(),

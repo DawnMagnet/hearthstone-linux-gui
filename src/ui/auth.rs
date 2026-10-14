@@ -39,7 +39,7 @@ pub fn ensure_auth_scheme_handlers() -> std::io::Result<()> {
     if host_env::is_flatpak() {
         return Ok(());
     }
-    let exe = auth_handler_executable()?;
+    let exe = launcher_executable()?;
     let paths = AppPaths::discover().map_err(std::io::Error::other)?;
     let helper = install_auth_callback_helper(&paths, &exe)?;
     let Some(applications_dir) = std::env::var_os("XDG_DATA_HOME")
@@ -186,7 +186,9 @@ fn write_mimeapps_defaults(desktop_id: &str) -> std::io::Result<()> {
     std::fs::write(path, format!("{}\n", output.join("\n")))
 }
 
-fn auth_handler_executable() -> std::io::Result<PathBuf> {
+/// The program that starts this launcher: the AppImage file when running
+/// from one, otherwise the executable itself.
+pub fn launcher_executable() -> std::io::Result<PathBuf> {
     if let Some(appimage) = std::env::var_os("APPIMAGE") {
         let appimage = PathBuf::from(appimage);
         if appimage.exists() {

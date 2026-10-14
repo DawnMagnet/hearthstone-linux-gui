@@ -42,25 +42,11 @@ impl SimpleComponent for StatusPanel {
             gtk::Label {
                 set_justify: gtk::Justification::Center,
                 set_wrap: true,
-                set_margin_top: 6,
+                set_max_width_chars: 48,
                 add_css_class: relm4::css::TITLE_2,
 
                 #[watch]
                 set_label: &model.state.snapshot.headline,
-            },
-
-            gtk::Label {
-                // One line; a longer text is cut short instead of widening
-                // the window, and stays readable in the tooltip.
-                set_ellipsize: gtk::pango::EllipsizeMode::End,
-                set_margin_top: 6,
-                set_margin_bottom: 6,
-                add_css_class: relm4::css::DIM_LABEL,
-
-                #[watch]
-                set_label: &model.state.snapshot.details,
-                #[watch]
-                set_tooltip_text: Some(&model.state.snapshot.details),
             },
 
             gtk::Box {
@@ -174,13 +160,14 @@ impl SimpleComponent for SettingsPanel {
 
     view! {
         gtk::Grid {
-            set_halign: gtk::Align::Center,
+            // Flush with the first action button below it.
+            set_halign: gtk::Align::Start,
             set_column_spacing: 12,
             set_row_spacing: 8,
 
             attach[0, 0, 1, 1] = &gtk::Label {
                 set_label: &tr!("settings.region"),
-                set_xalign: 1.0,
+                set_xalign: 0.0,
                 add_css_class: relm4::css::DIM_LABEL,
             },
 
@@ -191,7 +178,7 @@ impl SimpleComponent for SettingsPanel {
 
             attach[0, 1, 1, 1] = &gtk::Label {
                 set_label: &tr!("settings.game_language"),
-                set_xalign: 1.0,
+                set_xalign: 0.0,
                 add_css_class: relm4::css::DIM_LABEL,
             },
 
@@ -202,7 +189,7 @@ impl SimpleComponent for SettingsPanel {
 
             attach[0, 2, 1, 1] = &gtk::Label {
                 set_label: &tr!("settings.graphics"),
-                set_xalign: 1.0,
+                set_xalign: 0.0,
                 add_css_class: relm4::css::DIM_LABEL,
             },
 
@@ -220,7 +207,7 @@ impl SimpleComponent for SettingsPanel {
 
             attach[0, 3, 1, 1] = &gtk::Label {
                 set_label: &tr!("settings.performance"),
-                set_xalign: 1.0,
+                set_xalign: 0.0,
                 add_css_class: relm4::css::DIM_LABEL,
             },
 
@@ -441,9 +428,9 @@ impl Default for ActionBarState {
 pub struct ActionBar {
     state: ActionBarState,
     install_popover: Option<gtk::Popover>,
-    login_popover: Option<gtk::Popover>,
+    account_popover: Option<gtk::Popover>,
     uninstall_button: Option<gtk::Button>,
-    switch_account_button: Option<gtk::Button>,
+    account_menu_buttons: Vec<gtk::Button>,
 }
 
 #[derive(Debug)]
@@ -455,9 +442,9 @@ pub enum ActionBarInput {
 pub enum ActionBarOutput {
     Install,
     Uninstall,
-    Login,
-    Launch,
-    Refresh,
+    /// The combined account button: log in, play or stop, by state.
+    Account,
+    Logout,
     SwitchAccount,
 }
 
@@ -470,7 +457,7 @@ impl SimpleComponent for ActionBar {
     view! {
         gtk::Box {
             set_orientation: gtk::Orientation::Horizontal,
-            set_halign: gtk::Align::Center,
+            set_halign: gtk::Align::Start,
             set_spacing: 8,
             set_margin_top: 10,
 
@@ -490,36 +477,22 @@ impl SimpleComponent for ActionBar {
                 },
             },
 
-            #[name(login_button)]
+            // One button for the account: "Login" while logged out, "Play"
+            // once logged in. Log out and switch account are in its menu.
+            #[name(account_button)]
             adw::SplitButton {
-                set_tooltip_text: Some(&tr!("action.account_tooltip")),
                 #[watch]
-                set_label: &model.login_label(),
+                set_tooltip_text: Some(&model.account_tooltip()),
                 #[watch]
-                set_class_active: (relm4::css::DESTRUCTIVE_ACTION, model.state.login == LoginState::Waiting),
+                set_label: &model.account_label(),
+                #[watch]
+                set_sensitive: model.account_button_sensitive(),
+                #[watch]
+                set_class_active: (relm4::css::SUGGESTED_ACTION, model.can_play()),
+                #[watch]
+                set_class_active: (relm4::css::DESTRUCTIVE_ACTION, model.account_action_stops()),
                 connect_clicked[sender] => move |_| {
-                    sender.output(ActionBarOutput::Login).ok();
-                },
-            },
-
-            gtk::Button {
-                #[watch]
-                set_label: &model.launch_label(),
-                #[watch]
-                set_sensitive: model.state.launch != LaunchState::Stopping,
-                #[watch]
-                set_class_active: (relm4::css::SUGGESTED_ACTION, model.state.launch == LaunchState::Idle),
-                #[watch]
-                set_class_active: (relm4::css::DESTRUCTIVE_ACTION, model.state.launch != LaunchState::Idle),
-                connect_clicked[sender] => move |_| {
-                    sender.output(ActionBarOutput::Launch).ok();
-                },
-            },
-
-            gtk::Button {
-                set_label: &tr!("action.refresh"),
-                connect_clicked[sender] => move |_| {
-                    sender.output(ActionBarOutput::Refresh).ok();
+                    sender.output(ActionBarOutput::Account).ok();
                 },
             },
         }
@@ -533,9 +506,9 @@ impl SimpleComponent for ActionBar {
         let mut model = ActionBar {
             state,
             install_popover: None,
-            login_popover: None,
+            account_popover: None,
             uninstall_button: None,
-            switch_account_button: None,
+            account_menu_buttons: Vec::new(),
         };
         let widgets = view_output!();
         let install_menu = install_popover(sender.clone());
@@ -545,10 +518,10 @@ impl SimpleComponent for ActionBar {
         model.uninstall_button = Some(install_menu.button);
         model.install_popover = Some(install_menu.popover);
 
-        let login_menu = login_popover(sender.clone());
-        widgets.login_button.set_popover(Some(&login_menu.popover));
-        model.switch_account_button = Some(login_menu.button);
-        model.login_popover = Some(login_menu.popover);
+        let (popover, buttons) = account_popover(sender.clone());
+        widgets.account_button.set_popover(Some(&popover));
+        model.account_menu_buttons = buttons;
+        model.account_popover = Some(popover);
         model.render_menu_items();
 
         ComponentParts { model, widgets }
@@ -568,7 +541,7 @@ impl SimpleComponent for ActionBar {
             popover.popdown();
             popover.unparent();
         }
-        if let Some(popover) = self.login_popover.take() {
+        if let Some(popover) = self.account_popover.take() {
             popover.popdown();
             popover.unparent();
         }
@@ -603,24 +576,45 @@ impl ActionBar {
         if let Some(button) = self.uninstall_button.as_ref() {
             button.set_sensitive(self.install_menu_sensitive());
         }
-        if let Some(button) = self.switch_account_button.as_ref() {
-            button.set_sensitive(self.state.login == LoginState::LoggedIn);
+        let account_menu_sensitive =
+            self.state.login == LoginState::LoggedIn && self.state.launch == LaunchState::Idle;
+        for button in &self.account_menu_buttons {
+            button.set_sensitive(account_menu_sensitive);
         }
     }
 
-    fn login_label(&self) -> String {
-        match self.state.login {
-            LoginState::Idle => tr!("action.login"),
-            LoginState::Waiting => tr!("action.cancel_login"),
-            LoginState::LoggedIn => tr!("action.log_out"),
+    fn account_label(&self) -> String {
+        match (self.state.launch, self.state.login) {
+            (LaunchState::Running, _) => tr!("action.stop"),
+            (LaunchState::Stopping, _) => tr!("action.stopping"),
+            (LaunchState::Idle, LoginState::Waiting) => tr!("action.cancel_login"),
+            (LaunchState::Idle, LoginState::LoggedIn) => tr!("action.play"),
+            (LaunchState::Idle, LoginState::Idle) => tr!("action.login"),
         }
     }
 
-    fn launch_label(&self) -> String {
-        match self.state.launch {
-            LaunchState::Idle => tr!("action.play"),
-            LaunchState::Running => tr!("action.stop"),
-            LaunchState::Stopping => tr!("action.stopping"),
+    /// Logged in, nothing running: the button offers "Play".
+    fn offers_play(&self) -> bool {
+        self.state.launch == LaunchState::Idle && self.state.login == LoginState::LoggedIn
+    }
+
+    fn can_play(&self) -> bool {
+        self.offers_play() && self.state.installed
+    }
+
+    fn account_action_stops(&self) -> bool {
+        self.state.launch != LaunchState::Idle || self.state.login == LoginState::Waiting
+    }
+
+    fn account_button_sensitive(&self) -> bool {
+        self.state.launch != LaunchState::Stopping && (!self.offers_play() || self.state.installed)
+    }
+
+    fn account_tooltip(&self) -> String {
+        if self.offers_play() && !self.state.installed {
+            tr!("action.play_not_installed")
+        } else {
+            tr!("action.account_tooltip")
         }
     }
 }
@@ -715,8 +709,6 @@ pub fn preferences_menu(
     let button = gtk::MenuButton::new();
     button.set_icon_name("emblem-system-symbolic");
     button.set_tooltip_text(Some(&tr!("settings.menu")));
-    button.set_direction(gtk::ArrowType::Up);
-    button.set_valign(gtk::Align::End);
     button.add_css_class(relm4::css::FLAT);
     button.set_popover(Some(&popover));
     PreferencesMenu {
@@ -777,7 +769,7 @@ fn install_popover(sender: ComponentSender<ActionBar>) -> PopoverButton {
     }
 }
 
-fn login_popover(sender: ComponentSender<ActionBar>) -> PopoverButton {
+fn account_popover(sender: ComponentSender<ActionBar>) -> (gtk::Popover, Vec<gtk::Button>) {
     let popover = gtk::Popover::new();
 
     let content = gtk::Box::new(gtk::Orientation::Vertical, 8);
@@ -786,20 +778,23 @@ fn login_popover(sender: ComponentSender<ActionBar>) -> PopoverButton {
     content.set_margin_start(10);
     content.set_margin_end(10);
 
-    let switch_account = gtk::Button::with_label(&tr!("action.switch_account"));
-    {
+    let entries = [
+        (tr!("action.log_out"), ActionBarOutput::Logout),
+        (tr!("action.switch_account"), ActionBarOutput::SwitchAccount),
+    ];
+    let mut buttons = Vec::new();
+    for (label, action) in entries {
+        let button = gtk::Button::with_label(&label);
         let popover = popover.clone();
         let output = sender.output_sender().clone();
-        switch_account.connect_clicked(move |_| {
+        button.connect_clicked(move |_| {
             popover.popdown();
-            output.emit(ActionBarOutput::SwitchAccount);
+            output.emit(action);
         });
+        content.append(&button);
+        buttons.push(button);
     }
 
-    content.append(&switch_account);
     popover.set_child(Some(&content));
-    PopoverButton {
-        popover,
-        button: switch_account,
-    }
+    (popover, buttons)
 }
