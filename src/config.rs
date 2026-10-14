@@ -45,6 +45,11 @@ impl Region {
         }
     }
 
+    /// The Hearthstone login page (`app=wtcg`) is made for the game's built-in
+    /// browser, so it looks unfinished in a regular one. Other `app=` values
+    /// look normal but do not work: `app=bnet` switches to `app=bas` after
+    /// the e-mail step and ends in the account web page, so no token is
+    /// handed back to the `blizzard-hearthstone://` callback.
     pub fn login_url(self) -> &'static str {
         match self {
             Region::Cn => "https://account.battlenet.com.cn/login/zh/?ref=blizzard-hearthstone://localhost:0/&app=wtcg-and&showCredentials=true",

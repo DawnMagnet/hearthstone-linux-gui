@@ -110,6 +110,7 @@ installed = "Hearthstone-Dateien installiert"
 from_cache = "Cache"
 
 [login]
+page_hint = "Blizzards Anmeldeseite ist für den Browser im Spiel gemacht, daher ist ihr Text in deinem Browser schwer lesbar. Die Felder funktionieren wie gewohnt; markiere den Text, um ihn zu sehen."
 url_hint = "Falls sich kein Browser geöffnet hat, kopiere diese Anmelde-URL in deinen Browser:"
 copy = "Kopieren"
 copy_tooltip = "Anmelde-URL in die Zwischenablage kopieren"
