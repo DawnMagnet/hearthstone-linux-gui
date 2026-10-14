@@ -12,20 +12,45 @@ use std::{collections::HashMap, fmt::Display, sync::OnceLock};
 
 const BASE_CODE: &str = "en";
 
-/// `(language code, catalog source, flag as PNG)`; the base catalog comes
-/// first. The flags are rendered from the SVG files next to them.
-const CATALOGS: &[(&str, &str, &[u8])] = &[
-    (
+/// One shipped language. The catalog is parsed on first use and then kept, so
+/// each embedded source is parsed at most once per run.
+struct Entry {
+    code: &'static str,
+    source: &'static str,
+    /// Flag as PNG data, rendered from the SVG file next to it.
+    flag: &'static [u8],
+    parsed: OnceLock<Catalog>,
+}
+
+impl Entry {
+    const fn new(code: &'static str, source: &'static str, flag: &'static [u8]) -> Self {
+        Self {
+            code,
+            source,
+            flag,
+            parsed: OnceLock::new(),
+        }
+    }
+
+    fn catalog(&self) -> &Catalog {
+        self.parsed
+            .get_or_init(|| parse(self.source).unwrap_or_default())
+    }
+}
+
+/// All shipped languages; the base catalog comes first.
+static CATALOGS: [Entry; 3] = [
+    Entry::new(
         BASE_CODE,
         include_str!("../locales/en.toml"),
         include_bytes!("../locales/flags/en.png"),
     ),
-    (
+    Entry::new(
         "de",
         include_str!("../locales/de.toml"),
         include_bytes!("../locales/flags/de.png"),
     ),
-    (
+    Entry::new(
         "zh-CN",
         include_str!("../locales/zh-CN.toml"),
         include_bytes!("../locales/flags/zh-CN.png"),
@@ -36,25 +61,28 @@ type Catalog = HashMap<String, String>;
 
 struct Active {
     code: &'static str,
-    selected: Option<Catalog>,
-    base: Catalog,
+    selected: &'static Catalog,
+    base: &'static Catalog,
 }
 
 static ACTIVE: OnceLock<Active> = OnceLock::new();
 
 impl Active {
     fn for_code(code: &'static str) -> Self {
+        let entry = CATALOGS
+            .iter()
+            .find(|entry| entry.code == code)
+            .unwrap_or(&CATALOGS[0]);
         Self {
-            code,
-            selected: (code != BASE_CODE).then(|| load(code)),
-            base: load(BASE_CODE),
+            code: entry.code,
+            selected: entry.catalog(),
+            base: CATALOGS[0].catalog(),
         }
     }
 
     fn get(&self, key: &str) -> Option<&str> {
         self.selected
-            .as_ref()
-            .and_then(|catalog| catalog.get(key))
+            .get(key)
             .or_else(|| self.base.get(key))
             .map(String::as_str)
     }
@@ -95,12 +123,14 @@ pub struct Language {
 pub fn available() -> Vec<Language> {
     CATALOGS
         .iter()
-        .map(|(code, _, flag)| Language {
-            code,
-            name: load(code)
-                .remove("meta.name")
-                .unwrap_or_else(|| (*code).to_string()),
-            flag,
+        .map(|entry| Language {
+            code: entry.code,
+            name: entry
+                .catalog()
+                .get("meta.name")
+                .cloned()
+                .unwrap_or_else(|| entry.code.to_string()),
+            flag: entry.flag,
         })
         .collect()
 }
@@ -132,15 +162,6 @@ macro_rules! tr {
             &[$((stringify!($name), &$value as &dyn ::std::fmt::Display)),+],
         )
     };
-}
-
-fn load(code: &str) -> Catalog {
-    let source = CATALOGS
-        .iter()
-        .find(|(candidate, ..)| *candidate == code)
-        .map(|(_, source, _)| *source)
-        .unwrap_or_default();
-    parse(source).unwrap_or_default()
 }
 
 fn parse(source: &str) -> Result<Catalog, toml::de::Error> {
@@ -200,7 +221,7 @@ fn match_code(locale: &str) -> Option<&'static str> {
         return Some(BASE_CODE);
     }
 
-    let codes = || CATALOGS.iter().map(|(code, ..)| *code);
+    let codes = || CATALOGS.iter().map(|entry| entry.code);
     let language = |code: &str| code.split('-').next().unwrap_or_default().to_owned();
     codes()
         .find(|code| code.to_ascii_lowercase() == locale)
@@ -213,7 +234,11 @@ mod tests {
     use std::collections::BTreeSet;
 
     fn catalog(code: &str) -> Catalog {
-        let source = CATALOGS.iter().find(|(c, ..)| *c == code).unwrap().1;
+        let source = CATALOGS
+            .iter()
+            .find(|entry| entry.code == code)
+            .unwrap()
+            .source;
         parse(source).unwrap_or_else(|error| panic!("locales/{code}.toml: {error}"))
     }
 
@@ -267,7 +292,7 @@ mod tests {
     #[test]
     fn catalogs_have_the_same_keys_and_placeholders() {
         let base = catalog(BASE_CODE);
-        for (code, ..) in CATALOGS.iter().skip(1) {
+        for code in CATALOGS.iter().skip(1).map(|entry| entry.code) {
             let translated = catalog(code);
             let base_keys: BTreeSet<_> = base.keys().collect();
             let keys: BTreeSet<_> = translated.keys().collect();

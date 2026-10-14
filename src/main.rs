@@ -65,7 +65,7 @@ fn parse_args() -> Args {
 
 /// Launcher language chosen in the settings, if any.
 fn saved_ui_language() -> Option<String> {
-    let config_file = hearthstone_linux::paths::preferred_config_file()?;
+    let config_file = hearthstone_linux::paths::config_file().ok()?;
     hearthstone_linux::AppConfig::load_or_default(&config_file)
         .ok()?
         .ui_language

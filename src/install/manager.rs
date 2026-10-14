@@ -157,7 +157,7 @@ impl InstallManager {
         )?;
 
         config.game_dir = Some(self.paths.game_dir.clone());
-        preserve_login_metadata(config, &self.paths);
+        preserve_saved_settings(config, &self.paths);
         config.save(&self.paths.config_file)?;
         info!("install/update completed");
         event(TaskEvent::Finished(tr!("install.ready")));
@@ -165,8 +165,15 @@ impl InstallManager {
     }
 }
 
-fn preserve_login_metadata(config: &mut AppConfig, paths: &AppPaths) {
+fn preserve_saved_settings(config: &mut AppConfig, paths: &AppPaths) {
     let saved = AppConfig::load_or_default(&paths.config_file).ok();
+    // These settings stay editable in the window while the install runs.
+    if let Some(saved) = saved.as_ref() {
+        config.ui_language = saved.ui_language.clone();
+        config.use_gamemode = saved.use_gamemode;
+        config.use_mangohud = saved.use_mangohud;
+        config.check_for_updates = saved.check_for_updates;
+    }
     let token_exists = paths.game_token().exists();
     if saved.as_ref().is_some_and(|saved| saved.logged_in) || token_exists {
         config.logged_in = true;
