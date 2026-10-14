@@ -731,7 +731,7 @@ pub fn preferences_menu(
 
     let button = gtk::MenuButton::new();
     button.set_icon_name("emblem-system-symbolic");
-    button.set_tooltip_text(Some(&tr!("settings.title")));
+    button.set_tooltip_text(Some(&tr!("settings.menu")));
     button.add_css_class(relm4::css::FLAT);
     button.set_popover(Some(&popover));
     PreferencesMenu {
