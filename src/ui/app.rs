@@ -205,6 +205,7 @@ impl SimpleComponent for MainWindow {
                             gtk::Box {
                                 set_orientation: gtk::Orientation::Horizontal,
                                 set_spacing: 12,
+                                set_margin_bottom: 16,
 
                                 #[local_ref]
                                 details -> gtk::Label {
