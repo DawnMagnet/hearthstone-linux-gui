@@ -35,6 +35,10 @@
   menu. It downloads the DEB or RPM for this installation and opens
   it with the desktop's software installer; for AppImage, Flatpak, Nix and
   Pacman it opens the release page.
+- Optional embedded Battle.net login (cargo feature `embedded-login`, off by
+  default, needs WebKitGTK 6). Blizzard's login page is shown inside the
+  launcher window, sized to its form and on the page's own dark background,
+  instead of in an external browser where it has no background.
 - Translated desktop entry comment and AppStream summary and description.
 - German README (`README.de.md`).
 
