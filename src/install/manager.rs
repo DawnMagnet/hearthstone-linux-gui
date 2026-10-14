@@ -157,7 +157,7 @@ impl InstallManager {
         )?;
 
         config.game_dir = Some(self.paths.game_dir.clone());
-        preserve_saved_settings(config, &self.paths);
+        *config = merge_into_saved_settings(config, &self.paths);
         config.save(&self.paths.config_file)?;
         info!("install/update completed");
         event(TaskEvent::Finished(tr!("install.ready")));
@@ -165,20 +165,27 @@ impl InstallManager {
     }
 }
 
-fn preserve_saved_settings(config: &mut AppConfig, paths: &AppPaths) {
-    let saved = AppConfig::load_or_default(&paths.config_file).ok();
-    // These settings stay editable in the window while the install runs.
-    if let Some(saved) = saved.as_ref() {
-        config.ui_language = saved.ui_language.clone();
-        config.use_gamemode = saved.use_gamemode;
-        config.use_mangohud = saved.use_mangohud;
-        config.check_for_updates = saved.check_for_updates;
+/// Applies what the install changed onto the settings currently on disk.
+///
+/// The install works on a copy taken when it started, but the other settings
+/// stay editable in the window meanwhile, so the file's values win for
+/// everything the install does not own. A setting added later is kept without
+/// having to be listed here.
+fn merge_into_saved_settings(install: &AppConfig, paths: &AppPaths) -> AppConfig {
+    let mut merged =
+        AppConfig::load_or_default(&paths.config_file).unwrap_or_else(|_| install.clone());
+    merged.region = install.region;
+    merged.locale = install.locale;
+    merged.game_dir = install.game_dir.clone();
+    merged.installed_version = install.installed_version.clone();
+    merged.unity_version = install.unity_version.clone();
+    if merged.logged_in || paths.game_token().exists() {
+        merged.logged_in = true;
+    } else {
+        merged.logged_in = install.logged_in;
+        merged.last_login_at = install.last_login_at.clone();
     }
-    let token_exists = paths.game_token().exists();
-    if saved.as_ref().is_some_and(|saved| saved.logged_in) || token_exists {
-        config.logged_in = true;
-        config.last_login_at = saved.and_then(|saved| saved.last_login_at);
-    }
+    merged
 }
 
 fn format_unity_download_progress(progress: &unity::UnityDownloadProgress) -> String {
@@ -220,4 +227,63 @@ async fn cleanup_installation(game_dir: &std::path::Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn paths_in(dir: &std::path::Path) -> AppPaths {
+        AppPaths {
+            config_dir: dir.join("config"),
+            data_dir: dir.join("data"),
+            cache_dir: dir.join("cache"),
+            state_dir: dir.join("state"),
+            config_file: dir.join("config.toml"),
+            game_dir: dir.join("game"),
+            ngdp_dir: dir.join("ngdp"),
+            unity_cache_dir: dir.join("unity"),
+            log_dir: dir.join("logs"),
+        }
+    }
+
+    #[test]
+    fn install_result_is_merged_into_settings_changed_meanwhile() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths_in(dir.path());
+
+        // The install started from this copy ...
+        let mut install = AppConfig::default();
+        install.installed_version = Some("1.2.3".into());
+        install.game_dir = Some(paths.game_dir.clone());
+
+        // ... while the user changed settings in the window.
+        let mut edited = AppConfig::default();
+        edited.use_discrete_gpu = true;
+        edited.use_gamemode = true;
+        edited.ui_language = Some("de".into());
+        edited.logged_in = true;
+        edited.last_login_at = Some("yesterday".into());
+        edited.save(&paths.config_file).unwrap();
+
+        let merged = merge_into_saved_settings(&install, &paths);
+        assert!(merged.use_discrete_gpu && merged.use_gamemode);
+        assert_eq!(merged.ui_language.as_deref(), Some("de"));
+        assert_eq!(merged.installed_version.as_deref(), Some("1.2.3"));
+        assert_eq!(merged.game_dir, install.game_dir);
+        assert!(merged.logged_in);
+        assert_eq!(merged.last_login_at.as_deref(), Some("yesterday"));
+    }
+
+    #[test]
+    fn install_result_stands_without_a_saved_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths_in(dir.path());
+        let mut install = AppConfig::default();
+        install.installed_version = Some("1.2.3".into());
+
+        let merged = merge_into_saved_settings(&install, &paths);
+        assert_eq!(merged.installed_version.as_deref(), Some("1.2.3"));
+        assert!(!merged.logged_in);
+    }
 }
