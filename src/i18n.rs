@@ -8,7 +8,14 @@
 //! string literals; a test checks that every key used in the sources exists
 //! and that every catalog key is used.
 
-use std::{collections::HashMap, fmt::Display, sync::OnceLock};
+use std::{
+    collections::HashMap,
+    fmt::Display,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        OnceLock,
+    },
+};
 
 const BASE_CODE: &str = "en";
 
@@ -59,54 +66,36 @@ static CATALOGS: [Entry; 3] = [
 
 type Catalog = HashMap<String, String>;
 
-struct Active {
-    code: &'static str,
-    selected: &'static Catalog,
-    base: &'static Catalog,
+/// Index into [`CATALOGS`] of the language in use.
+static CURRENT: AtomicUsize = AtomicUsize::new(0);
+
+fn current_entry() -> &'static Entry {
+    &CATALOGS[CURRENT.load(Ordering::Relaxed)]
 }
 
-static ACTIVE: OnceLock<Active> = OnceLock::new();
-
-impl Active {
-    fn for_code(code: &'static str) -> Self {
-        let entry = CATALOGS
-            .iter()
-            .find(|entry| entry.code == code)
-            .unwrap_or(&CATALOGS[0]);
-        Self {
-            code: entry.code,
-            selected: entry.catalog(),
-            base: CATALOGS[0].catalog(),
-        }
-    }
-
-    fn get(&self, key: &str) -> Option<&str> {
-        self.selected
-            .get(key)
-            .or_else(|| self.base.get(key))
-            .map(String::as_str)
-    }
-}
-
-fn active() -> &'static Active {
-    // Without `init` (tests, library use) everything stays in English.
-    ACTIVE.get_or_init(|| Active::for_code(BASE_CODE))
-}
-
-/// Selects the UI language once at startup. `preferred` is the language set
-/// in the launcher settings; without it the system locale decides. Later
-/// calls have no effect.
-pub fn init(preferred: Option<&str>) {
-    let code = preferred
+/// The shipped language for `preferred` (the language set in the launcher
+/// settings); without a match the system locale decides, then English.
+fn pick(preferred: Option<&str>) -> &'static str {
+    preferred
         .and_then(match_code)
         .or_else(system_language)
-        .unwrap_or(BASE_CODE);
-    let _ = ACTIVE.set(Active::for_code(code));
+        .unwrap_or(BASE_CODE)
+}
+
+/// Selects the UI language. Every later lookup uses it; texts that were
+/// looked up earlier keep their old language until they are built again.
+pub fn select(preferred: Option<&str>) {
+    let code = pick(preferred);
+    let index = CATALOGS
+        .iter()
+        .position(|entry| entry.code == code)
+        .unwrap_or(0);
+    CURRENT.store(index, Ordering::Relaxed);
 }
 
 /// Code of the catalog in use, e.g. `en` or `de`.
 pub fn current() -> &'static str {
-    active().code
+    current_entry().code
 }
 
 /// A shipped UI language, described in its own words.
@@ -137,7 +126,12 @@ pub fn available() -> Vec<Language> {
 
 /// Looks up `key`. Prefer the [`tr!`](crate::tr) macro.
 pub fn translate(key: &str) -> String {
-    active().get(key).unwrap_or(key).to_string()
+    current_entry()
+        .catalog()
+        .get(key)
+        .or_else(|| CATALOGS[0].catalog().get(key))
+        .map_or(key, String::as_str)
+        .to_string()
 }
 
 /// Looks up `key` and replaces each `{name}` placeholder.
@@ -330,6 +324,12 @@ mod tests {
             unused.is_empty(),
             "unused keys in locales/en.toml: {unused:?}"
         );
+    }
+
+    #[test]
+    fn picks_the_preferred_language() {
+        assert_eq!(super::pick(Some("de")), "de");
+        assert_eq!(super::pick(Some("zh-cn")), "zh-CN");
     }
 
     #[test]
