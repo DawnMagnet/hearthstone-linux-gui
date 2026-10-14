@@ -9,6 +9,7 @@ use super::{
 };
 use hearthstone_linux::{
     config::AppConfig,
+    game_options,
     install::{
         launcher::{self, LaunchTool},
         manager::{InstallManager, TaskEvent},
@@ -508,18 +509,6 @@ impl MainWindow {
         Ok(())
     }
 
-    fn open_game_settings(&mut self, sender: ComponentSender<Self>) {
-        // The game rewrites its options on exit, so edits made meanwhile
-        // would be lost.
-        if self.game_session.is_some() {
-            return;
-        }
-        let input = sender.input_sender().clone();
-        game_settings::open(&self.window, &self.paths, &self.config, move || {
-            input.emit(AppMsg::GameSettingsSaved);
-        });
-    }
-
     /// Asks for the latest release in the background. Failures only go to
     /// the log: being offline must not disturb the launcher.
     fn check_for_updates(sender: &ComponentSender<Self>) {
@@ -649,6 +638,26 @@ impl MainWindow {
         }
         // The token is on disk now; finish as the browser flow would.
         self.handle_login_poll();
+    }
+
+    fn open_game_settings(&mut self, sender: ComponentSender<Self>) {
+        // The game rewrites its options on exit, so edits made meanwhile
+        // would be lost.
+        if self.game_session.is_some() {
+            return;
+        }
+        let Some(options_path) = game_options::options_path() else {
+            self.toast(&tr!("game_settings.no_home"));
+            return;
+        };
+        let input = sender.input_sender().clone();
+        game_settings::open(
+            &self.window,
+            &self.paths,
+            &self.config,
+            options_path,
+            move || input.emit(AppMsg::GameSettingsSaved),
+        );
     }
 
     fn save_settings(&mut self) {

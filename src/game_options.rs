@@ -85,24 +85,31 @@ impl GameOptions {
             .map(|(_, value)| value)
     }
 
-    /// Replaces the value of `key` in place, or appends the key.
+    /// Replaces the value of `key` in place, or appends the key. Repeated
+    /// lines of the same key are dropped, so one value is left whichever of
+    /// them the game would have used.
     pub fn set(&mut self, key: &str, value: &str) {
         let line = format!("{key}={value}");
-        match self.position(key) {
-            Some(index) => self.lines[index] = line,
-            None => self.lines.push(line),
+        let mut found = false;
+        self.lines.retain_mut(|existing| {
+            if split_line(existing).is_none_or(|(name, _)| name != key) {
+                return true;
+            }
+            if found {
+                return false;
+            }
+            found = true;
+            existing.clone_from(&line);
+            true
+        });
+        if !found {
+            self.lines.push(line);
         }
     }
 
     pub fn remove(&mut self, key: &str) {
         self.lines
             .retain(|line| split_line(line).is_none_or(|(name, _)| name != key));
-    }
-
-    fn position(&self, key: &str) -> Option<usize> {
-        self.lines
-            .iter()
-            .position(|line| split_line(line).is_some_and(|(name, _)| name == key))
     }
 
     /// Frame-rate limit in frames per second, if one is set.
@@ -119,14 +126,11 @@ impl GameOptions {
         !matches!(self.get(VSYNC), Some("0" | "false" | "False"))
     }
 
-    /// Switching VSync off adds `vsync=0`; switching it on removes the key
-    /// again, which is the game's default.
+    /// Writes `vsync=1` or `vsync=0`. Switching it on does not just remove
+    /// the key, so it stays on even if the game's default for a missing key is
+    /// not.
     pub fn set_vsync(&mut self, enabled: bool) {
-        if enabled {
-            self.remove(VSYNC);
-        } else {
-            self.set(VSYNC, "0");
-        }
+        self.set(VSYNC, if enabled { "1" } else { "0" });
     }
 
     pub fn quality(&self) -> Option<Quality> {
@@ -196,7 +200,15 @@ mod tests {
         assert!(!options.vsync());
 
         options.set_vsync(true);
-        assert_eq!(options.get("vsync"), None);
+        assert_eq!(options.get("vsync"), Some("1"));
+        assert!(options.vsync());
+    }
+
+    #[test]
+    fn set_leaves_one_line_per_key() {
+        let mut options = GameOptions::parse("a=1\ntargetframerate=30\nb=2\ntargetframerate=60\n");
+        options.set_frame_rate(144);
+        assert_eq!(options.to_text(), "a=1\ntargetframerate=144\nb=2\n");
     }
 
     #[test]
