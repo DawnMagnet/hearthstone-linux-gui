@@ -9,7 +9,7 @@ use super::{
 };
 use hearthstone_linux::{
     config::AppConfig,
-    game_options,
+    game_options, i18n,
     install::{
         launcher::{self, LaunchTool},
         manager::{InstallManager, TaskEvent},
@@ -148,9 +148,9 @@ fn fetch_update(
     };
     let runtime = tokio::runtime::Runtime::new()?;
     let package = runtime.block_on(update::download(asset, download_dir))?;
-    let url = url::Url::from_file_path(&package)
-        .map_err(|()| anyhow::anyhow!("{} is not an absolute path", package.display()))?;
-    browser::open_url(url.as_str())?;
+    // A file opener hands the package to the software installer; a web
+    // browser must not get it.
+    browser::open_file(&package)?;
     Ok(UpdateOutcome::PackageOpened)
 }
 
@@ -237,9 +237,8 @@ impl SimpleComponent for MainWindow {
                                 },
                             },
 
-                            // The logo spans the block. On its right, below
-                            // refresh: the settings menu and, once a newer
-                            // release was found, the upgrade button.
+                            // The logo spans the block; the settings menu
+                            // sits on its right.
                             #[local_ref]
                             logo -> gtk::Overlay {},
 
@@ -477,36 +476,43 @@ impl MainWindow {
             return;
         }
         self.config.ui_language = language.map(str::to_owned);
-        self.save_settings();
+        if !self.save_settings() {
+            return;
+        }
         self.refresh_details();
 
-        // Texts are fixed once the window is built, so the language is
-        // applied by restarting. Never interrupt an install, a pending login
-        // or a running game for that.
+        // Texts are fixed once a window is built, so the language is applied
+        // by building the window again. Never throw away the state of an
+        // install, a pending login or a running game for that.
         let busy = self.install_state != InstallState::Idle
             || self.login_session.is_some()
             || self.game_session.is_some();
         if busy {
             self.toast(&tr!("settings.language_after_restart"));
-        } else if let Err(error) = self.restart() {
-            tracing::error!(%error, "failed to restart the launcher");
-            self.toast(&tr!("settings.language_after_restart"));
+        } else {
+            i18n::select(language);
+            self.rebuild_window();
         }
     }
 
-    /// Starts a new launcher and closes this one.
-    fn restart(&self) -> std::io::Result<()> {
-        let launcher = auth::launcher_executable()?;
-        tracing::info!(launcher = %launcher.display(), "restarting the launcher");
-        // The new instance has to start after this one has gone, otherwise
-        // it only activates this window and exits.
-        hearthstone_linux::host_env::host_command("sh")
-            .args(["-c", "sleep 0.7; exec \"$0\""])
-            .arg(launcher)
-            .stdin(std::process::Stdio::null())
-            .spawn()?;
+    /// Opens a fresh main window, which picks up the selected language, and
+    /// closes this one. The application keeps running throughout.
+    fn rebuild_window(&self) {
+        let (config, snapshot) = status::reconcile(&self.paths);
+        let mut controller = MainWindow::builder()
+            .launch(AppInit {
+                paths: self.paths.clone(),
+                config,
+                snapshot,
+            })
+            .detach();
+        let window = controller.widget().clone();
+        // The new window has to belong to the application before the old one
+        // closes, or closing the last window would quit it.
+        relm4::main_application().add_window(&window);
+        controller.detach_runtime();
+        window.present();
         self.window.close();
-        Ok(())
     }
 
     /// Asks for the latest release in the background. Failures only go to
@@ -660,10 +666,15 @@ impl MainWindow {
         );
     }
 
-    fn save_settings(&mut self) {
-        if let Err(error) = self.config.save(&self.paths.config_file) {
-            tracing::error!(error = %format!("{error:#}"), "failed to save settings");
-            self.status.headline = tr!("settings.save_failed", error = format!("{error:#}"));
+    /// Writes the settings; on failure the error is shown and `false` returned.
+    fn save_settings(&mut self) -> bool {
+        match self.config.save(&self.paths.config_file) {
+            Ok(()) => true,
+            Err(error) => {
+                tracing::error!(error = %format!("{error:#}"), "failed to save settings");
+                self.status.headline = tr!("settings.save_failed", error = format!("{error:#}"));
+                false
+            }
         }
     }
 
@@ -849,10 +860,12 @@ impl MainWindow {
             return;
         }
 
-        if self.paths.game_token().exists() {
+        if !self.paths.game_token().exists() {
+            self.begin_login(sender);
+        } else if self.is_installed() {
             self.handle_launch_pressed(sender);
         } else {
-            self.begin_login(sender);
+            self.toast(&tr!("action.play_not_installed"));
         }
     }
 

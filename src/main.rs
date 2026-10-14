@@ -73,7 +73,7 @@ fn saved_ui_language() -> Option<String> {
 
 fn main() -> Result<()> {
     let _log_guard = hearthstone_linux::logging::init();
-    hearthstone_linux::i18n::init(saved_ui_language().as_deref());
+    hearthstone_linux::i18n::select(saved_ui_language().as_deref());
     let args = parse_args();
     if args.print_child_env {
         return hearthstone_linux::host_env::print_child_env();

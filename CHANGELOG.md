@@ -16,7 +16,8 @@
   Simplified Chinese are included.
 - New launcher language selection in a gear menu at the top right,
   with a flag per language (shipped as graphics, independent of emoji fonts). By default the launcher follows the system
-  locale; after a change the launcher restarts itself to apply it.
+  locale; a change applies at once, or on the next start while an install,
+  a login or the game is running.
 - On first start, region and game language are preselected from the system
   locale instead of always starting with `us` / `enUS`.
 - **GameMode** and **MangoHud** switches. The game is started as
@@ -45,7 +46,7 @@
 ### Changed
 
 - The window content is centred: status, settings and actions form one
-  ordered column, and the status line stays on one line.
+  ordered column.
 - Login and Play share one button: it shows **Login** while logged out and
   **Play** once logged in; **Log Out** and **Switch Account** are in its
   menu.
