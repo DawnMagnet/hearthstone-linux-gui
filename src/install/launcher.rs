@@ -1,5 +1,5 @@
 use super::compatibility;
-use crate::{config::AppConfig, host_env, tr};
+use crate::{config::AppConfig, game_options, host_env, tr};
 use anyhow::{Context, Result};
 use std::{
     collections::HashSet,
@@ -57,7 +57,15 @@ pub fn launch_game(
         "launching Hearthstone"
     );
     let library_path = game_library_path(game_dir, bundled_interpreter);
-    let graphics_env = graphics_env(options.use_discrete_gpu);
+    let mut graphics_env = graphics_env(options.use_discrete_gpu);
+    if vsync_disabled_in_options() {
+        let overrides = vsync_off_env(|name| host_env::host_var(name).is_some());
+        info!(
+            variables = ?overrides.iter().map(|(name, _)| *name).collect::<Vec<_>>(),
+            "options.txt switches VSync off; overriding the driver"
+        );
+        graphics_env.extend(overrides);
+    }
     let wrappers = wrapper_chain(options, find_in_path);
     let runner = find_runtime_runner();
     debug!(ld_library_path = ?library_path, "configured game library path");
@@ -525,6 +533,30 @@ fn executable_file(path: &Path) -> Option<PathBuf> {
     (metadata.is_file() && metadata.permissions().mode() & 0o111 != 0).then(|| path.to_path_buf())
 }
 
+/// Whether the game's `options.txt` switches VSync off (`vsync=0`).
+fn vsync_disabled_in_options() -> bool {
+    game_options::options_path()
+        .and_then(|path| game_options::GameOptions::load(&path).ok())
+        .is_some_and(|options| !options.vsync())
+}
+
+/// Driver settings that turn VSync off, for when the game keeps it on
+/// despite `vsync=0`: the game requests a swap interval itself, which these
+/// override. Mesa OpenGL (`vblank_mode`), NVIDIA OpenGL
+/// (`__GL_SYNC_TO_VBLANK`) and Mesa Vulkan (`MESA_VK_WSI_PRESENT_MODE`).
+/// A variable the user has set already is left alone.
+fn vsync_off_env(is_set: impl Fn(&str) -> bool) -> Vec<(&'static str, OsString)> {
+    [
+        ("vblank_mode", "0"),
+        ("__GL_SYNC_TO_VBLANK", "0"),
+        ("MESA_VK_WSI_PRESENT_MODE", "immediate"),
+    ]
+    .into_iter()
+    .filter(|(name, _)| !is_set(name))
+    .map(|(name, value)| (name, OsString::from(value)))
+    .collect()
+}
+
 fn graphics_env(use_discrete_gpu: bool) -> Vec<(&'static str, OsString)> {
     let mut envs = Vec::new();
     push_env_path(
@@ -578,6 +610,25 @@ fn dedupe_paths(paths: &mut Vec<PathBuf>) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn vsync_off_env_keeps_what_the_user_set() {
+        let names = |envs: Vec<(&'static str, std::ffi::OsString)>| {
+            envs.into_iter().map(|(name, _)| name).collect::<Vec<_>>()
+        };
+        assert_eq!(
+            names(super::vsync_off_env(|_| false)),
+            [
+                "vblank_mode",
+                "__GL_SYNC_TO_VBLANK",
+                "MESA_VK_WSI_PRESENT_MODE"
+            ]
+        );
+        assert_eq!(
+            names(super::vsync_off_env(|name| name == "vblank_mode")),
+            ["__GL_SYNC_TO_VBLANK", "MESA_VK_WSI_PRESENT_MODE"]
+        );
+    }
+
     use super::*;
     use std::os::unix::process::ExitStatusExt;
 
