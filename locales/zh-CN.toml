@@ -148,6 +148,23 @@ missing_client_config = "缺少 client.config"
 available_tooltip = "启动器 {version} 可用；打开下载页面"
 failed = "无法打开下载页面：{error}"
 
+[sysinfo]
+menu = "系统信息…"
+title = "系统信息"
+copy = "复制用于问题报告"
+copied = "已复制"
+loading = "正在收集…"
+launcher = "启动器"
+install = "安装方式"
+os = "系统"
+kernel = "内核"
+session = "会话"
+gpu_driver = "显卡驱动"
+opengl = "OpenGL"
+toolkit = "界面工具包"
+unknown = "未知"
+not_installed = "未安装"
+
 [game_settings]
 menu = "游戏设置…"
 running_tooltip = "请先停止游戏再编辑其设置"

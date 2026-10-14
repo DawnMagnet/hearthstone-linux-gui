@@ -643,6 +643,7 @@ pub fn preferences_menu(
     current: Option<&str>,
     check_for_updates: bool,
     on_game_settings: impl Fn() + 'static,
+    on_system_info: impl Fn() + 'static,
     on_language: impl Fn(Option<&'static str>) + 'static,
     on_check_for_updates: impl Fn(bool) + 'static,
 ) -> PreferencesMenu {
@@ -662,6 +663,15 @@ pub fn preferences_menu(
         });
     }
     content.append(&game_settings);
+    let system_info = gtk::Button::with_label(&tr!("sysinfo.menu"));
+    {
+        let popover = popover.clone();
+        system_info.connect_clicked(move |_| {
+            popover.popdown();
+            on_system_info();
+        });
+    }
+    content.append(&system_info);
     content.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
 
     let title = gtk::Label::new(Some(&tr!("settings.language")));
