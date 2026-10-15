@@ -149,9 +149,11 @@ under `~/.var/app/io.github.hearthstone_linux_gui/`. Login URLs open through
 the OpenURI portal, and the exported desktop file claims the Battle.net
 callback schemes on the host.
 
-The `Flatpak` workflow runs for tag releases (called from `release.yml`) and
-can be started by hand with `release_tag` set to attach the bundle to an
-existing release without changing the version:
+The `Flatpak` workflow only builds the bundle. `release.yml` runs it in
+parallel with the AppImage and native package builds, and its `publish` job
+attaches everything to the release at once. The workflow can also be started by
+hand with `release_tag` set to attach a bundle to an existing release without
+changing the version:
 
 ```sh
 gh workflow run flatpak.yml -f release_tag=v0.2.3

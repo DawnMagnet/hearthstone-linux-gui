@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Maintenance
+
+- The release workflow builds the AppImage, native packages and Flatpak bundle
+  in parallel; a single `publish` job collects them, writes `SHA256SUMS.txt`
+  and creates the release. It uses `docs/release-notes/<tag>.md` as the release
+  notes when that file exists.
+
 ## v0.3.0 - 2026-10-15
 
 ### Added
