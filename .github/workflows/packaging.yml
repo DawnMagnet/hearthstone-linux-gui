@@ -86,7 +86,7 @@ jobs:
           name: linux-packages
           path: dist/*
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 3
 
   smoke:
     name: Smoke test (${{ matrix.image }})
@@ -111,6 +111,8 @@ jobs:
           if command -v pacman >/dev/null; then pacman -Sy --noconfirm --needed ca-certificates >/dev/null; fi
 
       - uses: actions/checkout@v6
+        with:
+          sparse-checkout: packaging/linux
 
       - uses: actions/download-artifact@v4
         with:
