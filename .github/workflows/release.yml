@@ -1,5 +1,17 @@
 name: Release
 
+# Only v* tags build everything. Pull requests do not build packages and
+# pushes to master run the quick packaging.yml build, so none of them overlap
+# with a release (each has its own concurrency group).
+#
+#   packages  packaging.yml, full distribution matrix  -+
+#   flatpak   flatpak.yml                               +-> publish
+#   validate  tag matches the Cargo.toml version       -+
+#
+# The builds run in parallel and only upload workflow artifacts. `publish` is
+# the single job that touches the GitHub release. A manual run builds
+# everything but publishes nothing.
+
 on:
   push:
     tags:
@@ -14,37 +26,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build-dist:
-    name: Build release artifacts
+  validate:
+    name: Validate tag
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
-    timeout-minutes: 180
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-          submodules: recursive
+      - uses: actions/checkout@v6
 
-      - name: Show release context
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "ref=${GITHUB_REF}"
-          echo "ref_name=${GITHUB_REF_NAME}"
-          echo "sha=${GITHUB_SHA}"
-          docker --version
-
-      - name: Prepare artifact names
-        id: names
-        shell: bash
-        run: |
-          set -euo pipefail
-          suffix="${GITHUB_REF_NAME//\//-}"
-          echo "artifact_suffix=${suffix}" >> "$GITHUB_OUTPUT"
-
-      - name: Validate tag matches Cargo version
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Tag matches Cargo version
         shell: bash
         run: |
           set -euo pipefail
@@ -55,86 +44,87 @@ jobs:
             exit 1
           fi
 
-      # Every artifact is built on the Enterprise Linux 9 baseline (glibc 2.34)
-      # so it runs on old and new distributions alike; glibc is never bundled.
-      # See docs/design/packaging-pipeline.md.
-      - name: Build AppImage and native packages
+  packages:
+    name: Packages
+    uses: ./.github/workflows/packaging.yml
+    with:
+      full: true
+
+  flatpak:
+    name: Flatpak
+    uses: ./.github/workflows/flatpak.yml
+    with:
+      release_tag: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
+
+  publish:
+    name: Publish release
+    needs: [validate, packages, flatpak]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Download AppImage and native packages
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-packages
+          path: release-dist
+
+      - name: Download Flatpak bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.flatpak.outputs.artifact }}
+          path: release-dist
+
+      - name: Check assets and generate checksums
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p release-dist/build release-dist/appimage release-dist/native
-          docker build \
-            -f packaging/linux/Dockerfile \
-            --target dist \
-            --output type=local,dest=release-dist/build \
-            .
-          mv release-dist/build/*.AppImage release-dist/appimage/
-          mv release-dist/build/*.deb release-dist/build/*.rpm release-dist/build/*.pkg.tar.zst release-dist/native/
-          rmdir release-dist/build
-          find -L release-dist -maxdepth 3 -type f -printf '%p %s bytes\n' | sort
-
-      - name: Upload AppImage artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: hearthstone-linux-gui-${{ steps.names.outputs.artifact_suffix }}-appimage
-          path: release-dist/appimage/*.AppImage
-          if-no-files-found: error
-          retention-days: 90
-
-      - name: Upload native package artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: hearthstone-linux-gui-${{ steps.names.outputs.artifact_suffix }}-native-packages
-          path: |
-            release-dist/native/*.deb
-            release-dist/native/*.rpm
-            release-dist/native/*.pkg.tar.zst
-          if-no-files-found: error
-          retention-days: 90
-
-      - name: Generate checksums
-        shell: bash
-        run: |
-          set -euo pipefail
+          cd release-dist
+          for pattern in '*.AppImage' '*.deb' '*.rpm' '*.pkg.tar.zst' '*.flatpak'; do
+            if [ -z "$(find . -maxdepth 1 -type f -name "$pattern" -print -quit)" ]; then
+              echo "Missing release asset matching ${pattern}" >&2
+              exit 1
+            fi
+          done
           # Plain file names, so `sha256sum -c SHA256SUMS.txt` works in the
           # directory the release assets were downloaded to.
-          find release-dist -type f ! -name SHA256SUMS.txt -print0 \
-            | sort -z \
-            | xargs -0 sha256sum \
-            | sed -E 's#^([0-9a-f]{64})  .*/#\1  #' > release-dist/SHA256SUMS.txt
+          find . -maxdepth 1 -type f ! -name SHA256SUMS.txt -printf '%f\n' \
+            | sort | xargs -d '\n' sha256sum > SHA256SUMS.txt
+          cat SHA256SUMS.txt
           {
             echo "## hearthstone-linux-gui artifacts"
             echo
             echo "| File | Size |"
             echo "| --- | ---: |"
             while IFS= read -r file; do
-              size="$(stat -c '%s' "$file")"
-              echo "| \`${file#release-dist/}\` | ${size} bytes |"
-            done < <(find release-dist -type f | sort)
+              echo "| \`${file}\` | $(stat -c '%s' "$file") bytes |"
+            done < <(find . -maxdepth 1 -type f -printf '%f\n' | sort)
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload checksums artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: hearthstone-linux-gui-${{ steps.names.outputs.artifact_suffix }}-checksums
-          path: release-dist/SHA256SUMS.txt
-          if-no-files-found: error
-          retention-days: 90
-
-      - name: Create release notes
-        if: startsWith(github.ref, 'refs/tags/v')
+      # Hand-written notes in docs/release-notes/<tag>.md win; otherwise a
+      # generic download/verification text is generated.
+      - name: Prepare release notes
         shell: bash
         run: |
           set -euo pipefail
+          if [ -f "docs/release-notes/${TAG}.md" ]; then
+            cp "docs/release-notes/${TAG}.md" release-notes.md
+            exit 0
+          fi
           cat > release-notes.md <<EOF
-          Automated release for ${GITHUB_REF_NAME}.
+          Automated release for ${TAG}.
 
           ## Downloads
 
           - AppImage: portable x86_64 build. Needs glibc 2.34 or newer (RHEL/Alma/Rocky 9, Ubuntu 22.04, Debian 12, Fedora 35 and every newer release); bundles GTK 4/libadwaita, never glibc.
           - DEB/RPM/Pacman: native packages using the system GTK 4 (>= 4.0) and libadwaita (>= 1.0); same glibc 2.34 floor.
-          - Flatpak: \`hearthstone-linux-gui-${GITHUB_REF_NAME#v}-x86_64.flatpak\`, sandboxed x86_64 bundle on the GNOME 51 runtime (installed from Flathub automatically). Install with \`flatpak install --user ./hearthstone-linux-gui-${GITHUB_REF_NAME#v}-x86_64.flatpak\`, run with \`flatpak run io.github.hearthstone_linux_gui\`. Attached by the Flatpak job a few minutes after the other files.
-          - Nix users can build the native package with \`nix build github:${GITHUB_REPOSITORY}/${GITHUB_REF_NAME}\`.
+          - Flatpak: \`hearthstone-linux-gui-${TAG#v}-x86_64.flatpak\`, sandboxed x86_64 bundle on the GNOME 51 runtime (installed from Flathub automatically). Install with \`flatpak install --user ./hearthstone-linux-gui-${TAG#v}-x86_64.flatpak\`, run with \`flatpak run io.github.hearthstone_linux_gui\`.
+          - Nix users can build the native package with \`nix build github:${GITHUB_REPOSITORY}/${TAG}\`.
 
           ## Verification
 
@@ -146,39 +136,27 @@ jobs:
           EOF
 
       - name: Publish GitHub release
-        if: startsWith(github.ref, 'refs/tags/v')
-        env:
-          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          tag="${GITHUB_REF_NAME}"
           prerelease_args=()
-          if [[ "$tag" =~ (alpha|beta|rc) ]]; then
+          if [[ "$TAG" =~ (alpha|beta|rc) ]]; then
             prerelease_args+=(--prerelease)
           fi
 
-          mapfile -t assets < <(find release-dist -type f \
-            \( -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' -o -name '*.pkg.tar.zst' -o -name 'SHA256SUMS.txt' \) \
+          mapfile -t assets < <(find release-dist -maxdepth 1 -type f \
+            \( -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' -o -name '*.pkg.tar.zst' -o -name '*.flatpak' -o -name 'SHA256SUMS.txt' \) \
             | sort)
 
-          if gh release view "$tag" >/dev/null 2>&1; then
-            gh release edit "$tag" \
-              --title "$tag" \
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" \
+              --title "$TAG" \
               --notes-file release-notes.md \
               "${prerelease_args[@]}"
-            gh release upload "$tag" "${assets[@]}" --clobber
+            gh release upload "$TAG" "${assets[@]}" --clobber
           else
-            gh release create "$tag" "${assets[@]}" \
-              --title "$tag" \
+            gh release create "$TAG" "${assets[@]}" \
+              --title "$TAG" \
               --notes-file release-notes.md \
               "${prerelease_args[@]}"
           fi
-
-  flatpak:
-    name: Flatpak
-    needs: build-dist
-    if: startsWith(github.ref, 'refs/tags/v')
-    uses: ./.github/workflows/flatpak.yml
-    with:
-      release_tag: ${{ github.ref_name }}
