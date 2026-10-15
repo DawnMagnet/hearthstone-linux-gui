@@ -1,9 +1,8 @@
 name: CI
 
 # Minimal pull request check: type-check everything (GUI included) and run the
-# unit tests. No packages are built here; packaging.yml builds and smoke-tests
-# them on master, on manual runs, and on pull requests that touch the packaging
-# pipeline itself.
+# unit tests. No packages are built here. packaging.yml builds one quick set on
+# every push to master, and release.yml builds everything for v* tags.
 
 on:
   pull_request:

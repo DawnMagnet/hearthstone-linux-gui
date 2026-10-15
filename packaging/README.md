@@ -149,11 +149,11 @@ under `~/.var/app/io.github.hearthstone_linux_gui/`. Login URLs open through
 the OpenURI portal, and the exported desktop file claims the Battle.net
 callback schemes on the host.
 
-The `Flatpak` workflow only builds the bundle. `release.yml` runs it in
-parallel with the AppImage and native package builds, and its `publish` job
-attaches everything to the release at once. The workflow can also be started by
-hand with `release_tag` set to attach a bundle to an existing release without
-changing the version:
+The `Flatpak` workflow only builds the bundle and runs when `release.yml`
+calls it for a `v*` tag, or by hand. `release.yml` runs it in parallel with the
+AppImage and native package builds, and its `publish` job attaches everything
+to the release at once. Started by hand with `release_tag` set, it instead
+attaches a bundle to an existing release without changing the version:
 
 ```sh
 gh workflow run flatpak.yml -f release_tag=v0.2.3
@@ -173,3 +173,15 @@ switch in the gear menu) and then points to the release page. A package that
 the distribution upgrades itself should not offer that: build it with
 `HEARTHSTONE_LINUX_NO_UPDATE_CHECK=1` in the environment of `cargo build`,
 which removes the switch and the check.
+
+## When CI builds what
+
+| Event | Workflow | What runs |
+| --- | --- | --- |
+| Pull request | `ci.yml` | Type-check and unit tests only; no packages |
+| Push to master | `packaging.yml` | One quick build, smoke-tested on 3 distributions |
+| `v*` tag | `release.yml` | Full build (`packaging.yml` with the full distribution matrix, Flatpak), then a single `publish` job |
+| Manual | any | `packaging.yml` quick or full, `release.yml` builds without publishing |
+
+Each workflow has its own concurrency group per ref, so a tag build never
+cancels or waits for a master build.

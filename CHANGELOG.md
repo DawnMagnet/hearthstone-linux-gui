@@ -4,10 +4,12 @@
 
 ### Maintenance
 
-- The release workflow builds the AppImage, native packages and Flatpak bundle
-  in parallel; a single `publish` job collects them, writes `SHA256SUMS.txt`
-  and creates the release. It uses `docs/release-notes/<tag>.md` as the release
-  notes when that file exists.
+- CI builds less: pull requests only run type-check and unit tests, a push to
+  master runs one quick package build, and only `v*` tags build everything
+  (AppImage, native packages and Flatpak in parallel). A single `publish` job
+  collects the artifacts, writes `SHA256SUMS.txt` and creates the release,
+  using `docs/release-notes/<tag>.md` as the release notes when that file
+  exists.
 
 ## v0.3.0 - 2026-10-15
 

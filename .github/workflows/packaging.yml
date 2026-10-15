@@ -1,26 +1,43 @@
 name: Packaging
 
 # Builds every non-Nix artifact on the Enterprise Linux 9 baseline
-# (glibc 2.34) and smoke-tests it on the oldest and newest mainstream
-# distributions. Smoke also runs the hidden --print-child-env probe so
-# AppImage children do not inherit bundled LD_LIBRARY_PATH / GTK paths.
+# (glibc 2.34) and smoke-tests it. Smoke also runs the hidden
+# --print-child-env probe so AppImage children do not inherit bundled
+# LD_LIBRARY_PATH / GTK paths.
 #
-# Pull requests only run this when they touch the packaging pipeline; the
-# regular PR check is ci.yml. The EL9 toolchain layer comes from the GitHub
-# Actions layer cache, and pull requests smoke-test one distribution per
-# package format (rpm, deb, pacman). Pushes to master and manual runs use the
-# full matrix.
+#   pull request   -> not run (ci.yml does the cheap type-check and tests)
+#   push to master -> one quick build, smoke-tested on three distributions
+#   release.yml    -> called with full=true: the full distribution matrix
+#   manual run     -> quick by default, full with the `full` input
+#
+# This workflow only builds and uploads the `linux-packages` artifact. It never
+# touches a GitHub release; release.yml publishes.
 
 on:
-  pull_request:
-    paths:
-      - packaging/linux/**
-      - packaging/appimage/**
-      - .github/workflows/packaging.yml
   push:
     branches:
       - master
+    paths-ignore:
+      - "**.md"
+      - docs/**
+      - LICENSE
+      - flake.nix
+      - flake.lock
+      - .envrc
+      - .github/workflows/flatpak.yml
+      - .github/workflows/release.yml
   workflow_dispatch:
+    inputs:
+      full:
+        description: Smoke test the full distribution matrix instead of three images.
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      full:
+        description: Smoke test the full distribution matrix instead of three images.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -79,12 +96,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Pull requests: the EL9 baseline (rpm), a current deb distribution and
-        # Arch (pacman). Everything else: oldest baselines (glibc 2.34 / 2.35 /
-        # 2.36) and current releases.
-        image: ${{ fromJSON(github.event_name == 'pull_request'
-          && '["almalinux:9","ubuntu:24.04","archlinux:latest"]'
-          || '["almalinux:9","ubuntu:22.04","debian:12","ubuntu:24.04","debian:13","fedora:latest","archlinux:latest","opensuse/tumbleweed:latest"]') }}
+        # Quick: the EL9 baseline (rpm), a current deb distribution and Arch
+        # (pacman). Full: oldest baselines (glibc 2.34 / 2.35 / 2.36) and
+        # current releases.
+        image: ${{ fromJSON(inputs.full
+          && '["almalinux:9","ubuntu:22.04","debian:12","ubuntu:24.04","debian:13","fedora:latest","archlinux:latest","opensuse/tumbleweed:latest"]'
+          || '["almalinux:9","ubuntu:24.04","archlinux:latest"]') }}
     container:
       image: ${{ matrix.image }}
     steps:

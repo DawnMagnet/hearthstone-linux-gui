@@ -2,26 +2,15 @@ name: Flatpak
 
 # Builds the Flatpak bundle and uploads it as a workflow artifact.
 #
-# release.yml calls this workflow in parallel with its other builds and
-# publishes the bundle together with everything else, so a tag push never
-# touches the GitHub release from here. A manual run with release_tag set
+# It runs only when release.yml calls it for a v* tag (in parallel with the
+# other builds) or by hand; pull requests and pushes to master do not build it.
+# release.yml publishes the bundle together with everything else, so a tag push
+# never touches the GitHub release from here. A manual run with release_tag set
 # attaches the bundle to that existing GitHub release instead, updates
 # SHA256SUMS.txt and adds a Flatpak entry to the release notes. Version numbers
 # are never changed here.
 
 on:
-  push:
-    branches: [master]
-    paths:
-      - packaging/flatpak/**
-      - packaging/linux/stage.sh
-      - data/**
-      - .github/workflows/flatpak.yml
-  pull_request:
-    paths:
-      - packaging/flatpak/**
-      - packaging/linux/stage.sh
-      - .github/workflows/flatpak.yml
   workflow_dispatch:
     inputs:
       release_tag:
