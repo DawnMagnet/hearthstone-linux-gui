@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Fixed
+
+- The download status no longer flickers while Hearthstone installs. The
+  speed used to drop out of the line every time a file finished, so the text
+  kept changing its length and wrapping point, and the whole column changed
+  width with it. The speed is now kept between measurements, the action
+  (`Downloading Hearthstone:`) stays on its own line with the counts below
+  it and the speed below those, and the digits have equal widths.
+
 ### Maintenance
 
 - CI builds less: pull requests only run type-check and unit tests, a push to

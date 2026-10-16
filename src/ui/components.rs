@@ -28,6 +28,12 @@ pub enum StatusPanelInput {
     CopyLoginUrl,
 }
 
+fn tabular_digits() -> gtk::pango::AttrList {
+    let attributes = gtk::pango::AttrList::new();
+    attributes.insert(gtk::pango::AttrFontFeatures::new("tnum 1"));
+    attributes
+}
+
 #[relm4::component(pub)]
 impl SimpleComponent for StatusPanel {
     type Init = StatusPanelState;
@@ -44,6 +50,9 @@ impl SimpleComponent for StatusPanel {
                 set_wrap: true,
                 set_max_width_chars: 48,
                 add_css_class: relm4::css::TITLE_2,
+                // Equal-width digits keep progress numbers from shifting the
+                // text while they count up.
+                set_attributes: Some(&tabular_digits()),
 
                 #[watch]
                 set_label: &model.state.snapshot.headline,
