@@ -19,6 +19,16 @@ pub fn format_speed_suffix(bytes_per_second: f64) -> String {
     }
 }
 
+/// Joins a multi-line message into one line for terminals and logs: the
+/// launcher window shows progress texts on several lines.
+pub fn single_line(text: &str) -> String {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 pub fn format_bytes(bytes: f64) -> String {
     const UNITS: [&str; 4] = ["B", "KiB", "MiB", "GiB"];
     let mut value = bytes;
@@ -110,4 +120,19 @@ pub fn make_executable(path: &Path) -> Result<()> {
 #[cfg(not(unix))]
 pub fn make_executable(_path: &Path) -> Result<()> {
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::single_line;
+
+    #[test]
+    fn single_line_joins_progress_lines() {
+        assert_eq!(
+            single_line("Downloading Hearthstone:\n3/10 files, 1 MiB/2 MiB\n512 KiB/s"),
+            "Downloading Hearthstone: 3/10 files, 1 MiB/2 MiB 512 KiB/s"
+        );
+        assert_eq!(single_line("Checking\n\n"), "Checking");
+        assert_eq!(single_line("one line"), "one line");
+    }
 }

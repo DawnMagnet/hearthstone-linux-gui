@@ -14,6 +14,24 @@
   recommend the GStreamer plugins it needs. The Blender scripts that build
   and animate the scene are in `docs/design/logo3d/` and are not part of the
   packages.
+- The status line above the logo shows the Unity version on its own line
+  below the game version, so the narrow window no longer cuts it short.
+
+### Fixed
+
+- The download status no longer flickers while Hearthstone installs. The
+  speed used to drop out of the line every time a file finished, so the text
+  kept changing its length and wrapping point, and the whole column changed
+  width with it. The speed is now kept between measurements, the action
+  (`Downloading Hearthstone:`) stays on its own line with the counts below
+  it and the speed below those, and the digits have equal widths. While an
+  install or uninstall runs, the headline keeps room for those three lines,
+  so the controls below it move down once when the task starts and back up
+  once when it ends instead of jumping with every step. Each status message
+  also stays up for at least 0.6 s while a task runs; faster steps are
+  skipped, so a quick update check no longer flashes a dozen messages.
+  When the task ends, the window shrinks back to its smallest height (it
+  only ever grew before); a width the user chose is kept.
 
 ### Maintenance
 
