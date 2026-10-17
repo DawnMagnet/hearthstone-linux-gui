@@ -1,7 +1,7 @@
 # Hearthstone Linux Launcher
 
 <p align="center">
-  <img src="data/icons/io.github.hearthstone_linux_gui.svg" alt="Tux spielt Karten: das Icon des Launchers" width="160">
+  <img src="docs/images/logo-animation.webp" alt="Tux spielt am Ausgabetisch der Taverne Karten: das animierte Logo des Launchers" width="240">
 </p>
 
 <p align="center">

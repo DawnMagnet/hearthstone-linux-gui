@@ -4,6 +4,7 @@ mod browser;
 mod components;
 mod game_settings;
 mod login_window;
+mod logo;
 mod status;
 mod system_info;
 

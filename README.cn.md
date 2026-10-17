@@ -1,7 +1,7 @@
 # 炉石传说 Linux 启动器（hearthstone-linux-gui）
 
 <p align="center">
-  <img src="data/icons/io.github.hearthstone_linux_gui.svg" alt="玩牌的 Tux：启动器图标" width="160">
+  <img src="docs/images/logo-animation.webp" alt="在酒馆柜台前玩牌的 Tux：启动器的动画标志" width="240">
 </p>
 
 <p align="center">
