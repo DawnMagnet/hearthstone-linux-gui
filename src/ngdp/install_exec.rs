@@ -53,6 +53,9 @@ pub(super) async fn install_entries_parallel(
     let mut in_flight_bytes = 0u64;
     let mut speed_window_start = Instant::now();
     let mut speed_window_bytes = 0u64;
+    // Shown again when a file completes, so the status line keeps its speed
+    // instead of dropping it between measurements.
+    let mut last_speed = 0.0;
     let mut last_progress = Instant::now() - Duration::from_secs(1);
     let mut installed = Vec::with_capacity(total_files);
 
@@ -81,11 +84,9 @@ pub(super) async fn install_entries_parallel(
                 speed_window_bytes = speed_window_bytes.saturating_add(bytes);
                 let elapsed = speed_window_start.elapsed();
                 if last_progress.elapsed() >= Duration::from_millis(250) {
-                    let speed = if elapsed > Duration::ZERO {
-                        speed_window_bytes as f64 / elapsed.as_secs_f64()
-                    } else {
-                        0.0
-                    };
+                    if elapsed > Duration::ZERO {
+                        last_speed = speed_window_bytes as f64 / elapsed.as_secs_f64();
+                    }
                     emit_install_progress(
                         progress,
                         completed_files,
@@ -93,7 +94,7 @@ pub(super) async fn install_entries_parallel(
                         completed_bytes,
                         in_flight_bytes,
                         total_bytes,
-                        speed,
+                        last_speed,
                     );
                     if elapsed >= Duration::from_secs(1) {
                         speed_window_start = Instant::now();
@@ -117,7 +118,7 @@ pub(super) async fn install_entries_parallel(
                     completed_bytes,
                     in_flight_bytes,
                     total_bytes,
-                    0.0,
+                    last_speed,
                 );
             }
         }
