@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Changed
+
+- The status line above the logo shows the Unity version on its own line
+  below the game version, so the narrow window no longer cuts it short.
+
 ### Fixed
 
 - The download status no longer flickers while Hearthstone installs. The

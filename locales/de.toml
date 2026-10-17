@@ -28,7 +28,7 @@ logged_in = "Angemeldet"
 token_present = "Token vorhanden"
 logged_out = "Abgemeldet"
 version_missing = "Nicht installiert"
-details = "Anmeldung: {login} · {region} / {locale}\nSpiel: {game} · Unity: {unity}"
+details = "Anmeldung: {login} · {region} / {locale}\nSpiel: {game}\nUnity: {unity}"
 
 [settings]
 auto_update = "Beim Start nach Launcher-Updates suchen"
