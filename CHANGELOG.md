@@ -9,7 +9,10 @@
   kept changing its length and wrapping point, and the whole column changed
   width with it. The speed is now kept between measurements, the action
   (`Downloading Hearthstone:`) stays on its own line with the counts below
-  it and the speed below those, and the digits have equal widths.
+  it and the speed below those, and the digits have equal widths. While an
+  install or uninstall runs, the headline keeps room for those three lines,
+  so the controls below it move down once when the task starts and back up
+  once when it ends instead of jumping with every step.
 
 ### Maintenance
 

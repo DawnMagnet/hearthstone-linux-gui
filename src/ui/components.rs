@@ -28,6 +28,20 @@ pub enum StatusPanelInput {
     CopyLoginUrl,
 }
 
+/// Lines the headline keeps while an install or uninstall runs (action,
+/// counts, speed). Shorter steps are padded, so everything below stays put
+/// from the start of the task until it ends.
+const RUNNING_HEADLINE_LINES: usize = 3;
+
+fn headline_text(state: &StatusPanelState) -> String {
+    let headline = &state.snapshot.headline;
+    if !state.progress.visible {
+        return headline.clone();
+    }
+    let padding = RUNNING_HEADLINE_LINES.saturating_sub(headline.lines().count().max(1));
+    format!("{headline}{}", "\n".repeat(padding))
+}
+
 fn tabular_digits() -> gtk::pango::AttrList {
     let attributes = gtk::pango::AttrList::new();
     attributes.insert(gtk::pango::AttrFontFeatures::new("tnum 1"));
@@ -55,7 +69,7 @@ impl SimpleComponent for StatusPanel {
                 set_attributes: Some(&tabular_digits()),
 
                 #[watch]
-                set_label: &model.state.snapshot.headline,
+                set_label: &headline_text(&model.state),
             },
 
             gtk::Box {
