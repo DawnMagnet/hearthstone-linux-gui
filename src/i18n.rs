@@ -251,9 +251,15 @@ mod tests {
 
     /// Keys used through `tr!("...")` anywhere under `src/`.
     fn keys_used_in_sources() -> BTreeSet<String> {
-        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        // The optional login window (`login-helper/`) uses the same catalogs.
+        let sources = [root.join("src"), root.join("login-helper/src")];
         let mut keys = BTreeSet::new();
-        for entry in walkdir::WalkDir::new(&src) {
+        for entry in sources
+            .iter()
+            .filter(|dir| dir.is_dir())
+            .flat_map(walkdir::WalkDir::new)
+        {
             let entry = entry.unwrap();
             let path = entry.path();
             if path.extension().and_then(|ext| ext.to_str()) != Some("rs")
@@ -310,9 +316,15 @@ mod tests {
     #[test]
     fn source_keys_match_the_base_catalog() {
         let used = keys_used_in_sources();
+        // The login window's keys are only checked where its sources are
+        // present; package builds copy just the launcher.
+        let helper_present = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("login-helper/src")
+            .is_dir();
         let defined: BTreeSet<String> = catalog(BASE_CODE)
             .into_keys()
             .filter(|key| !key.starts_with("meta."))
+            .filter(|key| helper_present || !key.starts_with("login_window."))
             .collect();
         let missing: Vec<_> = used.difference(&defined).collect();
         let unused: Vec<_> = defined.difference(&used).collect();

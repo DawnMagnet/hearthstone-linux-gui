@@ -126,7 +126,14 @@ handler_failed = "Login handler registration failed; opening browser login anywa
 opening = "Opening browser for login…"
 waiting = "Complete login in your browser; waiting for desktop callback"
 no_browser = "Could not open a browser. Copy the login URL below into your browser"
+window_open = "Sign in to Battle.net in the login window"
+window_failed = "The login window could not open; opening the browser instead"
 complete = "Login complete"
+
+[login_window]
+title = "Battle.net login"
+open_browser = "Open in browser"
+open_browser_tooltip = "Continue in the system browser, for example for Google or Apple sign-in, a password manager or a security key"
 
 [game]
 stopping = "Stopping game"
