@@ -15,6 +15,6 @@ ffmpeg -y -framerate 24 -i "$frames/frame_%04d.png" \
   "$root/data/logo/logo-loop.webm"
 
 ffmpeg -y -framerate 24 -i "$frames/frame_%04d.png" \
-  -vf "$crop,scale=320:320:flags=lanczos" \
-  -c:v libwebp_anim -lossless 0 -q:v 70 -compression_level 6 -loop 0 -pix_fmt yuva420p \
+  -vf "$crop,scale=320:320:flags=lanczos,fps=12" \
+  -c:v libwebp_anim -lossless 0 -q:v 40 -compression_level 6 -loop 0 -pix_fmt yuva420p \
   "$root/docs/images/logo-animation.webp"

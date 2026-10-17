@@ -12,6 +12,7 @@ use std::{
     cell::Cell,
     path::{Path, PathBuf},
     rc::Rc,
+    time::Duration,
 };
 
 const ANIMATION: &[u8] = include_bytes!("../../data/logo/logo-loop.webm");
@@ -19,6 +20,9 @@ const ANIMATION: &[u8] = include_bytes!("../../data/logo/logo-loop.webm");
 const ORIGINAL: &[u8] = include_bytes!("../../data/icons/logo.png");
 /// Logo size in the window; both pictures have twice this size for HiDPI.
 const SIZE: i32 = 184;
+/// How long the animation may take to get ready before the drawn logo is
+/// shown in its place, for a backend that neither plays nor reports an error.
+const PREPARE_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub struct Logo {
     pub image: gtk::Image,
@@ -103,6 +107,20 @@ fn animate(image: &gtk::Image, path: &Path) -> Rc<Animation> {
         show_original(image);
     } else if media.is_prepared() {
         image.set_paintable(Some(&media));
+    } else {
+        glib::timeout_add_local_once(
+            PREPARE_TIMEOUT,
+            glib::clone!(
+                #[weak]
+                image,
+                move || {
+                    if image.paintable().is_none() {
+                        tracing::warn!("logo animation did not get ready; showing the drawn logo");
+                        show_original(&image);
+                    }
+                }
+            ),
+        );
     }
     let animation = Rc::new(Animation {
         media,
@@ -146,15 +164,42 @@ fn animate(image: &gtk::Image, path: &Path) -> Rc<Animation> {
 /// GTK's media backend plays files, not memory, so the embedded animation is
 /// written to the cache directory once per version of the file.
 fn write_animation(cache_dir: &Path) -> std::io::Result<PathBuf> {
-    let path = cache_dir.join(format!("logo-loop-{:x}.webm", fingerprint(ANIMATION)));
+    let name = format!("logo-loop-{:x}.webm", fingerprint(ANIMATION));
+    let path = cache_dir.join(&name);
     if std::fs::metadata(&path).is_ok_and(|meta| meta.len() == ANIMATION.len() as u64) {
         return Ok(path);
     }
     std::fs::create_dir_all(cache_dir)?;
-    let partial = path.with_extension("webm.part");
-    std::fs::write(&partial, ANIMATION)?;
-    std::fs::rename(&partial, &path)?;
+    // One partial file per process, so two launchers starting at once do not
+    // write into the same file.
+    let partial = cache_dir.join(format!("{name}.{}.part", std::process::id()));
+    if let Err(error) =
+        std::fs::write(&partial, ANIMATION).and_then(|()| std::fs::rename(&partial, &path))
+    {
+        let _ = std::fs::remove_file(&partial);
+        return Err(error);
+    }
+    remove_old_animations(cache_dir, &name);
     Ok(path)
+}
+
+/// Removes the animations that earlier launcher versions wrote.
+fn remove_old_animations(cache_dir: &Path, current: &str) {
+    let Ok(entries) = std::fs::read_dir(cache_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let file_name = entry.file_name();
+        let Some(file_name) = file_name.to_str() else {
+            continue;
+        };
+        if file_name != current
+            && file_name.starts_with("logo-loop-")
+            && file_name.ends_with(".webm")
+        {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
 }
 
 /// FNV-1a; only tells versions of the embedded file apart.

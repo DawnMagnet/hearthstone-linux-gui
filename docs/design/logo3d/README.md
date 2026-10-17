@@ -13,7 +13,7 @@ Blizzard material: no logo, card frames, card art or fonts.
 | `build_logo.py` | Builds the scene `HS_Logo` (Tux, cards, counter, tavern in a round frame, lights, camera). The layout follows the SVG coordinates of the drawn logo. |
 | `animate_logo.py` | Turns it into a 10-second loop (240 frames at 24 fps): the fire flickers, lanterns and stars glow unevenly, Tux breathes, blinks, looks over his cards and lifts the middle one. Sets the frame output to 640 px RGBA PNG. |
 | `check_overlaps.py` | Lists objects whose surfaces cross. Every object may only lie on, hang in front of or stand behind another; parts of one thing are grouped. |
-| `encode.sh` | Encodes the frames into the WebM (368 px, VP9 with alpha) and the WebP (320 px). |
+| `encode.sh` | Encodes the frames into the WebM (368 px, VP9 with alpha) and the WebP (320 px at 12 fps, kept small for the README). |
 
 ## Rebuilding
 

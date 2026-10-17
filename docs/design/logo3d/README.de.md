@@ -14,7 +14,7 @@ Schriften.
 | `build_logo.py` | Baut die Szene `HS_Logo` (Tux, Karten, Tisch, Taverne im runden Rahmen, Licht, Kamera). Der Aufbau folgt den SVG-Koordinaten des gezeichneten Logos. |
 | `animate_logo.py` | Macht daraus eine zehnsekündige Schleife (240 Bilder bei 24 fps): Das Feuer flackert, Laternen und Sterne leuchten unruhig, Tux atmet, blinzelt, schaut sich seine Karten an und hebt die mittlere an. Stellt die Ausgabe auf 640-px-PNG mit Alphakanal. |
 | `check_overlaps.py` | Listet Objekte, deren Oberflächen sich durchdringen. Jedes Objekt darf nur auf, vor oder hinter einem anderen liegen; Teile eines Gegenstands sind zusammengefasst. |
-| `encode.sh` | Kodiert die Einzelbilder als WebM (368 px, VP9 mit Alphakanal) und WebP (320 px). |
+| `encode.sh` | Kodiert die Einzelbilder als WebM (368 px, VP9 mit Alphakanal) und WebP (320 px mit 12 fps, klein gehalten für die README). |
 
 ## Neu erzeugen
 
