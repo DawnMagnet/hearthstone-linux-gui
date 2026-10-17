@@ -28,7 +28,7 @@ logged_in = "已登录"
 token_present = "已有登录令牌"
 logged_out = "未登录"
 version_missing = "未安装"
-details = "登录：{login} · {region} / {locale}\n游戏：{game} · Unity：{unity}"
+details = "登录：{login} · {region} / {locale}\n游戏：{game}\nUnity：{unity}"
 
 [settings]
 auto_update = "启动时检查启动器更新"

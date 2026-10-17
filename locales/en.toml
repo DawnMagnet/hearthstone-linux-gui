@@ -32,7 +32,7 @@ logged_in = "Logged in"
 token_present = "Token present"
 logged_out = "Logged out"
 version_missing = "Not installed"
-details = "Login: {login} · {region} / {locale}\nGame: {game} · Unity: {unity}"
+details = "Login: {login} · {region} / {locale}\nGame: {game}\nUnity: {unity}"
 
 [settings]
 auto_update = "Check for launcher updates at startup"
