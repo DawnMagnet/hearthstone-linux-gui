@@ -8,6 +8,7 @@ use hearthstone_linux::{
 use relm4::adw::prelude::*;
 use relm4::{adw, gtk, prelude::*, ComponentController, Controller, RelmWidgetExt, Sender};
 use relm4_components::simple_combo_box::{SimpleComboBox, SimpleComboBoxMsg};
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug)]
 pub struct StatusPanelState {
@@ -18,14 +19,74 @@ pub struct StatusPanelState {
     pub login_url: Option<String>,
 }
 
+/// How long a status message stays up at least while a task runs. Steps
+/// that finish sooner are skipped and the panel moves on to the newest one,
+/// so a quick update check does not flash a dozen messages.
+const MIN_MESSAGE_TIME: Duration = Duration::from_millis(600);
+
 pub struct StatusPanel {
     state: StatusPanelState,
+    root: gtk::Box,
+    /// When the shown headline appeared.
+    shown_at: Instant,
+    /// Newest state waiting for the shown message's minimum time.
+    pending: Option<StatusPanelState>,
+}
+
+impl StatusPanel {
+    fn show(&mut self, state: StatusPanelState) {
+        if state.snapshot.headline != self.state.snapshot.headline {
+            self.shown_at = Instant::now();
+        }
+        let task_ended = self.state.progress.visible && !state.progress.visible;
+        self.state = state;
+        if task_ended {
+            self.shrink_window();
+        }
+    }
+
+    /// A window grows with its content but never shrinks on its own; once
+    /// a task's lines and progress bar are gone, return to the smallest
+    /// height (keeping the width the user chose).
+    fn shrink_window(&self) {
+        let root = self.root.clone();
+        // After the view update, so the window measures the smaller layout.
+        gtk::glib::idle_add_local_once(move || {
+            let Some(window) = root.root().and_downcast::<gtk::Window>() else {
+                return;
+            };
+            if !window.is_maximized() && !window.is_fullscreen() {
+                window.set_default_size(window.width(), 1);
+            }
+        });
+    }
 }
 
 #[derive(Debug)]
 pub enum StatusPanelInput {
     Render(StatusPanelState),
+    ShowPending,
     CopyLoginUrl,
+}
+
+/// Lines the headline keeps while an install or uninstall runs (action,
+/// counts, speed). Shorter steps are padded, so everything below stays put
+/// from the start of the task until it ends.
+const RUNNING_HEADLINE_LINES: usize = 3;
+
+fn headline_text(state: &StatusPanelState) -> String {
+    let headline = &state.snapshot.headline;
+    if !state.progress.visible {
+        return headline.clone();
+    }
+    let padding = RUNNING_HEADLINE_LINES.saturating_sub(headline.lines().count().max(1));
+    format!("{headline}{}", "\n".repeat(padding))
+}
+
+fn tabular_digits() -> gtk::pango::AttrList {
+    let attributes = gtk::pango::AttrList::new();
+    attributes.insert(gtk::pango::AttrFontFeatures::new("tnum 1"));
+    attributes
 }
 
 #[relm4::component(pub)]
@@ -44,9 +105,12 @@ impl SimpleComponent for StatusPanel {
                 set_wrap: true,
                 set_max_width_chars: 48,
                 add_css_class: relm4::css::TITLE_2,
+                // Equal-width digits keep progress numbers from shifting the
+                // text while they count up.
+                set_attributes: Some(&tabular_digits()),
 
                 #[watch]
-                set_label: &model.state.snapshot.headline,
+                set_label: &headline_text(&model.state),
             },
 
             gtk::Box {
@@ -114,15 +178,40 @@ impl SimpleComponent for StatusPanel {
         root: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
-        let model = StatusPanel { state };
+        let model = StatusPanel {
+            state,
+            root: root.clone(),
+            shown_at: Instant::now(),
+            pending: None,
+        };
         let widgets = view_output!();
 
         ComponentParts { model, widgets }
     }
 
-    fn update(&mut self, input: Self::Input, _sender: ComponentSender<Self>) {
+    fn update(&mut self, input: Self::Input, sender: ComponentSender<Self>) {
         match input {
-            StatusPanelInput::Render(state) => self.state = state,
+            StatusPanelInput::Render(state) => {
+                let task_message = state.snapshot.headline != self.state.snapshot.headline
+                    && (state.progress.visible || self.state.progress.visible);
+                let wait = MIN_MESSAGE_TIME.saturating_sub(self.shown_at.elapsed());
+                if self.pending.is_some() {
+                    // A timer is already running; it shows the newest state.
+                    self.pending = Some(state);
+                } else if task_message && !wait.is_zero() {
+                    self.pending = Some(state);
+                    gtk::glib::timeout_add_local_once(wait, move || {
+                        sender.input(StatusPanelInput::ShowPending);
+                    });
+                } else {
+                    self.show(state);
+                }
+            }
+            StatusPanelInput::ShowPending => {
+                if let Some(state) = self.pending.take() {
+                    self.show(state);
+                }
+            }
             StatusPanelInput::CopyLoginUrl => {
                 if let (Some(url), Some(display)) = (
                     self.state.login_url.as_deref(),
