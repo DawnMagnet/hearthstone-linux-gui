@@ -12,7 +12,9 @@
   it and the speed below those, and the digits have equal widths. While an
   install or uninstall runs, the headline keeps room for those three lines,
   so the controls below it move down once when the task starts and back up
-  once when it ends instead of jumping with every step.
+  once when it ends instead of jumping with every step. Each status message
+  also stays up for at least 0.6 s while a task runs; faster steps are
+  skipped, so a quick update check no longer flashes a dozen messages.
 
 ### Maintenance
 

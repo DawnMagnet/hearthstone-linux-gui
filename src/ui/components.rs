@@ -8,6 +8,7 @@ use hearthstone_linux::{
 use relm4::adw::prelude::*;
 use relm4::{adw, gtk, prelude::*, ComponentController, Controller, RelmWidgetExt, Sender};
 use relm4_components::simple_combo_box::{SimpleComboBox, SimpleComboBoxMsg};
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug)]
 pub struct StatusPanelState {
@@ -18,13 +19,32 @@ pub struct StatusPanelState {
     pub login_url: Option<String>,
 }
 
+/// How long a status message stays up at least while a task runs. Steps
+/// that finish sooner are skipped and the panel moves on to the newest one,
+/// so a quick update check does not flash a dozen messages.
+const MIN_MESSAGE_TIME: Duration = Duration::from_millis(600);
+
 pub struct StatusPanel {
     state: StatusPanelState,
+    /// When the shown headline appeared.
+    shown_at: Instant,
+    /// Newest state waiting for the shown message's minimum time.
+    pending: Option<StatusPanelState>,
+}
+
+impl StatusPanel {
+    fn show(&mut self, state: StatusPanelState) {
+        if state.snapshot.headline != self.state.snapshot.headline {
+            self.shown_at = Instant::now();
+        }
+        self.state = state;
+    }
 }
 
 #[derive(Debug)]
 pub enum StatusPanelInput {
     Render(StatusPanelState),
+    ShowPending,
     CopyLoginUrl,
 }
 
@@ -137,15 +157,39 @@ impl SimpleComponent for StatusPanel {
         root: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
-        let model = StatusPanel { state };
+        let model = StatusPanel {
+            state,
+            shown_at: Instant::now(),
+            pending: None,
+        };
         let widgets = view_output!();
 
         ComponentParts { model, widgets }
     }
 
-    fn update(&mut self, input: Self::Input, _sender: ComponentSender<Self>) {
+    fn update(&mut self, input: Self::Input, sender: ComponentSender<Self>) {
         match input {
-            StatusPanelInput::Render(state) => self.state = state,
+            StatusPanelInput::Render(state) => {
+                let task_message = state.snapshot.headline != self.state.snapshot.headline
+                    && (state.progress.visible || self.state.progress.visible);
+                let wait = MIN_MESSAGE_TIME.saturating_sub(self.shown_at.elapsed());
+                if self.pending.is_some() {
+                    // A timer is already running; it shows the newest state.
+                    self.pending = Some(state);
+                } else if task_message && !wait.is_zero() {
+                    self.pending = Some(state);
+                    gtk::glib::timeout_add_local_once(wait, move || {
+                        sender.input(StatusPanelInput::ShowPending);
+                    });
+                } else {
+                    self.show(state);
+                }
+            }
+            StatusPanelInput::ShowPending => {
+                if let Some(state) = self.pending.take() {
+                    self.show(state);
+                }
+            }
             StatusPanelInput::CopyLoginUrl => {
                 if let (Some(url), Some(display)) = (
                     self.state.login_url.as_deref(),
