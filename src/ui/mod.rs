@@ -3,6 +3,7 @@ mod auth;
 mod browser;
 mod components;
 mod game_settings;
+mod logo;
 mod status;
 mod system_info;
 

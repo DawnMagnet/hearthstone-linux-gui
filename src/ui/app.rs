@@ -1,9 +1,9 @@
 use super::{
     auth, browser,
     components::{
-        embedded_image, preferences_menu, ActionBar, ActionBarInput, ActionBarOutput,
-        ActionBarState, InstallAction, InstallState, LaunchState, LoginState, SettingsOutput,
-        SettingsPanel, SettingsPanelInput, StatusPanel, StatusPanelInput, StatusPanelState,
+        preferences_menu, ActionBar, ActionBarInput, ActionBarOutput, ActionBarState,
+        InstallAction, InstallState, LaunchState, LoginState, SettingsOutput, SettingsPanel,
+        SettingsPanelInput, StatusPanel, StatusPanelInput, StatusPanelState,
     },
     game_settings, status,
 };
@@ -76,6 +76,7 @@ struct MainWindow {
     details: gtk::Label,
     game_settings_button: gtk::Button,
     update_button: gtk::Button,
+    logo: super::logo::Logo,
     /// Newer launcher release found by the update check.
     update: Option<Release>,
 }
@@ -334,6 +335,7 @@ impl SimpleComponent for MainWindow {
             Self::check_for_updates(&sender, init.paths.update_check_cache());
         }
 
+        let logo = super::logo::Logo::new(&init.paths.cache_dir);
         let model = MainWindow {
             paths: init.paths,
             config: init.config,
@@ -352,11 +354,11 @@ impl SimpleComponent for MainWindow {
             details: gtk::Label::new(None),
             game_settings_button: preferences_menu.game_settings,
             update_button: update_button.clone(),
+            logo,
             update: None,
         };
 
-        let logo_image = embedded_image(include_bytes!("../../data/icons/logo.png"));
-        logo_image.set_pixel_size(184);
+        let logo_image = model.logo.image.clone();
         logo_image.set_halign(gtk::Align::Center);
         // Room on both sides keeps the corner buttons outside the picture.
         logo_image.set_margin_start(48);
@@ -1000,6 +1002,7 @@ impl MainWindow {
         self.settings_panel
             .emit(SettingsPanelInput::SetConfig(self.config.clone()));
         let game_running = self.game_session.is_some();
+        self.logo.set_game_running(game_running);
         self.game_settings_button.set_sensitive(!game_running);
         self.game_settings_button.set_tooltip_text(
             game_running

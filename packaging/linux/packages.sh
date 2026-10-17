@@ -62,6 +62,11 @@ overrides:
       - libglib2.0-0 (>= 2.66) | libglib2.0-0t64 (>= 2.66)
       - libpango-1.0-0 (>= 1.46) | libpango-1.0-0t64 (>= 1.46)
       - xdg-utils
+    # Plays the animated logo (VP9 with alpha); without them a still logo shows.
+    recommends:
+      - libgtk-4-media-gstreamer
+      - gstreamer1.0-plugins-good
+      - gstreamer1.0-plugins-bad
   rpm:
     # soname dependencies resolve on Fedora, EL9 and openSUSE alike.
     depends:
@@ -72,6 +77,9 @@ overrides:
       - libgio-2.0.so.0()(64bit)
       - libpango-1.0.so.0()(64bit)
       - xdg-utils
+    recommends:
+      - gstreamer1-plugins-good
+      - gstreamer1-plugins-bad-free
   archlinux:
     depends:
       - glibc

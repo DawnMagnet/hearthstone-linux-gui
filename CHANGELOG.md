@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Changed
+
+- **Animated logo.** The window shows a 10-second looping 3D animation of
+  Tux at the tavern counter instead of the still logo: the fire flickers,
+  Tux breathes, blinks and looks over his cards. It plays through GTK's
+  media backend (GStreamer, VP9 with alpha) and pauses while the window is
+  minimised or the game runs. Without a media backend (for example in the
+  AppImage, whose bundled GTK has none) the drawn logo shows as before. DEB and RPM packages recommend the GStreamer plugins it needs. The
+  Blender scripts that build and animate the scene are in
+  `docs/design/logo3d/`.
+
 ### Maintenance
 
 - CI builds less: pull requests only run type-check and unit tests, a push to
