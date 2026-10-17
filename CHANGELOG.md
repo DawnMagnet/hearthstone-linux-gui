@@ -15,6 +15,8 @@
   once when it ends instead of jumping with every step. Each status message
   also stays up for at least 0.6 s while a task runs; faster steps are
   skipped, so a quick update check no longer flashes a dozen messages.
+  When the task ends, the window shrinks back to its smallest height (it
+  only ever grew before); a width the user chose is kept.
 
 ### Maintenance
 

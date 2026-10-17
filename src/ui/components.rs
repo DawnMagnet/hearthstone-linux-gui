@@ -26,6 +26,7 @@ const MIN_MESSAGE_TIME: Duration = Duration::from_millis(600);
 
 pub struct StatusPanel {
     state: StatusPanelState,
+    root: gtk::Box,
     /// When the shown headline appeared.
     shown_at: Instant,
     /// Newest state waiting for the shown message's minimum time.
@@ -37,7 +38,27 @@ impl StatusPanel {
         if state.snapshot.headline != self.state.snapshot.headline {
             self.shown_at = Instant::now();
         }
+        let task_ended = self.state.progress.visible && !state.progress.visible;
         self.state = state;
+        if task_ended {
+            self.shrink_window();
+        }
+    }
+
+    /// A window grows with its content but never shrinks on its own; once
+    /// a task's lines and progress bar are gone, return to the smallest
+    /// height (keeping the width the user chose).
+    fn shrink_window(&self) {
+        let root = self.root.clone();
+        // After the view update, so the window measures the smaller layout.
+        gtk::glib::idle_add_local_once(move || {
+            let Some(window) = root.root().and_downcast::<gtk::Window>() else {
+                return;
+            };
+            if !window.is_maximized() && !window.is_fullscreen() {
+                window.set_default_size(window.width(), 1);
+            }
+        });
     }
 }
 
@@ -159,6 +180,7 @@ impl SimpleComponent for StatusPanel {
     ) -> ComponentParts<Self> {
         let model = StatusPanel {
             state,
+            root: root.clone(),
             shown_at: Instant::now(),
             pending: None,
         };
