@@ -343,7 +343,10 @@ security keys; if the program is missing or fails, the browser is used as
 before.
 
 It lives in `login-helper/`, has its own lock file and needs WebKitGTK 6, so the
-launcher and its packages never depend on it:
+launcher and its packages never depend on it. The release packages (AppImage,
+`.deb`, `.rpm`) and the Flatpak do **not** include the login window; it is
+built and installed separately, and without it **Login** simply uses your
+browser:
 
 ```sh
 cargo build --release --manifest-path login-helper/Cargo.toml

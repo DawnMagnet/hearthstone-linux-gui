@@ -16,7 +16,7 @@
 //! - exit 0 and `callback <uri>` on stdout: the login finished;
 //! - exit 3: the user asked for the system browser instead;
 //! - exit 1: the window was closed without a login;
-//! - exit 2: wrong usage.
+//! - exit 2: wrong usage (including a URL that is not a Battle.net https URL).
 
 use adw::prelude::*;
 use hearthstone_linux::{config::AppConfig, i18n, paths, tr};
@@ -37,6 +37,10 @@ fn main() -> ExitCode {
         eprintln!("usage: hearthstone-linux-gui-login <login-url>");
         return ExitCode::from(EXIT_USAGE);
     };
+    if !is_login_url(&url) {
+        eprintln!("refusing to open {url}: only https://*.battle.net and https://*.battlenet.com.cn login URLs are accepted");
+        return ExitCode::from(EXIT_USAGE);
+    }
 
     // Same language as the launcher: its saved choice, else the system's.
     let saved_language = paths::config_file()
@@ -82,7 +86,7 @@ fn build_window(app: &adw::Application, url: &str, outcome: Rc<Cell<u8>>) {
     {
         let window = window.clone();
         let outcome = outcome.clone();
-        web_view.connect_decide_policy(move |_, decision, _| {
+        web_view.connect_decide_policy(move |web_view, decision, decision_type| {
             let Some(navigation) = decision.downcast_ref::<webkit6::NavigationPolicyDecision>()
             else {
                 return false;
@@ -95,6 +99,18 @@ fn build_window(app: &adw::Application, url: &str, outcome: Rc<Cell<u8>>) {
                 Some(uri) if is_callback(&uri) => {
                     decision.ignore();
                     finish_with_callback(&window, &outcome, &uri);
+                    true
+                }
+                // `window.open` and `target=_blank` would ask for a second
+                // web view, which this window does not have, and the link
+                // would do nothing. Load it in this window so the login
+                // carries on.
+                Some(uri)
+                    if decision_type == webkit6::PolicyDecisionType::NewWindowAction
+                        && is_https(&uri) =>
+                {
+                    decision.ignore();
+                    web_view.load_uri(&uri);
                     true
                 }
                 _ => false,
@@ -153,9 +169,52 @@ fn is_callback(uri: &str) -> bool {
         .any(|scheme| uri.starts_with(scheme))
 }
 
+fn is_https(uri: &str) -> bool {
+    uri.get(..8)
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("https://"))
+}
+
+/// Whether `url` is a login page on a Battle.net host over https. The
+/// launcher only passes its own Blizzard login URLs; anything else is a
+/// mistake or someone else calling the program.
+fn is_login_url(url: &str) -> bool {
+    let Ok(uri) = gtk::glib::Uri::parse(url, gtk::glib::UriFlags::NONE) else {
+        return false;
+    };
+    if !uri.scheme().eq_ignore_ascii_case("https") {
+        return false;
+    }
+    let Some(host) = uri.host() else {
+        return false;
+    };
+    let host = host.to_ascii_lowercase();
+    ["battle.net", "battlenet.com.cn"]
+        .iter()
+        .any(|domain| host == *domain || host.ends_with(&format!(".{domain}")))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::is_callback;
+    use super::{is_callback, is_login_url};
+
+    #[test]
+    fn accepts_only_https_battle_net_login_urls() {
+        assert!(is_login_url(
+            "https://battle.net/login/?ref=blizzard-hearthstone://localhost:0/&app=wtcg"
+        ));
+        assert!(is_login_url(
+            "https://account.battlenet.com.cn/login/zh/?app=wtcg-and"
+        ));
+        assert!(is_login_url("HTTPS://EU.Battle.NET/login/"));
+        assert!(!is_login_url("http://battle.net/login/"));
+        assert!(!is_login_url("file:///etc/passwd"));
+        assert!(!is_login_url("https://evil.example/login/"));
+        assert!(!is_login_url("https://battle.net.evil.example/"));
+        assert!(!is_login_url("https://evilbattle.net/"));
+        assert!(!is_login_url("https://battle.net@evil.example/"));
+        assert!(!is_login_url("not a url"));
+        assert!(!is_login_url(""));
+    }
 
     #[test]
     fn recognises_only_the_callback_schemes() {
