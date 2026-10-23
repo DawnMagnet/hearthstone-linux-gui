@@ -90,6 +90,53 @@ pub fn install_compatibility_files(
     Ok(())
 }
 
+/// Gives the game window its icon. The Linux Unity player takes it from
+/// `Resources/UnityPlayer.png`, which the macOS game files lack, so the
+/// window shows a generic X11 icon. The macOS `PlayerIcon.icns` already
+/// holds PNG images; the 256 px one is copied out. Best effort: a missing
+/// or odd icon must never prevent the launch.
+pub fn install_window_icon(game_dir: &Path) {
+    let resources = game_dir.join("Bin/Hearthstone_Data/Resources");
+    let icon = resources.join("UnityPlayer.png");
+    if icon.exists() {
+        return;
+    }
+    let Ok(icns) = std::fs::read(resources.join("PlayerIcon.icns")) else {
+        return;
+    };
+    let Some(png) = icns_png(&icns) else {
+        debug!("no PNG image in PlayerIcon.icns");
+        return;
+    };
+    match std::fs::write(&icon, png) {
+        Ok(()) => info!(path = %icon.display(), "installed game window icon"),
+        Err(error) => debug!(%error, "could not write game window icon"),
+    }
+}
+
+/// The PNG image of an `.icns` file, preferring 256 px (`ic08`), which is
+/// plenty for a window icon and keeps the X11 icon property small.
+fn icns_png(icns: &[u8]) -> Option<&[u8]> {
+    if !icns.starts_with(b"icns") {
+        return None;
+    }
+    let mut pngs = Vec::new();
+    let mut offset = 8;
+    while let Some(header) = icns.get(offset..offset + 8) {
+        let len = u32::from_be_bytes(header[4..8].try_into().unwrap()) as usize;
+        let data = icns.get(offset + 8..offset + len.max(8))?;
+        if data.starts_with(b"\x89PNG") {
+            pngs.push((&header[..4], data));
+        }
+        offset += len.max(8);
+    }
+    ["ic08", "ic09", "ic07", "ic10"]
+        .iter()
+        .find_map(|kind| pngs.iter().find(|(tag, _)| *tag == kind.as_bytes()))
+        .or(pngs.first())
+        .map(|(_, data)| *data)
+}
+
 /// Rewrite the game's absolute macOS P/Invoke name to a normal Linux library
 /// name.  This keeps launch independent of Nix, FHS wrappers, and mount
 /// namespace tools.  Unity's managed string heap is NUL-terminated, so the
@@ -250,7 +297,69 @@ fn dev_stub_files() -> Result<Option<Vec<StubFile>>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{copy_required, patch_corefoundation_import_bytes};
+    use super::{copy_required, icns_png, install_window_icon, patch_corefoundation_import_bytes};
+
+    fn icns(entries: &[(&[u8; 4], &[u8])]) -> Vec<u8> {
+        let body: Vec<u8> = entries
+            .iter()
+            .flat_map(|(tag, data)| {
+                let len = (data.len() as u32 + 8).to_be_bytes();
+                [tag.as_slice(), &len, data].concat()
+            })
+            .collect();
+        [
+            b"icns".as_slice(),
+            &(body.len() as u32 + 8).to_be_bytes(),
+            &body,
+        ]
+        .concat()
+    }
+
+    #[test]
+    fn picks_the_256_px_png_from_an_icns() {
+        let file = icns(&[
+            (b"is32", b"rle data"),
+            (b"ic07", b"\x89PNG 128"),
+            (b"ic08", b"\x89PNG 256"),
+            (b"ic10", b"\x89PNG 1024"),
+        ]);
+        assert_eq!(icns_png(&file), Some(b"\x89PNG 256".as_slice()));
+        assert_eq!(
+            icns_png(&icns(&[(b"ic10", b"\x89PNG 1024")])),
+            Some(b"\x89PNG 1024".as_slice())
+        );
+        assert_eq!(icns_png(&icns(&[(b"is32", b"rle data")])), None);
+        assert_eq!(icns_png(b"not an icns"), None);
+        // A length running past the end must not panic.
+        assert_eq!(icns_png(b"icns\0\0\0\x20ic08\0\0\x01\0\x89PNG"), None);
+    }
+
+    #[test]
+    fn installs_the_window_icon_once() {
+        let temp = tempfile::tempdir().unwrap();
+        let resources = temp.path().join("Bin/Hearthstone_Data/Resources");
+        std::fs::create_dir_all(&resources).unwrap();
+        install_window_icon(temp.path()); // no icns: nothing happens
+        assert!(!resources.join("UnityPlayer.png").exists());
+
+        std::fs::write(
+            resources.join("PlayerIcon.icns"),
+            icns(&[(b"ic08", b"\x89PNG 256")]),
+        )
+        .unwrap();
+        install_window_icon(temp.path());
+        assert_eq!(
+            std::fs::read(resources.join("UnityPlayer.png")).unwrap(),
+            b"\x89PNG 256"
+        );
+
+        std::fs::write(resources.join("UnityPlayer.png"), b"custom").unwrap();
+        install_window_icon(temp.path());
+        assert_eq!(
+            std::fs::read(resources.join("UnityPlayer.png")).unwrap(),
+            b"custom"
+        );
+    }
 
     #[test]
     fn patches_absolute_corefoundation_import_to_linux_name() {
