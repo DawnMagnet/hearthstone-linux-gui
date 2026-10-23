@@ -171,21 +171,31 @@ fn main() -> Result<()> {
         let game_dir = config.game_dir.unwrap_or(paths.game_dir.clone());
         let child = hearthstone_linux::install::launcher::launch_game(&game_dir, options, None)?;
         if config.hsreplay_sync {
+            // The sync also ends by itself when the game exits.
+            let cancel = tokio_util::sync::CancellationToken::new();
             let result = hearthstone_linux::hsreplay::sync_after_launch(
                 child.id(),
                 &paths.hsreplay_token(),
+                &cancel,
                 |url| {
                     eprintln!("{url}");
                     let _ = std::process::Command::new("xdg-open").arg(url).spawn();
                 },
             );
             match result {
-                Ok((cards, dust)) => {
+                Ok(Some(hearthstone_linux::hsreplay::Synced {
+                    cards,
+                    dust: Some(dust),
+                })) => {
                     println!(
                         "{}",
                         tr!("game.hsreplay_synced", cards = cards, dust = dust)
                     )
                 }
+                Ok(Some(hearthstone_linux::hsreplay::Synced { cards, dust: None })) => {
+                    println!("{}", tr!("game.hsreplay_synced_no_dust", cards = cards))
+                }
+                Ok(None) => {}
                 Err(error) => eprintln!(
                     "{}",
                     tr!("game.hsreplay_failed", error = format!("{error:#}"))

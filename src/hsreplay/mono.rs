@@ -12,7 +12,11 @@
 //!
 //! Struct offsets were found on Unity 6000.3 / Linux x86_64. They are close to
 //! UnitySpy's `Unity2021_3_2022_3_x64` table, except that `MonoClass` fields
-//! sit 8 bytes lower than in the Windows build.
+//! sit 8 bytes lower than in the Windows build. They are not discovered at
+//! run time, so a different Unity version (or another architecture) makes the
+//! reads fail or find nothing; this is best-effort and stops with an error
+//! rather than guessing. Every walk over Mono's linked structures is capped, so
+//! corrupt or half-built memory ends in an error, never in an endless loop.
 
 use anyhow::{bail, ensure, Context, Result};
 use std::{
@@ -39,6 +43,13 @@ const CLASS_NEXT_CACHE: u64 = 0x100;
 const FIELD_SIZE: u64 = 0x20;
 const VTABLE_VTABLE: u64 = 0x48;
 const FIELD_ATTRIBUTE_STATIC: u16 = 0x10;
+
+/// Upper bounds for walks over data read from the game, so corrupt memory
+/// cannot make them run forever.
+const MAX_ASSEMBLIES: usize = 4096;
+const MAX_CLASS_BUCKETS: u64 = 1 << 20;
+const MAX_CLASSES_VISITED: usize = 1 << 21;
+const MAX_CLASS_CHAIN: usize = 64;
 
 const GAME_EXE: &str = "Hearthstone.x86_64";
 const MONO_LIBRARY: &str = "libmonobdwgc-2.0.so";
@@ -84,8 +95,23 @@ pub fn find_game(root: u32) -> Option<u32> {
     None
 }
 
+/// Whether `pid` exists and has not exited (a zombie that nobody has waited
+/// for yet counts as exited).
+pub fn process_alive(pid: u32) -> bool {
+    let Ok(stat) = fs::read_to_string(format!("/proc/{pid}/stat")) else {
+        return false;
+    };
+    stat.rsplit_once(')')
+        .and_then(|(_, rest)| rest.split_whitespace().next())
+        .is_some_and(|state| !matches!(state, "Z" | "X"))
+}
+
 fn descends_from(mut pid: u32, root: u32) -> bool {
-    while pid > 1 {
+    // Process trees are shallow; the cap only guards against a cycle.
+    for _ in 0..4096 {
+        if pid <= 1 {
+            return false;
+        }
         if pid == root {
             return true;
         }
@@ -146,7 +172,11 @@ pub fn read_state(pid: u32) -> Result<GameState> {
     let battletag = read_battletag(&mem, presence)
         .inspect_err(|error| tracing::warn!(error = %format!("{error:#}"), "battletag not read"))
         .ok();
-    let dust = read_dust(&mem, classes["NetCacheArcaneDustBalance"])?;
+    // Dust is optional: when it cannot be read, the collection is still sent.
+    let dust = read_dust(&mem, classes["NetCacheArcaneDustBalance"])
+        .inspect_err(|error| tracing::warn!(error = %format!("{error:#}"), "dust not read"))
+        .ok()
+        .flatten();
 
     Ok(GameState {
         account_hi,
@@ -208,10 +238,27 @@ fn read_dust(mem: &Mem, class: u64) -> Result<Option<u64>> {
             chunk_start += len;
         }
     }
-    if found.len() > 1 {
-        tracing::warn!(?found, "several dust balances found; using the largest");
+    Ok(single_dust(&found))
+}
+
+/// The dust balance, only when every plausible object agrees on it. Stale
+/// copies on the heap can disagree; picking one of them (say the largest)
+/// would upload a made-up balance, so an ambiguous scan reports nothing.
+fn single_dust(found: &HashSet<u64>) -> Option<u64> {
+    match found.len() {
+        0 => {
+            tracing::warn!("no dust balance found in the game's memory; not uploading dust");
+            None
+        }
+        1 => found.iter().next().copied(),
+        _ => {
+            tracing::warn!(
+                ?found,
+                "several different dust balances found; not uploading dust"
+            );
+            None
+        }
     }
-    Ok(found.into_iter().max())
 }
 
 fn parse_range(range: &str) -> Option<(u64, u64)> {
@@ -304,12 +351,18 @@ fn dynamic_symbol(elf: &[u8], name: &str) -> Result<u64> {
 
 fn find_image(mem: &Mem, domain: u64, name: &str) -> Result<u64> {
     let mut node = mem.ptr(domain + DOMAIN_ASSEMBLIES)?;
-    while node != 0 {
+    for _ in 0..MAX_ASSEMBLIES {
+        if node == 0 {
+            break;
+        }
         let assembly = mem.ptr(node)?;
         if mem.cstr(mem.ptr(assembly + ASSEMBLY_NAME)?)?.as_deref() == Some(name) {
             return mem.ptr(assembly + ASSEMBLY_IMAGE);
         }
         node = mem.ptr(node + 8)?;
+    }
+    if node != 0 {
+        bail!("assembly list is longer than {MAX_ASSEMBLIES}; memory looks corrupt");
     }
     bail!("assembly {name} is not loaded yet")
 }
@@ -319,10 +372,21 @@ fn find_classes(mem: &Mem, image: u64, names: &[&str]) -> Result<HashMap<String,
     let cache = image + IMAGE_CLASS_CACHE;
     let size = mem.i32(cache + HASH_TABLE_SIZE)?;
     let table = mem.ptr(cache + HASH_TABLE_TABLE)?;
+    let buckets = u64::try_from(size).unwrap_or(0);
+    ensure!(
+        buckets <= MAX_CLASS_BUCKETS,
+        "class cache size {buckets} is implausible"
+    );
     let mut found = HashMap::new();
-    for bucket in 0..u64::try_from(size).unwrap_or(0) {
+    let mut visited = 0usize;
+    for bucket in 0..buckets {
         let mut class = mem.ptr(table + 8 * bucket)?;
         while class != 0 {
+            visited += 1;
+            ensure!(
+                visited <= MAX_CLASSES_VISITED,
+                "class cache has too many entries; memory looks corrupt"
+            );
             if let Some(name) = mem.cstr(mem.ptr(class + CLASS_NAME)?)? {
                 let namespace = mem.cstr(mem.ptr(class + CLASS_NAMESPACE)?)?;
                 if names.contains(&name.as_str()) && namespace.as_deref().unwrap_or("").is_empty() {
@@ -421,7 +485,13 @@ impl Mem {
         }
         let mut fields = Fields::new();
         let mut current = class;
+        let mut depth = 0;
         while current != 0 {
+            depth += 1;
+            ensure!(
+                depth <= MAX_CLASS_CHAIN,
+                "class inheritance chain is too deep; memory looks corrupt"
+            );
             let array = self.ptr(current + CLASS_FIELDS)?;
             let count = self.i32(current + CLASS_FIELD_COUNT)?;
             if array != 0 && (0..10_000).contains(&count) {
@@ -500,6 +570,20 @@ mod tests {
         let ppid = parent_pid(std::process::id());
         assert!(ppid.is_some_and(|ppid| ppid > 0));
         assert!(descends_from(std::process::id(), std::process::id()));
+    }
+
+    #[test]
+    fn process_alive_tells_live_from_gone() {
+        assert!(process_alive(std::process::id()));
+        // Above the default pid_max, so no such process.
+        assert!(!process_alive(u32::MAX));
+    }
+
+    #[test]
+    fn dust_needs_exactly_one_agreed_value() {
+        assert_eq!(single_dust(&HashSet::new()), None);
+        assert_eq!(single_dust(&HashSet::from([2280])), Some(2280));
+        assert_eq!(single_dust(&HashSet::from([2280, 2300])), None);
     }
 
     #[test]

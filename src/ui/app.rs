@@ -102,7 +102,7 @@ pub enum AppMsg {
         result: Result<String, String>,
     },
     GamePoll,
-    HsReplaySynced(Result<(i64, u64), String>),
+    HsReplaySynced(Result<hsreplay::Synced, String>),
 }
 
 struct LoginSession {
@@ -114,6 +114,8 @@ struct LoginSession {
 struct GameSession {
     child: Child,
     poll_cancel: CancellationToken,
+    /// Ends the HSReplay sync of this game session (stop, exit).
+    sync_cancel: CancellationToken,
     started: Instant,
     stop_requested: bool,
     output_log: PathBuf,
@@ -884,6 +886,7 @@ impl MainWindow {
             match session.child.kill() {
                 Ok(()) => {
                     session.stop_requested = true;
+                    session.sync_cancel.cancel();
                     self.status.headline = tr!("game.stopping");
                     self.refresh_details();
                 }
@@ -909,6 +912,7 @@ impl MainWindow {
                 self.game_session = Some(GameSession {
                     child,
                     poll_cancel: poll_cancel.clone(),
+                    sync_cancel: CancellationToken::new(),
                     started: Instant::now(),
                     stop_requested: false,
                     output_log,
@@ -931,27 +935,44 @@ impl MainWindow {
 
     /// Uploads the collection once the game has loaded it. Reading the game's
     /// memory only works because the launcher is the game's ancestor.
+    ///
+    /// The sync stops when the game is stopped or exits, and a second one is
+    /// never started while one is still running.
     fn start_hsreplay_sync(&self, sender: &ComponentSender<Self>) {
-        let Some(pid) = self.game_session.as_ref().map(|session| session.child.id()) else {
+        let Some((pid, cancel)) = self
+            .game_session
+            .as_ref()
+            .map(|session| (session.child.id(), session.sync_cancel.clone()))
+        else {
             return;
         };
         let token_file = self.paths.hsreplay_token();
         let input = sender.input_sender().clone();
         std::thread::spawn(move || {
-            let result = hsreplay::sync_after_launch(pid, &token_file, |url| {
+            let result = hsreplay::sync_after_launch(pid, &token_file, &cancel, |url| {
                 if let Err(error) = browser::open_url(url) {
                     tracing::warn!(error = %format!("{error:#}"), %url, "could not open HSReplay login");
                 }
-            })
-            .map_err(|error| format!("{error:#}"));
-            input.emit(AppMsg::HsReplaySynced(result));
+            });
+            match result {
+                // Another sync is already running.
+                Ok(None) => {}
+                Ok(Some(synced)) => input.emit(AppMsg::HsReplaySynced(Ok(synced))),
+                // Stopped on purpose: nothing to report.
+                Err(_) if cancel.is_cancelled() => {}
+                Err(error) => input.emit(AppMsg::HsReplaySynced(Err(format!("{error:#}")))),
+            }
         });
     }
 
-    fn handle_hsreplay_synced(&mut self, result: Result<(i64, u64), String>) {
+    fn handle_hsreplay_synced(&mut self, result: Result<hsreplay::Synced, String>) {
         match result {
-            Ok((cards, dust)) => {
-                self.toast(&tr!("game.hsreplay_synced", cards = cards, dust = dust))
+            Ok(hsreplay::Synced {
+                cards,
+                dust: Some(dust),
+            }) => self.toast(&tr!("game.hsreplay_synced", cards = cards, dust = dust)),
+            Ok(hsreplay::Synced { cards, dust: None }) => {
+                self.toast(&tr!("game.hsreplay_synced_no_dust", cards = cards))
             }
             Err(error) => {
                 tracing::warn!(%error, "HSReplay collection sync failed");
@@ -974,6 +995,7 @@ impl MainWindow {
                     "game exited"
                 );
                 session.poll_cancel.cancel();
+                session.sync_cancel.cancel();
                 let message = if session.stop_requested {
                     None
                 } else {
@@ -1000,6 +1022,7 @@ impl MainWindow {
             Err(error) => {
                 tracing::error!(error = %error, "failed to poll game process");
                 session.poll_cancel.cancel();
+                session.sync_cancel.cancel();
                 self.game_session = None;
                 self.status.headline = tr!("game.status_error", error = error);
                 self.refresh_details();

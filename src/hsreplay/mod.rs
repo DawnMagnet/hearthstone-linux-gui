@@ -5,6 +5,10 @@
 //! menu has loaded it, then sent with HSReplay's collection API. Login is
 //! OAuth2 with PKCE through the browser; the token is kept in the launcher's
 //! config directory.
+//!
+//! What is sent to HSReplay.net: the Blizzard account id (hi/lo) and BattleTag
+//! (to link the account), the card collection and, when it could be read
+//! unambiguously, the arcane dust balance. Nothing else is read or sent.
 
 pub mod mono;
 
@@ -16,11 +20,14 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
     fs,
+    future::Future,
     io::{Read, Write},
     net::TcpListener,
     path::Path,
+    sync::atomic::{AtomicBool, Ordering},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+use tokio_util::sync::CancellationToken;
 use url::Url;
 
 /// HDT's public OAuth client; its redirect URIs are localhost:17781-17789.
@@ -38,15 +45,70 @@ const LOGIN_TIMEOUT: Duration = Duration::from_secs(300);
 const COLLECTION_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const POLL_INTERVAL: Duration = Duration::from_secs(10);
 
+/// Only one sync (and so one login page and callback listener) at a time.
+static SYNC_RUNNING: AtomicBool = AtomicBool::new(false);
+
+struct RunningGuard;
+
+impl RunningGuard {
+    fn acquire() -> Option<Self> {
+        SYNC_RUNNING
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+            .then_some(Self)
+    }
+}
+
+impl Drop for RunningGuard {
+    fn drop(&mut self) {
+        SYNC_RUNNING.store(false, Ordering::Release);
+    }
+}
+
+/// Raised when the sync was cancelled, for example because the game stopped.
+#[derive(Debug)]
+pub struct Cancelled;
+
+impl std::fmt::Display for Cancelled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("HSReplay sync cancelled")
+    }
+}
+
+impl std::error::Error for Cancelled {}
+
+/// What a finished sync uploaded.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Synced {
+    pub cards: i64,
+    /// `None` when the dust balance could not be read unambiguously; it is
+    /// then left out of the upload.
+    pub dust: Option<u64>,
+}
+
 /// Waits for the game started as `launched_pid` (or one of its descendants)
 /// to load the collection, then uploads it. Logs in first when no token is
 /// saved, opening the login page with `open_url`. Blocks; run it on its own
-/// thread. Returns the uploaded card count and dust.
+/// thread.
+///
+/// Cancelling `cancel` ends the sync with [`Cancelled`], as does the game
+/// exiting. `Ok(None)` means another sync is already running, so nothing was
+/// started.
 pub fn sync_after_launch(
     launched_pid: u32,
     token_file: &Path,
+    cancel: &CancellationToken,
     open_url: impl Fn(&str),
-) -> Result<(i64, u64)> {
+) -> Result<Option<Synced>> {
+    let Some(_running) = RunningGuard::acquire() else {
+        tracing::info!("an HSReplay sync is already running; not starting another");
+        return Ok(None);
+    };
+    // Also ends when the game does, so a login page nobody finishes does not
+    // keep the sync (or the CLI) waiting.
+    let cancel = cancel.child_token();
+    let _watcher = GameWatcher::start(launched_pid, cancel.clone());
+
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
@@ -54,28 +116,105 @@ pub fn sync_after_launch(
         .user_agent(USER_AGENT)
         .timeout(Duration::from_secs(30))
         .build()?;
-    let token = runtime.block_on(token(&client, token_file, open_url))?;
+    let token = runtime.block_on(cancellable(
+        &cancel,
+        token(&client, token_file, &cancel, open_url),
+    ))?;
 
-    let state = wait_for_collection(launched_pid)?;
-    runtime.block_on(upload(&client, &token, &state))?;
-    let (cards, dust) = (state.owned_copies(), state.dust.unwrap_or(0));
-    tracing::info!(cards, dust, "collection uploaded to HSReplay");
-    Ok((cards, dust))
+    let state = wait_for_collection(launched_pid, &cancel)?;
+    runtime.block_on(cancellable(&cancel, upload(&client, &token, &state)))?;
+    let synced = Synced {
+        cards: state.owned_copies(),
+        dust: state.dust,
+    };
+    tracing::info!(cards = synced.cards, dust = ?synced.dust, "collection uploaded to HSReplay");
+    Ok(Some(synced))
 }
 
-fn wait_for_collection(launched_pid: u32) -> Result<mono::GameState> {
+/// Cancels a token when the launched game process is gone.
+struct GameWatcher(CancellationToken);
+
+impl GameWatcher {
+    fn start(pid: u32, cancel: CancellationToken) -> Self {
+        let done = CancellationToken::new();
+        let stop = done.clone();
+        std::thread::spawn(move || {
+            while !stop.is_cancelled() {
+                if !mono::process_alive(pid) {
+                    cancel.cancel();
+                    return;
+                }
+                std::thread::sleep(Duration::from_secs(1));
+            }
+        });
+        Self(done)
+    }
+}
+
+impl Drop for GameWatcher {
+    fn drop(&mut self) {
+        self.0.cancel();
+    }
+}
+
+/// Runs `future` unless `cancel` fires first.
+async fn cancellable<T>(
+    cancel: &CancellationToken,
+    future: impl Future<Output = Result<T>>,
+) -> Result<T> {
+    tokio::select! {
+        biased;
+        () = cancel.cancelled() => Err(Cancelled.into()),
+        result = future => result,
+    }
+}
+
+/// Sleeps `duration` in short steps; false when `cancel` fired meanwhile.
+fn sleep_unless_cancelled(duration: Duration, cancel: &CancellationToken) -> bool {
+    let deadline = Instant::now() + duration;
+    while Instant::now() < deadline {
+        if cancel.is_cancelled() {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(200).min(duration));
+    }
+    !cancel.is_cancelled()
+}
+
+/// A state read from corrupt or half-initialised memory must not be uploaded.
+fn plausible(state: &mono::GameState) -> bool {
+    state.cards.len() < 100_000
+        && state.cards.iter().all(|card| {
+            (0..1_000_000).contains(&card.dbf_id)
+                && (0..=1000).contains(&card.count)
+                && (0..=1000).contains(&card.trial)
+        })
+        && state.dust.is_none_or(|dust| dust < 10_000_000)
+}
+
+fn wait_for_collection(launched_pid: u32, cancel: &CancellationToken) -> Result<mono::GameState> {
     let deadline = Instant::now() + COLLECTION_TIMEOUT;
     let mut last_error = None;
     while Instant::now() < deadline {
-        std::thread::sleep(POLL_INTERVAL);
+        if !sleep_unless_cancelled(POLL_INTERVAL, cancel) {
+            return Err(Cancelled.into());
+        }
         let Some(pid) = mono::find_game(launched_pid) else {
-            if !Path::new(&format!("/proc/{launched_pid}")).exists() {
+            if !mono::process_alive(launched_pid) {
                 bail!("the game exited before its collection was loaded");
             }
             continue;
         };
         match mono::read_state(pid) {
-            Ok(state) if state.owned_copies() > 0 => return Ok(state),
+            Ok(state) if state.owned_copies() > 0 => {
+                if plausible(&state) {
+                    return Ok(state);
+                }
+                tracing::warn!("collection read from the game looks corrupt; trying again");
+                last_error = Some(anyhow::anyhow!(
+                    "the collection read from the game was not plausible"
+                ));
+            }
             Ok(_) => tracing::debug!("collection still empty"),
             Err(error) => {
                 tracing::debug!(error = %format!("{error:#}"), "collection not readable yet");
@@ -104,14 +243,18 @@ fn collection_json(state: &mono::GameState) -> Value {
         .into_iter()
         .map(|(dbf_id, row)| (dbf_id.to_string(), row))
         .collect();
-    json!({
+    let mut body = json!({
         "collection": collection,
         "favorite_heroes": {},
         "cardbacks": [],
         "favorite_cardback": 0,
-        "dust": state.dust.unwrap_or(0),
         "player_records": {},
-    })
+    });
+    // Never send a made-up balance: leave the field out when it is unknown.
+    if let Some(dust) = state.dust {
+        body["dust"] = dust.into();
+    }
+    body
 }
 
 async fn upload(client: &reqwest::Client, token: &Token, state: &mono::GameState) -> Result<()> {
@@ -170,6 +313,7 @@ async fn upload(client: &reqwest::Client, token: &Token, state: &mono::GameState
 #[derive(Debug, Deserialize, Serialize)]
 struct Token {
     access_token: String,
+    #[serde(default)]
     refresh_token: String,
     #[serde(default = "bearer")]
     token_type: String,
@@ -189,8 +333,29 @@ fn now() -> u64 {
         .map_or(0, |elapsed| elapsed.as_secs())
 }
 
+/// The token endpoint turned the request down (HTTP 400/401, e.g.
+/// `invalid_grant`), as opposed to being unreachable or failing.
+#[derive(Debug)]
+struct AuthRejected(u16);
+
+impl std::fmt::Display for AuthRejected {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "HSReplay rejected the token request (HTTP {})", self.0)
+    }
+}
+
+impl std::error::Error for AuthRejected {}
+
 /// A valid access token: the saved one, refreshed if needed, or a new login.
-async fn token(client: &reqwest::Client, file: &Path, open_url: impl Fn(&str)) -> Result<Token> {
+/// Only a token the server really rejects leads to a new login; a network
+/// problem or a server error leaves the saved token alone and fails, so the
+/// next launch tries again.
+async fn token(
+    client: &reqwest::Client,
+    file: &Path,
+    cancel: &CancellationToken,
+    open_url: impl Fn(&str),
+) -> Result<Token> {
     let saved = fs::read(file)
         .ok()
         .and_then(|data| serde_json::from_slice::<Token>(&data).ok());
@@ -203,25 +368,36 @@ async fn token(client: &reqwest::Client, file: &Path, open_url: impl Fn(&str)) -
                 ("client_id", CLIENT_ID),
             ];
             match request_token(client, &form).await {
-                Ok(token) => token,
+                Ok(mut refreshed) => {
+                    if refreshed.refresh_token.is_empty() {
+                        refreshed.refresh_token = token.refresh_token;
+                    }
+                    refreshed
+                }
+                Err(error) if error.is::<AuthRejected>() => {
+                    tracing::info!(error = %format!("{error:#}"), "saved HSReplay token was rejected; logging in again");
+                    login(client, cancel, open_url).await?
+                }
                 Err(error) => {
-                    tracing::info!(error = %format!("{error:#}"), "token refresh failed; logging in again");
-                    login(client, open_url).await?
+                    return Err(error.context(
+                        "could not refresh the HSReplay token; will try again next time",
+                    ));
                 }
             }
         }
-        None => login(client, open_url).await?,
+        None => login(client, cancel, open_url).await?,
     };
     save_token(file, &token)?;
     Ok(token)
 }
 
 async fn request_token(client: &reqwest::Client, form: &[(&str, &str)]) -> Result<Token> {
-    let mut token: Token = client
-        .post(TOKEN_URL)
-        .form(form)
-        .send()
-        .await?
+    let response = client.post(TOKEN_URL).form(form).send().await?;
+    let status = response.status();
+    if matches!(status.as_u16(), 400 | 401) {
+        return Err(AuthRejected(status.as_u16()).into());
+    }
+    let mut token: Token = response
         .error_for_status()
         .context("HSReplay token request failed")?
         .json()
@@ -230,26 +406,51 @@ async fn request_token(client: &reqwest::Client, form: &[(&str, &str)]) -> Resul
     Ok(token)
 }
 
+/// Writes the token through a temporary file and a rename, so a crash cannot
+/// leave a half-written token, and with mode 0600 even when the file already
+/// existed with wider permissions.
 fn save_token(file: &Path, token: &Token) -> Result<()> {
-    use std::os::unix::fs::OpenOptionsExt;
-    if let Some(parent) = file.parent() {
-        fs::create_dir_all(parent)?;
+    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+    if let Some(parent) = file
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
     }
-    let mut out = fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(file)
-        .with_context(|| format!("failed to write {}", file.display()))?;
-    out.write_all(&serde_json::to_vec(token)?)?;
-    Ok(())
+    let mut temporary = file.as_os_str().to_owned();
+    temporary.push(".tmp");
+    let temporary = std::path::PathBuf::from(temporary);
+    let _ = fs::remove_file(&temporary);
+    let write = || -> Result<()> {
+        let mut out = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&temporary)
+            .with_context(|| format!("failed to write {}", temporary.display()))?;
+        out.write_all(&serde_json::to_vec(token)?)?;
+        out.sync_all()?;
+        fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600))?;
+        fs::rename(&temporary, file)
+            .with_context(|| format!("failed to replace {}", file.display()))
+    };
+    write().inspect_err(|_| {
+        let _ = fs::remove_file(&temporary);
+    })
 }
 
 /// OAuth2 authorization code flow with PKCE and a one-shot local callback server.
-async fn login(client: &reqwest::Client, open_url: impl Fn(&str)) -> Result<Token> {
+async fn login(
+    client: &reqwest::Client,
+    cancel: &CancellationToken,
+    open_url: impl Fn(&str),
+) -> Result<Token> {
     let verifier = URL_SAFE_NO_PAD.encode(random_bytes::<32>()?);
-    let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
+    let challenge = pkce_challenge(&verifier);
     let state = hex::encode(random_bytes::<16>()?);
 
     let listener = CALLBACK_PORTS
@@ -272,7 +473,7 @@ async fn login(client: &reqwest::Client, open_url: impl Fn(&str)) -> Result<Toke
     tracing::info!("opening HSReplay login page");
     open_url(authorize.as_str());
 
-    let code = wait_for_callback(&listener, &state)?;
+    let code = wait_for_callback(&listener, &state, cancel)?;
     drop(listener);
     let form = [
         ("grant_type", "authorization_code"),
@@ -284,15 +485,37 @@ async fn login(client: &reqwest::Client, open_url: impl Fn(&str)) -> Result<Toke
     request_token(client, &form).await
 }
 
-fn wait_for_callback(listener: &TcpListener, state: &str) -> Result<String> {
+/// PKCE S256 code challenge (RFC 7636 section 4.2).
+fn pkce_challenge(verifier: &str) -> String {
+    URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))
+}
+
+fn respond(stream: &mut std::net::TcpStream, status: &str, body: &str) {
+    let _ = stream.write_all(
+        format!(
+            "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n{body}"
+        )
+        .as_bytes(),
+    );
+}
+
+/// Waits for the browser to come back to the callback listener with the
+/// authorization code. Requests with a wrong `state` (another page poking at
+/// the port, or a stale tab) get a 400 and are ignored; the wait goes on.
+fn wait_for_callback(
+    listener: &TcpListener,
+    state: &str,
+    cancel: &CancellationToken,
+) -> Result<String> {
     listener.set_nonblocking(true)?;
     let deadline = Instant::now() + LOGIN_TIMEOUT;
     loop {
+        ensure!(!cancel.is_cancelled(), Cancelled);
         ensure!(Instant::now() < deadline, "HSReplay login timed out");
         let mut stream = match listener.accept() {
             Ok((stream, _)) => stream,
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                std::thread::sleep(Duration::from_millis(200));
+                std::thread::sleep(Duration::from_millis(100));
                 continue;
             }
             Err(error) => return Err(error.into()),
@@ -306,21 +529,36 @@ fn wait_for_callback(listener: &TcpListener, state: &str) -> Result<String> {
         let Some(path) = request.split_whitespace().nth(1) else {
             continue;
         };
-        let query: BTreeMap<_, _> = Url::parse(&format!("http://localhost{path}"))?
-            .query_pairs()
-            .into_owned()
-            .collect();
+        let Ok(url) = Url::parse(&format!("http://localhost{path}")) else {
+            respond(&mut stream, "400 Bad Request", "Bad request.");
+            continue;
+        };
+        let query: BTreeMap<_, _> = url.query_pairs().into_owned().collect();
         if !query.contains_key("code") && !query.contains_key("error") {
-            continue; // favicon and the like
+            respond(&mut stream, "404 Not Found", "Not found."); // favicon and the like
+            continue;
         }
-        let _ = stream.write_all(
-            b"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n\
-              <h2>HSReplay login done. You can close this tab.</h2>",
-        );
-        ensure!(
-            query.get("state").map(String::as_str) == Some(state),
-            "HSReplay login failed: {}",
-            query.get("error").map_or("state mismatch", String::as_str)
+        if query.get("state").map(String::as_str) != Some(state) {
+            tracing::warn!("ignoring an HSReplay login callback with the wrong state");
+            respond(
+                &mut stream,
+                "400 Bad Request",
+                "Login state mismatch. Please try again from the HSReplay login page.",
+            );
+            continue;
+        }
+        if let Some(error) = query.get("error") {
+            respond(
+                &mut stream,
+                "200 OK",
+                "<h2>HSReplay login was not completed. You can close this tab.</h2>",
+            );
+            bail!("HSReplay login failed: {error}");
+        }
+        respond(
+            &mut stream,
+            "200 OK",
+            "<h2>HSReplay login done. You can close this tab.</h2>",
         );
         return query
             .get("code")
@@ -365,5 +603,95 @@ mod tests {
         assert_eq!(json["collection"]["7"], json!([0, 0, 0, 1, 0, 0, 0, 1]));
         assert!(json["collection"].get("9").is_none());
         assert_eq!(json["dust"], 2280);
+    }
+
+    #[test]
+    fn leaves_dust_out_when_unknown() {
+        let state = GameState {
+            account_hi: 1,
+            account_lo: 2,
+            battletag: None,
+            dust: None,
+            cards: vec![],
+        };
+        assert!(collection_json(&state).get("dust").is_none());
+    }
+
+    #[test]
+    fn pkce_challenge_matches_rfc_7636_vector() {
+        // RFC 7636, appendix B.
+        assert_eq!(
+            pkce_challenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"),
+            "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+        );
+    }
+
+    /// Sends one raw HTTP request to the listener and returns the status line.
+    fn get(port: u16, path: &str) -> String {
+        use std::io::{BufRead, BufReader};
+        let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        write!(stream, "GET {path} HTTP/1.1\r\nHost: localhost\r\n\r\n").unwrap();
+        let mut status = String::new();
+        BufReader::new(stream).read_line(&mut status).unwrap();
+        status.trim().to_string()
+    }
+
+    #[test]
+    fn callback_ignores_a_wrong_state_and_accepts_the_right_one() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let cancel = CancellationToken::new();
+        let waiter = std::thread::spawn(move || wait_for_callback(&listener, "good", &cancel));
+
+        assert!(get(port, "/?code=stolen&state=bad").contains("400"));
+        assert!(get(port, "/?code=stolen").contains("400"));
+        assert!(get(port, "/favicon.ico").contains("404"));
+        assert!(!waiter.is_finished(), "a bad state must not end the login");
+        assert!(get(port, "/?code=abc123&state=good").contains("200"));
+        assert_eq!(waiter.join().unwrap().unwrap(), "abc123");
+    }
+
+    #[test]
+    fn callback_reports_a_denied_login_and_honours_cancel() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let cancel = CancellationToken::new();
+        let waiter = std::thread::spawn({
+            let cancel = cancel.clone();
+            move || wait_for_callback(&listener, "good", &cancel)
+        });
+        assert!(get(port, "/?error=access_denied&state=good").contains("200"));
+        let error = waiter.join().unwrap().unwrap_err();
+        assert!(format!("{error:#}").contains("access_denied"));
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        cancel.cancel();
+        let error = wait_for_callback(&listener, "good", &cancel).unwrap_err();
+        assert!(error.is::<Cancelled>());
+    }
+
+    #[test]
+    fn saved_token_is_private_and_replaces_an_existing_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("hsreplay-token-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let file = dir.join("nested").join("token.json");
+        let token = |access: &str| Token {
+            access_token: access.into(),
+            refresh_token: "r".into(),
+            token_type: "Bearer".into(),
+            expires_in: 3600,
+            obtained_at: 1,
+        };
+        save_token(&file, &token("one")).unwrap();
+        // An older, world-readable file must end up private.
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
+        save_token(&file, &token("two")).unwrap();
+        let mode = fs::metadata(&file).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        let saved: Token = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+        assert_eq!(saved.access_token, "two");
+        assert!(!file.with_extension("json.tmp").exists());
+        let _ = fs::remove_dir_all(&dir);
     }
 }
