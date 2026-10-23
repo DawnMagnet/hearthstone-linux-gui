@@ -535,9 +535,20 @@ fn executable_file(path: &Path) -> Option<PathBuf> {
 
 /// Whether the game's `options.txt` switches VSync off (`vsync=0`).
 fn vsync_disabled_in_options() -> bool {
-    game_options::options_path()
-        .and_then(|path| game_options::GameOptions::load(&path).ok())
-        .is_some_and(|options| !options.vsync())
+    let Some(path) = game_options::options_path() else {
+        return false;
+    };
+    match game_options::GameOptions::load(&path) {
+        Ok(options) => !options.vsync(),
+        Err(error) => {
+            warn!(
+                path = %path.display(),
+                error = %error,
+                "could not read options.txt; leaving the driver's VSync setting alone"
+            );
+            false
+        }
+    }
 }
 
 /// Driver settings that turn VSync off, for when the game keeps it on
@@ -610,13 +621,16 @@ fn dedupe_paths(paths: &mut Vec<PathBuf>) {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use std::os::unix::process::ExitStatusExt;
+
     #[test]
     fn vsync_off_env_keeps_what_the_user_set() {
-        let names = |envs: Vec<(&'static str, std::ffi::OsString)>| {
+        let names = |envs: Vec<(&'static str, OsString)>| {
             envs.into_iter().map(|(name, _)| name).collect::<Vec<_>>()
         };
         assert_eq!(
-            names(super::vsync_off_env(|_| false)),
+            names(vsync_off_env(|_| false)),
             [
                 "vblank_mode",
                 "__GL_SYNC_TO_VBLANK",
@@ -624,13 +638,10 @@ mod tests {
             ]
         );
         assert_eq!(
-            names(super::vsync_off_env(|name| name == "vblank_mode")),
+            names(vsync_off_env(|name| name == "vblank_mode")),
             ["__GL_SYNC_TO_VBLANK", "MESA_VK_WSI_PRESENT_MODE"]
         );
     }
-
-    use super::*;
-    use std::os::unix::process::ExitStatusExt;
 
     #[test]
     fn builds_wrapper_chain_in_order_and_skips_missing_tools() {
