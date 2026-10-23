@@ -168,8 +168,30 @@ fn main() -> Result<()> {
         let paths = hearthstone_linux::paths::AppPaths::discover()?;
         let config = hearthstone_linux::AppConfig::load_or_default(&paths.config_file)?;
         let options = hearthstone_linux::install::launcher::LaunchOptions::from(&config);
-        let game_dir = config.game_dir.unwrap_or(paths.game_dir);
-        hearthstone_linux::install::launcher::launch_game(&game_dir, options, None)?;
+        let game_dir = config.game_dir.unwrap_or(paths.game_dir.clone());
+        let child = hearthstone_linux::install::launcher::launch_game(&game_dir, options, None)?;
+        if config.hsreplay_sync {
+            let result = hearthstone_linux::hsreplay::sync_after_launch(
+                child.id(),
+                &paths.hsreplay_token(),
+                |url| {
+                    eprintln!("{url}");
+                    let _ = std::process::Command::new("xdg-open").arg(url).spawn();
+                },
+            );
+            match result {
+                Ok((cards, dust)) => {
+                    println!(
+                        "{}",
+                        tr!("game.hsreplay_synced", cards = cards, dust = dust)
+                    )
+                }
+                Err(error) => eprintln!(
+                    "{}",
+                    tr!("game.hsreplay_failed", error = format!("{error:#}"))
+                ),
+            }
+        }
         return Ok(());
     }
 

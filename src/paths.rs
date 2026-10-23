@@ -71,6 +71,11 @@ impl AppPaths {
         self.cache_dir.join("update-check.json")
     }
 
+    /// HSReplay.net OAuth token, kept apart from the game directory.
+    pub fn hsreplay_token(&self) -> PathBuf {
+        self.config_dir.join("hsreplay-token.json")
+    }
+
     pub fn game_token(&self) -> PathBuf {
         self.game_dir.join("token")
     }

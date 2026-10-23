@@ -239,6 +239,7 @@ pub enum SettingsPanelInput {
     LocaleChanged(usize),
     DiscreteGpuChanged(bool),
     LaunchToolChanged(LaunchTool, bool),
+    HsReplaySyncChanged(bool),
     /// Look again for the optional launch tools on the host.
     DetectTools,
 }
@@ -249,6 +250,7 @@ pub enum SettingsOutput {
     LocaleChanged(Locale),
     DiscreteGpuChanged(bool),
     LaunchToolChanged(LaunchTool, bool),
+    HsReplaySyncChanged(bool),
 }
 
 #[relm4::component(pub)]
@@ -360,6 +362,24 @@ impl SimpleComponent for SettingsPanel {
                     },
                 },
             },
+
+            attach[0, 4, 1, 1] = &gtk::Label {
+                set_label: "HSReplay",
+                set_xalign: 0.0,
+                add_css_class: relm4::css::DIM_LABEL,
+            },
+
+            attach[1, 4, 1, 1] = &gtk::CheckButton {
+                set_label: Some(&tr!("settings.hsreplay_sync")),
+                set_tooltip_text: Some(&tr!("settings.hsreplay_sync_tooltip")),
+
+                #[watch]
+                set_active: model.config.hsreplay_sync,
+
+                connect_toggled[sender] => move |button| {
+                    sender.input(SettingsPanelInput::HsReplaySyncChanged(button.is_active()));
+                },
+            },
         }
     }
 
@@ -443,6 +463,14 @@ impl SimpleComponent for SettingsPanel {
             SettingsPanelInput::DetectTools => {
                 self.gamemode_available = LaunchTool::GameMode.is_installed();
                 self.mangohud_available = LaunchTool::MangoHud.is_installed();
+            }
+            SettingsPanelInput::HsReplaySyncChanged(enabled) => {
+                if self.config.hsreplay_sync != enabled {
+                    self.config.hsreplay_sync = enabled;
+                    sender
+                        .output(SettingsOutput::HsReplaySyncChanged(enabled))
+                        .ok();
+                }
             }
             SettingsPanelInput::DiscreteGpuChanged(use_discrete_gpu) => {
                 if self.config.use_discrete_gpu != use_discrete_gpu {

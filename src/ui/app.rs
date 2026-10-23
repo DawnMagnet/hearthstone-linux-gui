@@ -9,7 +9,7 @@ use super::{
 };
 use hearthstone_linux::{
     config::AppConfig,
-    game_options, i18n,
+    game_options, hsreplay, i18n,
     install::{
         launcher::{self, LaunchTool},
         manager::{InstallManager, TaskEvent},
@@ -102,6 +102,7 @@ pub enum AppMsg {
         result: Result<String, String>,
     },
     GamePoll,
+    HsReplaySynced(Result<(i64, u64), String>),
 }
 
 struct LoginSession {
@@ -422,6 +423,7 @@ impl SimpleComponent for MainWindow {
                 self.handle_browser_opened(session, result)
             }
             AppMsg::GamePoll => self.handle_game_poll(),
+            AppMsg::HsReplaySynced(result) => self.handle_hsreplay_synced(result),
         }
 
         self.render_children();
@@ -440,6 +442,7 @@ impl MainWindow {
                 LaunchTool::GameMode => self.config.use_gamemode = enabled,
                 LaunchTool::MangoHud => self.config.use_mangohud = enabled,
             },
+            SettingsOutput::HsReplaySyncChanged(enabled) => self.config.hsreplay_sync = enabled,
         }
         self.save_settings();
         self.refresh_details();
@@ -914,11 +917,45 @@ impl MainWindow {
                 self.refresh_details();
 
                 Self::start_poll(&sender, AppMsg::GamePoll, poll_cancel);
+                if self.config.hsreplay_sync {
+                    self.start_hsreplay_sync(&sender);
+                }
             }
             Err(error) => {
                 tracing::error!(error = %format!("{error:#}"), "launch failed");
                 self.status.headline = tr!("game.launch_failed", error = format!("{error:#}"));
                 self.refresh_details();
+            }
+        }
+    }
+
+    /// Uploads the collection once the game has loaded it. Reading the game's
+    /// memory only works because the launcher is the game's ancestor.
+    fn start_hsreplay_sync(&self, sender: &ComponentSender<Self>) {
+        let Some(pid) = self.game_session.as_ref().map(|session| session.child.id()) else {
+            return;
+        };
+        let token_file = self.paths.hsreplay_token();
+        let input = sender.input_sender().clone();
+        std::thread::spawn(move || {
+            let result = hsreplay::sync_after_launch(pid, &token_file, |url| {
+                if let Err(error) = browser::open_url(url) {
+                    tracing::warn!(error = %format!("{error:#}"), %url, "could not open HSReplay login");
+                }
+            })
+            .map_err(|error| format!("{error:#}"));
+            input.emit(AppMsg::HsReplaySynced(result));
+        });
+    }
+
+    fn handle_hsreplay_synced(&mut self, result: Result<(i64, u64), String>) {
+        match result {
+            Ok((cards, dust)) => {
+                self.toast(&tr!("game.hsreplay_synced", cards = cards, dust = dust))
+            }
+            Err(error) => {
+                tracing::warn!(%error, "HSReplay collection sync failed");
+                self.toast(&tr!("game.hsreplay_failed", error = error));
             }
         }
     }
