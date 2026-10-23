@@ -278,7 +278,10 @@ Anmeldung über Google oder Apple, Passwortmanager und Sicherheitsschlüssel;
 fehlt das Programm oder scheitert es, wird wie bisher der Browser benutzt.
 
 Es liegt in `login-helper/`, hat eine eigene Lock-Datei und braucht
-WebKitGTK 6; der Launcher und seine Pakete hängen nie davon ab:
+WebKitGTK 6; der Launcher und seine Pakete hängen nie davon ab. Die
+Release-Pakete (AppImage, `.deb`, `.rpm`) und das Flatpak enthalten das
+Anmeldefenster **nicht**; es wird separat gebaut und installiert, und ohne
+es nutzt **Anmelden** einfach deinen Browser:
 
 ```sh
 cargo build --release --manifest-path login-helper/Cargo.toml

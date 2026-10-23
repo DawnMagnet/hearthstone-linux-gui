@@ -6,7 +6,7 @@
 //! missing, fails, or the user asks for it, the launcher falls back to the
 //! system browser.
 
-use hearthstone_linux::host_env;
+use hearthstone_linux::{host_env, i18n, tr};
 use std::{
     io::Read,
     path::{Path, PathBuf},
@@ -63,8 +63,20 @@ fn executable(path: &Path) -> Option<PathBuf> {
 pub fn run(program: &Path, url: &str, cancel: &CancellationToken) -> Outcome {
     let mut command = Command::new(program);
     host_env::apply(&mut command);
+    // The login window has no catalogs of its own; it gets the language and
+    // its texts from here.
     command
         .arg(url)
+        .env("HEARTHSTONE_LOGIN_LANGUAGE", i18n::current())
+        .env("HEARTHSTONE_LOGIN_TITLE", tr!("login_window.title"))
+        .env(
+            "HEARTHSTONE_LOGIN_OPEN_BROWSER",
+            tr!("login_window.open_browser"),
+        )
+        .env(
+            "HEARTHSTONE_LOGIN_OPEN_BROWSER_TOOLTIP",
+            tr!("login_window.open_browser_tooltip"),
+        )
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit());

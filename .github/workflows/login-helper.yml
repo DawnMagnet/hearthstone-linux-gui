@@ -2,21 +2,15 @@ name: Login window
 
 # Builds and tests the optional login window (login-helper/), which has its
 # own workspace and needs WebKitGTK 6. Kept separate from ci.yml so that the
-# WebKitGTK install only runs when the login window or the parts of the
-# library it uses change. The helper's Cargo.lock includes the launcher crate
-# (a path dependency), so any change to the launcher's sources or dependencies
-# can make that lock stale; hence the broad `src/**` and `Cargo.lock` paths.
+# WebKitGTK install only runs when the login window changes. It does not
+# depend on the launcher crate (the launcher passes it the language and texts
+# in the environment), so launcher changes cannot make its Cargo.lock stale.
 
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - login-helper/**
-      - locales/**
-      - src/**
-      - crates/**
-      - Cargo.toml
-      - Cargo.lock
       - .github/workflows/login-helper.yml
   workflow_dispatch:
 

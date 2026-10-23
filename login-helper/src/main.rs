@@ -12,6 +12,11 @@
 //!
 //! Usage: `hearthstone-linux-gui-login <login-url>`
 //!
+//! The launcher passes its language and the translated texts in the
+//! environment (see [`Texts`]), so this program does not depend on the
+//! launcher crate and its lock file stays independent of the launcher's
+//! dependencies. Without them it shows English texts.
+//!
 //! Result, read by the launcher:
 //! - exit 0 and `callback <uri>` on stdout: the login finished;
 //! - exit 3: the user asked for the system browser instead;
@@ -19,7 +24,6 @@
 //! - exit 2: wrong usage (including a URL that is not a Battle.net https URL).
 
 use adw::prelude::*;
-use hearthstone_linux::{config::AppConfig, i18n, paths, tr};
 use std::{cell::Cell, process::ExitCode, rc::Rc};
 use webkit6::prelude::*;
 
@@ -42,12 +46,7 @@ fn main() -> ExitCode {
         return ExitCode::from(EXIT_USAGE);
     }
 
-    // Same language as the launcher: its saved choice, else the system's.
-    let saved_language = paths::config_file()
-        .ok()
-        .and_then(|path| AppConfig::load_or_default(&path).ok())
-        .and_then(|config| config.ui_language);
-    i18n::select(saved_language.as_deref());
+    let texts = Rc::new(Texts::from_env());
 
     let app = adw::Application::builder()
         .application_id("io.github.hearthstone_linux_gui.Login")
@@ -56,21 +55,55 @@ fn main() -> ExitCode {
     let outcome = Rc::new(Cell::new(EXIT_CLOSED));
     {
         let outcome = outcome.clone();
-        app.connect_activate(move |app| build_window(app, &url, outcome.clone()));
+        app.connect_activate(move |app| build_window(app, &url, &texts, outcome.clone()));
     }
     // GTK must not see the login URL as a file to open.
     app.run_with_args::<&str>(&[]);
     ExitCode::from(outcome.get())
 }
 
-fn build_window(app: &adw::Application, url: &str, outcome: Rc<Cell<u8>>) {
+/// Texts and language from the launcher, English when run on its own.
+struct Texts {
+    /// Language for the login page, such as `de` or `zh-CN`.
+    language: Option<String>,
+    title: String,
+    open_browser: String,
+    open_browser_tooltip: String,
+}
+
+impl Texts {
+    fn from_env() -> Self {
+        let var = |name: &str, default: &str| {
+            std::env::var(name)
+                .ok()
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| default.to_string())
+        };
+        Self {
+            language: std::env::var("HEARTHSTONE_LOGIN_LANGUAGE")
+                .ok()
+                .filter(|value| !value.is_empty()),
+            title: var("HEARTHSTONE_LOGIN_TITLE", "Battle.net login"),
+            open_browser: var("HEARTHSTONE_LOGIN_OPEN_BROWSER", "Open in browser"),
+            open_browser_tooltip: var(
+                "HEARTHSTONE_LOGIN_OPEN_BROWSER_TOOLTIP",
+                "Continue in the system browser, for example for Google or Apple sign-in, \
+                 a password manager or a security key",
+            ),
+        }
+    }
+}
+
+fn build_window(app: &adw::Application, url: &str, texts: &Texts, outcome: Rc<Cell<u8>>) {
     // The page uses light text and has no background of its own.
     adw::StyleManager::default().set_color_scheme(adw::ColorScheme::ForceDark);
 
     // Nothing of the login is kept on disk.
     let session = webkit6::NetworkSession::new_ephemeral();
     let context = webkit6::WebContext::new();
-    context.set_preferred_languages(&[i18n::current()]);
+    if let Some(language) = texts.language.as_deref() {
+        context.set_preferred_languages(&[language]);
+    }
     let web_view = webkit6::WebView::builder()
         .network_session(&session)
         .web_context(&context)
@@ -80,7 +113,7 @@ fn build_window(app: &adw::Application, url: &str, outcome: Rc<Cell<u8>>) {
     web_view.set_vexpand(true);
 
     let window = adw::ApplicationWindow::new(app);
-    window.set_title(Some(&tr!("login_window.title")));
+    window.set_title(Some(&texts.title));
     window.set_default_size(520, 760);
 
     {
@@ -134,8 +167,8 @@ fn build_window(app: &adw::Application, url: &str, outcome: Rc<Cell<u8>>) {
 
     // Always available: sign-ins through Google, Apple and other providers,
     // password managers and security keys work better in the real browser.
-    let open_browser = gtk::Button::with_label(&tr!("login_window.open_browser"));
-    open_browser.set_tooltip_text(Some(&tr!("login_window.open_browser_tooltip")));
+    let open_browser = gtk::Button::with_label(&texts.open_browser);
+    open_browser.set_tooltip_text(Some(&texts.open_browser_tooltip));
     {
         let window = window.clone();
         let outcome = outcome.clone();
