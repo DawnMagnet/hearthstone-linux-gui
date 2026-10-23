@@ -440,6 +440,7 @@ impl MainWindow {
                 LaunchTool::GameMode => self.config.use_gamemode = enabled,
                 LaunchTool::MangoHud => self.config.use_mangohud = enabled,
             },
+            SettingsOutput::CommerceBridgeChanged(enabled) => self.config.commerce_bridge = enabled,
         }
         self.save_settings();
         self.refresh_details();

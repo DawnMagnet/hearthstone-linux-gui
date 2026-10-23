@@ -36,6 +36,15 @@ pub struct VersionInfo {
     pub product_config: Option<String>,
 }
 
+/// Which files of the build to install, and where.
+#[derive(Clone, Copy, Debug)]
+enum Layout<'a> {
+    /// The macOS game, rearranged for Linux.
+    Game,
+    /// A few Windows files, as `(path in the build, local file name)`.
+    WindowsFiles(&'a [(&'a str, &'a str)]),
+}
+
 #[derive(Clone, Debug)]
 pub struct InstallOptions {
     pub region: Region,
@@ -148,8 +157,27 @@ impl NgdpClient {
         out_dir: &Path,
         mut progress: impl FnMut(ProgressUpdate) + Send,
     ) -> Result<VersionInfo> {
-        self.install_latest_with_cancel(options, out_dir, &mut progress, None)
+        self.install_latest_with_cancel(options, out_dir, &mut progress, None, Layout::Game)
             .await
+    }
+
+    /// Downloads the given files of the Windows build into `out_dir`, under
+    /// their local names. Used for the commerce bridge, which needs
+    /// Blizzard's Windows commerce DLLs.
+    pub async fn install_windows_files(
+        &self,
+        options: &InstallOptions,
+        files: &[(&str, &str)],
+        out_dir: &Path,
+    ) -> Result<VersionInfo> {
+        self.install_latest_with_cancel(
+            options,
+            out_dir,
+            &mut |_| {},
+            None,
+            Layout::WindowsFiles(files),
+        )
+        .await
     }
 
     pub async fn install_latest_cancellable(
@@ -159,7 +187,7 @@ impl NgdpClient {
         mut progress: impl FnMut(ProgressUpdate) + Send,
         cancel: Option<CancellationToken>,
     ) -> Result<VersionInfo> {
-        self.install_latest_with_cancel(options, out_dir, &mut progress, cancel)
+        self.install_latest_with_cancel(options, out_dir, &mut progress, cancel, Layout::Game)
             .await
     }
 
@@ -169,6 +197,7 @@ impl NgdpClient {
         out_dir: &Path,
         progress: &mut (impl FnMut(ProgressUpdate) + Send),
         cancel: Option<CancellationToken>,
+        layout: Layout<'_>,
     ) -> Result<VersionInfo> {
         check_cancelled(cancel.as_ref())?;
         info!(
@@ -239,8 +268,19 @@ impl NgdpClient {
             .await?;
         check_cancelled(cancel.as_ref())?;
 
-        let tags = ["OSX", options.locale.as_str(), "Production"];
-        let entries = install.filter_entries(&tags)?;
+        let platform = match layout {
+            Layout::Game => "OSX",
+            Layout::WindowsFiles(_) => "Windows",
+        };
+        let tags = [platform, options.locale.as_str(), "Production"];
+        let mut entries = install.filter_entries(&tags)?;
+        if let Layout::WindowsFiles(files) = layout {
+            entries.retain(|entry| files.iter().any(|(path, _)| *path == entry.path));
+            anyhow::ensure!(
+                entries.len() == files.len(),
+                "the Windows build lacks some of {files:?}"
+            );
+        }
         info!(
             tags = ?tags,
             entries = entries.len(),
@@ -257,7 +297,14 @@ impl NgdpClient {
             let encoding_key = encoding
                 .find_by_content_key(&entry.content_key)
                 .with_context(|| format!("encoding key not found for {}", entry.path))?;
-            let Some(target_path) = installed_target_path(&entry.path) else {
+            let target_path = match layout {
+                Layout::Game => installed_target_path(&entry.path),
+                Layout::WindowsFiles(files) => files
+                    .iter()
+                    .find(|(path, _)| *path == entry.path)
+                    .map(|(_, name)| name.to_string()),
+            };
+            let Some(target_path) = target_path else {
                 trace!(
                     path = %entry.path,
                     content_key = %entry.content_key,

@@ -12,6 +12,7 @@ path = "src/lib.rs"
 [workspace]
 members = [
     ".",
+    "crates/commerce-bridge",
     "crates/stubs/blz-commerce-sdk-plugin",
     "crates/stubs/commerce-http-client",
     "crates/stubs/core-foundation",
@@ -20,6 +21,7 @@ members = [
 ]
 default-members = [
     ".",
+    "crates/commerce-bridge",
     "crates/stubs/blz-commerce-sdk-plugin",
     "crates/stubs/commerce-http-client",
     "crates/stubs/core-foundation",

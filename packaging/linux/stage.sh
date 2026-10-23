@@ -21,6 +21,15 @@ for stub in libOSXWindowManagement libblz_commerce_sdk_plugin libcommerce_http_c
 done
 install -Dm644 assets/client.config.in "$share/client.config.in"
 
+# Optional commerce bridge (shop and gold through Wine). The helper is a
+# Windows program; without MinGW the setting simply reports it missing.
+install -Dm755 "$target/libcommerce_bridge.so" "$share/stubs/libcommerce_bridge.so"
+if command -v x86_64-w64-mingw32-gcc >/dev/null; then
+  x86_64-w64-mingw32-gcc -O2 -o "$share/stubs/commerce_helper.exe" crates/commerce-bridge/helper/commerce_helper.c
+else
+  echo "stage.sh: x86_64-w64-mingw32-gcc not found; commerce_helper.exe not built" >&2
+fi
+
 install -Dm644 "data/$app_id.desktop" "$root$prefix/share/applications/$app_id.desktop"
 install -Dm644 "data/$app_id.metainfo.xml" "$root$prefix/share/metainfo/$app_id.metainfo.xml"
 install -Dm644 "$icon" "$root$prefix/share/icons/hicolor/scalable/apps/$app_id.svg"

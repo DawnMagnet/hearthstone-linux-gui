@@ -68,9 +68,13 @@ pub fn launch_game(
         None => debug!("no runtime runner configured; launching directly"),
     }
 
+    let commerce_env = super::commerce_bridge::select(game_dir, options.commerce_bridge);
     let mut command = game_command(runner.as_deref(), &wrappers, &exe, &library_path);
     host_env::apply(&mut command);
-    command.current_dir(game_dir).envs(graphics_env);
+    command
+        .current_dir(game_dir)
+        .envs(graphics_env)
+        .envs(commerce_env);
     redirect_output(&mut command, output_log);
     command.spawn().with_context(|| match runner.as_ref() {
         Some(runner) => format!("failed to launch Hearthstone through {}", runner.display()),
@@ -84,6 +88,7 @@ pub struct LaunchOptions {
     pub use_discrete_gpu: bool,
     pub use_gamemode: bool,
     pub use_mangohud: bool,
+    pub commerce_bridge: bool,
 }
 
 impl From<&AppConfig> for LaunchOptions {
@@ -92,6 +97,7 @@ impl From<&AppConfig> for LaunchOptions {
             use_discrete_gpu: config.use_discrete_gpu,
             use_gamemode: config.use_gamemode,
             use_mangohud: config.use_mangohud,
+            commerce_bridge: config.commerce_bridge,
         }
     }
 }
@@ -512,7 +518,7 @@ fn print_interpreter(candidates: &[PathBuf], exe: &Path) -> Option<String> {
 
 /// Looks `command` up in the host `PATH`, so the AppImage's own `usr/bin`
 /// is not mistaken for a system installation.
-fn find_in_path(command: &str) -> Option<PathBuf> {
+pub(crate) fn find_in_path(command: &str) -> Option<PathBuf> {
     env::split_paths(&host_env::host_var("PATH")?)
         .find_map(|dir| executable_file(&dir.join(command)))
 }
