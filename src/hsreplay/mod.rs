@@ -522,9 +522,7 @@ fn wait_for_callback(
         };
         stream.set_nonblocking(false)?;
         stream.set_read_timeout(Some(Duration::from_secs(5)))?;
-        let mut request = [0; 4096];
-        let len = stream.read(&mut request).unwrap_or(0);
-        let request = String::from_utf8_lossy(&request[..len]);
+        let request = read_request_line(&stream);
         // "GET /?code=...&state=... HTTP/1.1"
         let Some(path) = request.split_whitespace().nth(1) else {
             continue;
@@ -565,6 +563,23 @@ fn wait_for_callback(
             .cloned()
             .context("HSReplay login returned no code");
     }
+}
+
+/// The request line of an HTTP request, after reading the headers too: the
+/// request may arrive in several packets, and closing a socket with unread
+/// data resets it, so the client could miss the response.
+fn read_request_line(stream: &std::net::TcpStream) -> String {
+    use std::io::BufRead;
+    let mut reader = std::io::BufReader::new(stream).take(16 * 1024);
+    let mut request_line = String::new();
+    if reader.read_line(&mut request_line).is_err() {
+        return String::new();
+    }
+    let mut header = String::new();
+    while matches!(reader.read_line(&mut header), Ok(len) if len > 0) && header.trim() != "" {
+        header.clear();
+    }
+    request_line
 }
 
 fn random_bytes<const N: usize>() -> Result<[u8; N]> {
@@ -630,7 +645,10 @@ mod tests {
     fn get(port: u16, path: &str) -> String {
         use std::io::{BufRead, BufReader};
         let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
-        write!(stream, "GET {path} HTTP/1.1\r\nHost: localhost\r\n\r\n").unwrap();
+        // Split in two packets, as a real client may do.
+        stream.write_all(b"GET ").unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+        write!(stream, "{path} HTTP/1.1\r\nHost: localhost\r\n\r\n").unwrap();
         let mut status = String::new();
         BufReader::new(stream).read_line(&mut status).unwrap();
         status.trim().to_string()
