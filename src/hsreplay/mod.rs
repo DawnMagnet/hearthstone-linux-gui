@@ -352,10 +352,13 @@ fn now() -> u64 {
         .map_or(0, |elapsed| elapsed.as_secs())
 }
 
-/// Whether the token can still be used, leaving a minute of slack. Saturating
-/// arithmetic keeps a corrupt saved file from wrapping around.
+/// Whether the token can still be used, leaving a minute of slack. A corrupt
+/// saved file with an overflowing lifetime is treated as expired.
 fn token_is_valid(token: &Token, at: u64) -> bool {
-    at.saturating_add(60) < token.obtained_at.saturating_add(token.expires_in)
+    token
+        .obtained_at
+        .checked_add(token.expires_in)
+        .is_some_and(|expires_at| at.saturating_add(60) < expires_at)
 }
 
 /// Tightens an existing token file even when no refresh is needed, so a file
@@ -829,7 +832,7 @@ mod tests {
         assert!(!token_is_valid(&token(100, 3600), 100 + 3600 - 60));
         assert!(!token_is_valid(&token(0, 0), 0));
         // A corrupt saved token must not wrap the addition.
-        assert!(token_is_valid(&token(u64::MAX - 10, u64::MAX), 0));
+        assert!(!token_is_valid(&token(u64::MAX - 10, u64::MAX), 0));
     }
 
     #[test]
