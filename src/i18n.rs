@@ -350,7 +350,9 @@ mod tests {
         assert_eq!(match_code("zh-cn"), Some("zh-CN"));
         assert_eq!(match_code("en_GB"), Some("en"));
         assert_eq!(match_code("C.UTF-8"), Some("en"));
-        assert_eq!(match_code("fr_FR.UTF-8"), None);
+        assert_eq!(match_code("fr_FR.UTF-8"), Some("fr"));
+        assert_eq!(match_code("fr_CA"), Some("fr"));
+        assert_eq!(match_code("ja_JP.UTF-8"), None);
         assert_eq!(match_code(""), None);
     }
 
