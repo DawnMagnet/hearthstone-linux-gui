@@ -67,7 +67,8 @@
 - VSync off now also takes effect when the game keeps requesting it: with
   `vsync=0` in `options.txt` the launcher sets `vblank_mode=0`,
   `__GL_SYNC_TO_VBLANK=0` and `MESA_VK_WSI_PRESENT_MODE=immediate` for the
-  game, unless they are set already.
+  game. Variables already set in the environment are left untouched, and a
+  missing or unreadable `options.txt` changes nothing.
 - The Play button no longer derives its "stopping" state from the status
   text.
 
