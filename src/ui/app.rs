@@ -9,7 +9,7 @@ use super::{
 };
 use hearthstone_linux::{
     config::AppConfig,
-    game_options, i18n,
+    game_options, hsreplay, i18n,
     install::{
         launcher::{self, LaunchTool},
         manager::{InstallManager, TaskEvent},
@@ -107,6 +107,7 @@ pub enum AppMsg {
         result: Result<String, String>,
     },
     GamePoll,
+    HsReplaySynced(Result<hsreplay::Synced, String>),
 }
 
 struct LoginSession {
@@ -118,6 +119,8 @@ struct LoginSession {
 struct GameSession {
     child: Child,
     poll_cancel: CancellationToken,
+    /// Ends the HSReplay sync of this game session (stop, exit).
+    sync_cancel: CancellationToken,
     started: Instant,
     stop_requested: bool,
     output_log: PathBuf,
@@ -430,6 +433,7 @@ impl SimpleComponent for MainWindow {
                 self.handle_browser_opened(session, result)
             }
             AppMsg::GamePoll => self.handle_game_poll(),
+            AppMsg::HsReplaySynced(result) => self.handle_hsreplay_synced(result),
         }
 
         self.render_children();
@@ -439,15 +443,16 @@ impl SimpleComponent for MainWindow {
 impl MainWindow {
     fn handle_settings(&mut self, output: SettingsOutput) {
         match output {
-            SettingsOutput::RegionChanged(region) => self.config.region = region,
-            SettingsOutput::LocaleChanged(locale) => self.config.locale = locale,
-            SettingsOutput::DiscreteGpuChanged(use_discrete_gpu) => {
+            SettingsOutput::Region(region) => self.config.region = region,
+            SettingsOutput::Locale(locale) => self.config.locale = locale,
+            SettingsOutput::DiscreteGpu(use_discrete_gpu) => {
                 self.config.use_discrete_gpu = use_discrete_gpu;
             }
-            SettingsOutput::LaunchToolChanged(tool, enabled) => match tool {
+            SettingsOutput::LaunchTool(tool, enabled) => match tool {
                 LaunchTool::GameMode => self.config.use_gamemode = enabled,
                 LaunchTool::MangoHud => self.config.use_mangohud = enabled,
             },
+            SettingsOutput::HsReplaySync(enabled) => self.config.hsreplay_sync = enabled,
         }
         self.save_settings();
         self.refresh_details();
@@ -955,6 +960,7 @@ impl MainWindow {
             match session.child.kill() {
                 Ok(()) => {
                     session.stop_requested = true;
+                    session.sync_cancel.cancel();
                     self.status.headline = tr!("game.stopping");
                     self.refresh_details();
                 }
@@ -980,6 +986,7 @@ impl MainWindow {
                 self.game_session = Some(GameSession {
                     child,
                     poll_cancel: poll_cancel.clone(),
+                    sync_cancel: CancellationToken::new(),
                     started: Instant::now(),
                     stop_requested: false,
                     output_log,
@@ -988,11 +995,63 @@ impl MainWindow {
                 self.refresh_details();
 
                 Self::start_poll(&sender, AppMsg::GamePoll, poll_cancel);
+                if self.config.hsreplay_sync {
+                    self.start_hsreplay_sync(&sender);
+                }
             }
             Err(error) => {
                 tracing::error!(error = %format!("{error:#}"), "launch failed");
                 self.status.headline = tr!("game.launch_failed", error = format!("{error:#}"));
                 self.refresh_details();
+            }
+        }
+    }
+
+    /// Uploads the collection once the game has loaded it. Reading the game's
+    /// memory only works because the launcher is the game's ancestor.
+    ///
+    /// The sync stops when the game is stopped or exits, and a second one is
+    /// never started while one is still running.
+    fn start_hsreplay_sync(&self, sender: &ComponentSender<Self>) {
+        let Some((pid, cancel)) = self
+            .game_session
+            .as_ref()
+            .map(|session| (session.child.id(), session.sync_cancel.clone()))
+        else {
+            return;
+        };
+        let token_file = self.paths.hsreplay_token();
+        let input = sender.input_sender().clone();
+        std::thread::spawn(move || {
+            let result = hsreplay::sync_after_launch(pid, &token_file, &cancel, |url| {
+                if let Err(error) = browser::open_url(url) {
+                    tracing::warn!(error = %format!("{error:#}"), %url, "could not open HSReplay login");
+                }
+            });
+            match result {
+                // Another sync is already running.
+                Ok(None) => {}
+                Ok(Some(synced)) => input.emit(AppMsg::HsReplaySynced(Ok(synced))),
+                // Stopped on purpose (the user stopped the game, or it exited):
+                // nothing to report.
+                Err(error) if cancel.is_cancelled() || hsreplay::is_cancelled(&error) => {}
+                Err(error) => input.emit(AppMsg::HsReplaySynced(Err(format!("{error:#}")))),
+            }
+        });
+    }
+
+    fn handle_hsreplay_synced(&mut self, result: Result<hsreplay::Synced, String>) {
+        match result {
+            Ok(hsreplay::Synced {
+                cards,
+                dust: Some(dust),
+            }) => self.toast(&tr!("game.hsreplay_synced", cards = cards, dust = dust)),
+            Ok(hsreplay::Synced { cards, dust: None }) => {
+                self.toast(&tr!("game.hsreplay_synced_no_dust", cards = cards))
+            }
+            Err(error) => {
+                tracing::warn!(%error, "HSReplay collection sync failed");
+                self.toast(&tr!("game.hsreplay_failed", error = error));
             }
         }
     }
@@ -1011,6 +1070,7 @@ impl MainWindow {
                     "game exited"
                 );
                 session.poll_cancel.cancel();
+                session.sync_cancel.cancel();
                 let message = if session.stop_requested {
                     None
                 } else {
@@ -1037,6 +1097,7 @@ impl MainWindow {
             Err(error) => {
                 tracing::error!(error = %error, "failed to poll game process");
                 session.poll_cancel.cancel();
+                session.sync_cancel.cancel();
                 self.game_session = None;
                 self.status.headline = tr!("game.status_error", error = error);
                 self.refresh_details();

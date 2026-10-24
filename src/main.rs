@@ -168,8 +168,42 @@ fn main() -> Result<()> {
         let paths = hearthstone_linux::paths::AppPaths::discover()?;
         let config = hearthstone_linux::AppConfig::load_or_default(&paths.config_file)?;
         let options = hearthstone_linux::install::launcher::LaunchOptions::from(&config);
-        let game_dir = config.game_dir.unwrap_or(paths.game_dir);
-        hearthstone_linux::install::launcher::launch_game(&game_dir, options, None)?;
+        let game_dir = config.game_dir.unwrap_or(paths.game_dir.clone());
+        let child = hearthstone_linux::install::launcher::launch_game(&game_dir, options, None)?;
+        if config.hsreplay_sync {
+            // The sync also ends by itself when the game exits.
+            let cancel = tokio_util::sync::CancellationToken::new();
+            let result = hearthstone_linux::hsreplay::sync_after_launch(
+                child.id(),
+                &paths.hsreplay_token(),
+                &cancel,
+                |url| {
+                    eprintln!("{url}");
+                    let _ = std::process::Command::new("xdg-open").arg(url).spawn();
+                },
+            );
+            match result {
+                Ok(Some(hearthstone_linux::hsreplay::Synced {
+                    cards,
+                    dust: Some(dust),
+                })) => {
+                    println!(
+                        "{}",
+                        tr!("game.hsreplay_synced", cards = cards, dust = dust)
+                    )
+                }
+                Ok(Some(hearthstone_linux::hsreplay::Synced { cards, dust: None })) => {
+                    println!("{}", tr!("game.hsreplay_synced_no_dust", cards = cards))
+                }
+                Ok(None) => {}
+                // The game exited or the sync was stopped; not an error.
+                Err(error) if hearthstone_linux::hsreplay::is_cancelled(&error) => {}
+                Err(error) => eprintln!(
+                    "{}",
+                    tr!("game.hsreplay_failed", error = format!("{error:#}"))
+                ),
+            }
+        }
         return Ok(());
     }
 

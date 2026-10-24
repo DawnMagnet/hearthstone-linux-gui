@@ -170,6 +170,10 @@ pub struct AppConfig {
     /// Off by default: it contacts GitHub.
     #[serde(default)]
     pub check_for_updates: bool,
+    /// Upload the card collection to HSReplay.net after each launch.
+    /// Off by default: it reads the game's memory and contacts HSReplay.
+    #[serde(default)]
+    pub hsreplay_sync: bool,
     /// Launcher UI language; `None` follows the system locale.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ui_language: Option<String>,
@@ -189,6 +193,7 @@ impl Default for AppConfig {
             use_gamemode: false,
             use_mangohud: false,
             check_for_updates: false,
+            hsreplay_sync: false,
             ui_language: None,
         }
     }
