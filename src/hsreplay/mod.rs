@@ -77,6 +77,13 @@ impl std::fmt::Display for Cancelled {
 
 impl std::error::Error for Cancelled {}
 
+/// Whether `error` wraps [`Cancelled`], possibly below some context.
+pub fn is_cancelled(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .any(|cause| cause.downcast_ref::<Cancelled>().is_some())
+}
+
 /// What a finished sync uploaded.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Synced {
@@ -633,6 +640,14 @@ mod tests {
             cards: vec![],
         };
         assert!(collection_json(&state).get("dust").is_none());
+    }
+
+    #[test]
+    fn recognises_cancellation_through_context() {
+        assert!(is_cancelled(
+            &anyhow::Error::new(Cancelled).context("waiting for the upload")
+        ));
+        assert!(!is_cancelled(&anyhow::anyhow!("not cancelled")));
     }
 
     #[test]

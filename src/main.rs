@@ -196,6 +196,8 @@ fn main() -> Result<()> {
                     println!("{}", tr!("game.hsreplay_synced_no_dust", cards = cards))
                 }
                 Ok(None) => {}
+                // The game exited or the sync was stopped; not an error.
+                Err(error) if hearthstone_linux::hsreplay::is_cancelled(&error) => {}
                 Err(error) => eprintln!(
                     "{}",
                     tr!("game.hsreplay_failed", error = format!("{error:#}"))

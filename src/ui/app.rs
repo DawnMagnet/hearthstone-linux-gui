@@ -958,8 +958,9 @@ impl MainWindow {
                 // Another sync is already running.
                 Ok(None) => {}
                 Ok(Some(synced)) => input.emit(AppMsg::HsReplaySynced(Ok(synced))),
-                // Stopped on purpose: nothing to report.
-                Err(_) if cancel.is_cancelled() => {}
+                // Stopped on purpose (the user stopped the game, or it exited):
+                // nothing to report.
+                Err(error) if cancel.is_cancelled() || hsreplay::is_cancelled(&error) => {}
                 Err(error) => input.emit(AppMsg::HsReplaySynced(Err(format!("{error:#}")))),
             }
         });
