@@ -128,7 +128,13 @@ pub fn sync_after_launch(
         token(&client, token_file, &cancel, open_url),
     ))?;
 
-    let state = wait_for_collection(launched_pid, &cancel)?;
+    let (game_pid, state) = wait_for_collection(launched_pid, &cancel)?;
+    // The heap scan takes a few seconds, so the game may have exited after
+    // the collection was read but before anything is sent.
+    if cancel.is_cancelled() || !mono::process_alive(game_pid) {
+        tracing::debug!("game exited before the collection could be uploaded");
+        return Err(Cancelled.into());
+    }
     runtime.block_on(cancellable(&cancel, upload(&client, &token, &state)))?;
     let synced = Synced {
         cards: state.owned_copies(),
@@ -199,7 +205,10 @@ fn plausible(state: &mono::GameState) -> bool {
         && state.dust.is_none_or(|dust| dust < 10_000_000)
 }
 
-fn wait_for_collection(launched_pid: u32, cancel: &CancellationToken) -> Result<mono::GameState> {
+fn wait_for_collection(
+    launched_pid: u32,
+    cancel: &CancellationToken,
+) -> Result<(u32, mono::GameState)> {
     let deadline = Instant::now() + COLLECTION_TIMEOUT;
     let mut last_error = None;
     while Instant::now() < deadline {
@@ -215,7 +224,7 @@ fn wait_for_collection(launched_pid: u32, cancel: &CancellationToken) -> Result<
         match mono::read_state(pid) {
             Ok(state) if state.owned_copies() > 0 => {
                 if plausible(&state) {
-                    return Ok(state);
+                    return Ok((pid, state));
                 }
                 tracing::warn!("collection read from the game looks corrupt; trying again");
                 last_error = Some(anyhow::anyhow!(
