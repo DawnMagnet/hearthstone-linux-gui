@@ -2,6 +2,48 @@
 
 ## Unreleased
 
+### Changed
+
+- **Animated logo.** The window shows a 10-second looping 3D animation of
+  Tux at the tavern counter instead of the still logo: the fire flickers,
+  Tux breathes, blinks and looks over his cards. It plays through GTK's
+  media backend (GStreamer, VP9 with alpha) and pauses while the window is
+  minimised or the game runs. Without a media backend (for example in the
+  AppImage, whose bundled GTK has none) or when it does not get ready within
+  three seconds, the drawn logo shows as before. DEB and RPM packages
+  recommend the GStreamer plugins it needs. The Blender scripts that build
+  and animate the scene are in `docs/design/logo3d/` and are not part of the
+  packages.
+- The status line above the logo shows the Unity version on its own line
+  below the game version, so the narrow window no longer cuts it short.
+
+### Fixed
+
+- The download status no longer flickers while Hearthstone installs. The
+  speed used to drop out of the line every time a file finished, so the text
+  kept changing its length and wrapping point, and the whole column changed
+  width with it. The speed is now kept between measurements, the action
+  (`Downloading Hearthstone:`) stays on its own line with the counts below
+  it and the speed below those, and the digits have equal widths. While an
+  install or uninstall runs, the headline keeps room for those three lines,
+  so the controls below it move down once when the task starts and back up
+  once when it ends instead of jumping with every step. Each status message
+  also stays up for at least 0.6 s while a task runs; faster steps are
+  skipped, so a quick update check no longer flashes a dozen messages.
+  When the task ends, the window shrinks back to its smallest height (it
+  only ever grew before); a width the user chose is kept.
+
+### Maintenance
+
+- CI builds less: pull requests only run type-check and unit tests, a push to
+  master runs one quick package build, and only `v*` tags build everything
+  (AppImage, native packages and Flatpak in parallel). A single `publish` job
+  collects the artifacts, writes `SHA256SUMS.txt` and creates the release,
+  using `docs/release-notes/<tag>.md` as the release notes when that file
+  exists.
+
+## v0.3.0 - 2026-10-15
+
 ### Added
 
 - **System information** in the gear menu: launcher version, install kind and

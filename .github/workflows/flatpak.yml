@@ -1,23 +1,16 @@
 name: Flatpak
 
-# Builds the Flatpak bundle. When release_tag is set (tag pushes through
-# release.yml, or a manual run), the bundle is attached to that existing
-# GitHub release, SHA256SUMS.txt is updated, and the release notes get a
-# Flatpak entry. Version numbers are never changed here.
+# Builds the Flatpak bundle and uploads it as a workflow artifact.
+#
+# It runs only when release.yml calls it for a v* tag (in parallel with the
+# other builds) or by hand; pull requests and pushes to master do not build it.
+# release.yml publishes the bundle together with everything else, so a tag push
+# never touches the GitHub release from here. A manual run with release_tag set
+# attaches the bundle to that existing GitHub release instead, updates
+# SHA256SUMS.txt and adds a Flatpak entry to the release notes. Version numbers
+# are never changed here.
 
 on:
-  push:
-    branches: [master]
-    paths:
-      - packaging/flatpak/**
-      - packaging/linux/stage.sh
-      - data/**
-      - .github/workflows/flatpak.yml
-  pull_request:
-    paths:
-      - packaging/flatpak/**
-      - packaging/linux/stage.sh
-      - .github/workflows/flatpak.yml
   workflow_dispatch:
     inputs:
       release_tag:
@@ -27,9 +20,17 @@ on:
   workflow_call:
     inputs:
       release_tag:
+        description: Release tag the bundle version must match. Publishing stays with the caller.
         type: string
         required: false
         default: ""
+    outputs:
+      bundle:
+        description: Flatpak bundle file name
+        value: ${{ jobs.build.outputs.bundle }}
+      artifact:
+        description: Name of the workflow artifact holding the bundle
+        value: ${{ jobs.build.outputs.artifact }}
 
 permissions:
   contents: write
@@ -92,7 +93,7 @@ jobs:
 
   publish:
     name: Attach to release
-    if: ${{ inputs.release_tag }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag }}
     needs: build
     runs-on: ubuntu-latest
     env:
