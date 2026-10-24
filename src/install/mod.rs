@@ -1,3 +1,4 @@
+pub mod commerce_bridge;
 pub mod compatibility;
 pub mod launcher;
 pub mod manager;

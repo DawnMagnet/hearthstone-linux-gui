@@ -174,6 +174,10 @@ pub struct AppConfig {
     /// Off by default: it reads the game's memory and contacts HSReplay.
     #[serde(default)]
     pub hsreplay_sync: bool,
+    /// Experimental: shop and gold through Blizzard's Windows commerce SDK
+    /// under Wine, read-only. Off by default.
+    #[serde(default)]
+    pub commerce_bridge: bool,
     /// Launcher UI language; `None` follows the system locale.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ui_language: Option<String>,
@@ -194,6 +198,7 @@ impl Default for AppConfig {
             use_mangohud: false,
             check_for_updates: false,
             hsreplay_sync: false,
+            commerce_bridge: false,
             ui_language: None,
         }
     }

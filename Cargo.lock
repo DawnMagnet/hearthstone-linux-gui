@@ -907,6 +907,10 @@ name = "hearthstone-linux-gui-blz-commerce-sdk-plugin-stub"
 version = "0.3.1"
 
 [[package]]
+name = "hearthstone-linux-gui-commerce-bridge"
+version = "0.3.1"
+
+[[package]]
 name = "hearthstone-linux-gui-commerce-http-client-stub"
 version = "0.3.1"
 

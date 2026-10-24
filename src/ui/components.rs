@@ -240,6 +240,7 @@ pub enum SettingsPanelInput {
     DiscreteGpuChanged(bool),
     LaunchToolChanged(LaunchTool, bool),
     HsReplaySyncChanged(bool),
+    CommerceBridgeChanged(bool),
     /// Look again for the optional launch tools on the host.
     DetectTools,
 }
@@ -251,6 +252,7 @@ pub enum SettingsOutput {
     DiscreteGpu(bool),
     LaunchTool(LaunchTool, bool),
     HsReplaySync(bool),
+    CommerceBridge(bool),
 }
 
 #[relm4::component(pub)]
@@ -380,6 +382,38 @@ impl SimpleComponent for SettingsPanel {
                     sender.input(SettingsPanelInput::HsReplaySyncChanged(button.is_active()));
                 },
             },
+
+            attach[0, 5, 1, 1] = &gtk::Label {
+                set_label: &tr!("settings.shop"),
+                set_xalign: 0.0,
+                add_css_class: relm4::css::DIM_LABEL,
+            },
+
+            attach[1, 5, 1, 1] = &gtk::CheckButton {
+                set_label: Some(&tr!("settings.commerce_bridge")),
+                set_tooltip_text: Some(&tr!("settings.commerce_bridge_tooltip")),
+
+                #[watch]
+                set_active: model.config.commerce_bridge,
+
+                connect_toggled[sender] => move |button| {
+                    sender.input(SettingsPanelInput::CommerceBridgeChanged(button.is_active()));
+                },
+            },
+
+            // Shown as soon as the bridge is on, so the terms risk is not
+            // hidden in a tooltip.
+            attach[1, 6, 1, 1] = &gtk::Label {
+                set_label: &tr!("settings.commerce_bridge_notice"),
+                set_xalign: 0.0,
+                set_wrap: true,
+                set_max_width_chars: 50,
+                add_css_class: relm4::css::WARNING,
+                add_css_class: relm4::css::CAPTION,
+
+                #[watch]
+                set_visible: model.config.commerce_bridge,
+            },
         }
     }
 
@@ -468,6 +502,12 @@ impl SimpleComponent for SettingsPanel {
                 if self.config.hsreplay_sync != enabled {
                     self.config.hsreplay_sync = enabled;
                     sender.output(SettingsOutput::HsReplaySync(enabled)).ok();
+                }
+            }
+            SettingsPanelInput::CommerceBridgeChanged(enabled) => {
+                if self.config.commerce_bridge != enabled {
+                    self.config.commerce_bridge = enabled;
+                    sender.output(SettingsOutput::CommerceBridge(enabled)).ok();
                 }
             }
             SettingsPanelInput::DiscreteGpuChanged(use_discrete_gpu) => {
