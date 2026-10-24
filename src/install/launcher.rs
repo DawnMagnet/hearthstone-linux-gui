@@ -47,6 +47,7 @@ pub fn launch_game(
         tr!("game.missing_client_config")
     );
     compatibility::patch_corefoundation_imports(game_dir)?;
+    compatibility::install_window_icon(game_dir);
     let bundled_interpreter = ensure_bundled_interpreter(&exe);
 
     info!(
