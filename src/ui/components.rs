@@ -380,6 +380,20 @@ impl SimpleComponent for SettingsPanel {
                     sender.input(SettingsPanelInput::CommerceBridgeChanged(button.is_active()));
                 },
             },
+
+            // Shown as soon as the bridge is on, so the terms risk is not
+            // hidden in a tooltip.
+            attach[1, 5, 1, 1] = &gtk::Label {
+                set_label: &tr!("settings.commerce_bridge_notice"),
+                set_xalign: 0.0,
+                set_wrap: true,
+                set_max_width_chars: 50,
+                add_css_class: relm4::css::WARNING,
+                add_css_class: relm4::css::CAPTION,
+
+                #[watch]
+                set_visible: model.config.commerce_bridge,
+            },
         }
     }
 
