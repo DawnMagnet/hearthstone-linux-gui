@@ -64,6 +64,48 @@ pub struct Card {
     pub trial: i32,
 }
 
+/// The kernel refused access to the game's memory. Waiting for the collection
+/// cannot help here, so the sync reports this instead of polling until the
+/// timeout.
+#[derive(Debug)]
+pub struct PtraceDenied(std::io::Error);
+
+impl std::fmt::Display for PtraceDenied {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "ptrace access to the game's memory was denied ({}). Linux only \
+             allows this with kernel.yama.ptrace_scope 0 or 1, and only for a \
+             game this launcher started",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for PtraceDenied {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.0)
+    }
+}
+
+/// Whether `error` means the game's memory could not be read at all, rather
+/// than not being ready yet.
+pub fn is_ptrace_denied(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .any(|cause| cause.downcast_ref::<PtraceDenied>().is_some())
+}
+
+/// Adds context to an I/O error, marking a permission failure as a ptrace
+/// denial so callers can tell it from a transient read error.
+fn mem_error(error: std::io::Error, context: String) -> anyhow::Error {
+    if error.kind() == std::io::ErrorKind::PermissionDenied {
+        anyhow::Error::new(PtraceDenied(error)).context(context)
+    } else {
+        anyhow::Error::new(error).context(context)
+    }
+}
+
 /// What the HSReplay upload needs from the game.
 #[derive(Clone, Debug)]
 pub struct GameState {
@@ -415,8 +457,13 @@ struct Mem {
 
 impl Mem {
     fn open(pid: u32) -> Result<Self> {
-        let file = File::open(format!("/proc/{pid}/mem")).with_context(|| {
-            format!("cannot read the memory of process {pid}; was it started by this launcher?")
+        let file = File::open(format!("/proc/{pid}/mem")).map_err(|error| {
+            mem_error(
+                error,
+                format!(
+                    "cannot read the memory of process {pid}; was it started by this launcher?"
+                ),
+            )
         })?;
         Ok(Self {
             pid,
@@ -430,7 +477,9 @@ impl Mem {
         let mut buffer = vec![0; len];
         self.file
             .read_exact_at(&mut buffer, address)
-            .with_context(|| format!("failed to read {len} bytes at {address:#x}"))?;
+            .map_err(|error| {
+                mem_error(error, format!("failed to read {len} bytes at {address:#x}"))
+            })?;
         Ok(buffer)
     }
 
@@ -584,6 +633,19 @@ mod tests {
         assert_eq!(single_dust(&HashSet::new()), None);
         assert_eq!(single_dust(&HashSet::from([2280])), Some(2280));
         assert_eq!(single_dust(&HashSet::from([2280, 2300])), None);
+    }
+
+    #[test]
+    fn recognises_a_ptrace_denial_through_context() {
+        let denied = anyhow::Error::new(PtraceDenied(std::io::Error::from(
+            std::io::ErrorKind::PermissionDenied,
+        )))
+        .context("reading the collection");
+        assert!(is_ptrace_denied(&denied));
+        assert!(!is_ptrace_denied(&anyhow::anyhow!("not ready yet")));
+        assert!(!is_ptrace_denied(&anyhow::Error::new(
+            std::io::Error::from(std::io::ErrorKind::NotFound)
+        )));
     }
 
     #[test]

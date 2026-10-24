@@ -216,6 +216,9 @@ fn wait_for_collection(launched_pid: u32, cancel: &CancellationToken) -> Result<
                 ));
             }
             Ok(_) => tracing::debug!("collection still empty"),
+            Err(error) if mono::is_ptrace_denied(&error) => {
+                return Err(error.context("cannot read the game's collection"));
+            }
             Err(error) => {
                 tracing::debug!(error = %format!("{error:#}"), "collection not readable yet");
                 last_error = Some(error);
