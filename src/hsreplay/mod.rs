@@ -446,8 +446,24 @@ async fn request_token(client: &reqwest::Client, form: &[(&str, &str)]) -> Resul
         .context("HSReplay token request failed")?
         .json()
         .await?;
+    validate_token(&mut token)?;
     token.obtained_at = now();
     Ok(token)
+}
+
+/// Accepts only the parts of a token response the upload can actually use.
+fn validate_token(token: &mut Token) -> Result<()> {
+    token.access_token = token.access_token.trim().to_owned();
+    token.token_type = token.token_type.trim().to_owned();
+    ensure!(
+        !token.access_token.is_empty(),
+        "HSReplay token response has no access token"
+    );
+    ensure!(
+        !token.token_type.is_empty(),
+        "HSReplay token response has no token type"
+    );
+    Ok(())
 }
 
 /// Writes the token through a temporary file and a rename, so a crash cannot
@@ -597,15 +613,20 @@ fn wait_for_callback(
             );
             bail!("HSReplay login failed: {error}");
         }
+        let Some(code) = query.get("code").filter(|code| !code.is_empty()) else {
+            respond(
+                &mut stream,
+                "400 Bad Request",
+                "Login callback had no code. Please try again from the HSReplay login page.",
+            );
+            continue;
+        };
         respond(
             &mut stream,
             "200 OK",
             "<h2>HSReplay login done. You can close this tab.</h2>",
         );
-        return query
-            .get("code")
-            .cloned()
-            .context("HSReplay login returned no code");
+        return Ok(code.clone());
     }
 }
 
@@ -716,6 +737,7 @@ mod tests {
         assert!(get(port, "/?code=stolen&state=bad").contains("400"));
         assert!(get(port, "/?code=stolen").contains("400"));
         assert!(get(port, "/favicon.ico").contains("404"));
+        assert!(get(port, "/?code=&state=good").contains("400"));
         assert!(!waiter.is_finished(), "a bad state must not end the login");
         assert!(get(port, "/?code=abc123&state=good").contains("200"));
         assert_eq!(waiter.join().unwrap().unwrap(), "abc123");
@@ -738,6 +760,25 @@ mod tests {
         cancel.cancel();
         let error = wait_for_callback(&listener, "good", &cancel).unwrap_err();
         assert!(error.is::<Cancelled>());
+    }
+
+    #[test]
+    fn token_response_needs_an_access_token_and_type() {
+        let token = |access: &str, kind: &str| Token {
+            access_token: access.into(),
+            refresh_token: String::new(),
+            token_type: kind.into(),
+            expires_in: 3600,
+            obtained_at: 0,
+        };
+        let mut valid = token(" abc ", " Bearer ");
+        validate_token(&mut valid).unwrap();
+        assert_eq!(
+            (valid.access_token.as_str(), valid.token_type.as_str()),
+            ("abc", "Bearer")
+        );
+        assert!(validate_token(&mut token("", "Bearer")).is_err());
+        assert!(validate_token(&mut token("abc", " ")).is_err());
     }
 
     #[test]
