@@ -49,7 +49,7 @@ lässt.
 
 - **Bedienung per Klick**: Installieren, Aktualisieren, Anmelden und Starten
   aus einem GTK4-Fenster.
-- **Übersetzte Oberfläche**: Englisch, Deutsch und vereinfachtes Chinesisch;
+- **Übersetzte Oberfläche**: Englisch, Deutsch, Französisch und vereinfachtes Chinesisch;
   der Launcher folgt der Systemsprache und lässt sich über das Zahnradmenü
   oben rechts umstellen.
 - **GameMode und MangoHud**: Optionale Schalter starten das Spiel über
