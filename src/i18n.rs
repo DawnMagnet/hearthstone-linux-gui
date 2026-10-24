@@ -46,7 +46,7 @@ impl Entry {
 }
 
 /// All shipped languages; the base catalog comes first.
-static CATALOGS: [Entry; 3] = [
+static CATALOGS: [Entry; 4] = [
     Entry::new(
         BASE_CODE,
         include_str!("../locales/en.toml"),
@@ -56,6 +56,11 @@ static CATALOGS: [Entry; 3] = [
         "de",
         include_str!("../locales/de.toml"),
         include_bytes!("../locales/flags/de.png"),
+    ),
+    Entry::new(
+        "fr",
+        include_str!("../locales/fr.toml"),
+        include_bytes!("../locales/flags/fr.png"),
     ),
     Entry::new(
         "zh-CN",
