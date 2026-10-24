@@ -5,7 +5,7 @@
 # launcher uses it when it is installed and falls back to the system browser
 # otherwise. Build it with:
 #
-#     cargo build --release --manifest-path login-helper/Cargo.toml
+#     cargo build --release --locked --manifest-path login-helper/Cargo.toml
 #
 # It needs GTK 4, libadwaita and WebKitGTK 6 (libwebkitgtk-6.0-dev,
 # webkitgtk6.0-devel).

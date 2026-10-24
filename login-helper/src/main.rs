@@ -73,16 +73,17 @@ struct Texts {
 
 impl Texts {
     fn from_env() -> Self {
+        Self::from_lookup(|name| std::env::var(name).ok())
+    }
+
+    fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> Self {
         let var = |name: &str, default: &str| {
-            std::env::var(name)
-                .ok()
+            lookup(name)
                 .filter(|value| !value.is_empty())
                 .unwrap_or_else(|| default.to_string())
         };
         Self {
-            language: std::env::var("HEARTHSTONE_LOGIN_LANGUAGE")
-                .ok()
-                .filter(|value| !value.is_empty()),
+            language: lookup("HEARTHSTONE_LOGIN_LANGUAGE").filter(|value| !value.is_empty()),
             title: var("HEARTHSTONE_LOGIN_TITLE", "Battle.net login"),
             open_browser: var("HEARTHSTONE_LOGIN_OPEN_BROWSER", "Open in browser"),
             open_browser_tooltip: var(
@@ -173,7 +174,10 @@ fn build_window(app: &adw::Application, url: &str, texts: &Texts, outcome: Rc<Ce
         let window = window.clone();
         let outcome = outcome.clone();
         open_browser.connect_clicked(move |_| {
-            outcome.set(EXIT_OPEN_BROWSER);
+            // A callback may have arrived just before the click.
+            if outcome.get() != EXIT_LOGGED_IN {
+                outcome.set(EXIT_OPEN_BROWSER);
+            }
             window.close();
         });
     }
@@ -197,9 +201,10 @@ fn finish_with_callback(window: &adw::ApplicationWindow, outcome: &Cell<u8>, uri
 }
 
 fn is_callback(uri: &str) -> bool {
-    CALLBACK_SCHEMES
-        .iter()
-        .any(|scheme| uri.starts_with(scheme))
+    CALLBACK_SCHEMES.iter().any(|scheme| {
+        uri.get(..scheme.len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(scheme))
+    })
 }
 
 fn is_https(uri: &str) -> bool {
@@ -214,7 +219,7 @@ fn is_login_url(url: &str) -> bool {
     let Ok(uri) = gtk::glib::Uri::parse(url, gtk::glib::UriFlags::NONE) else {
         return false;
     };
-    if !uri.scheme().eq_ignore_ascii_case("https") {
+    if !uri.scheme().eq_ignore_ascii_case("https") || uri.userinfo().is_some() {
         return false;
     }
     let Some(host) = uri.host() else {
@@ -228,7 +233,7 @@ fn is_login_url(url: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_callback, is_login_url};
+    use super::{is_callback, is_https, is_login_url, Texts};
 
     #[test]
     fn accepts_only_https_battle_net_login_urls() {
@@ -245,6 +250,7 @@ mod tests {
         assert!(!is_login_url("https://battle.net.evil.example/"));
         assert!(!is_login_url("https://evilbattle.net/"));
         assert!(!is_login_url("https://battle.net@evil.example/"));
+        assert!(!is_login_url("https://user:pass@battle.net/login/"));
         assert!(!is_login_url("not a url"));
         assert!(!is_login_url(""));
     }
@@ -255,7 +261,51 @@ mod tests {
             "blizzard-hearthstone://localhost:0/?ST=EU-abc-1"
         ));
         assert!(is_callback("wtcg://localhost:0/?ST=EU-abc-1"));
+        assert!(is_callback("WTCG://localhost:0/?ST=EU-abc-1"));
         assert!(!is_callback("https://account.battle.net/login/"));
         assert!(!is_callback("about:blank"));
+        assert!(!is_callback("wtcgx://localhost:0/"));
+    }
+
+    #[test]
+    fn only_https_opens_links_in_the_window() {
+        assert!(is_https("https://account.battle.net/login/"));
+        assert!(is_https("HTTPS://account.battle.net/login/"));
+        assert!(!is_https("http://account.battle.net/login/"));
+        assert!(!is_https("blizzard-hearthstone://localhost:0/"));
+    }
+
+    #[test]
+    fn falls_back_to_english_texts() {
+        let texts = Texts::from_lookup(|_| None);
+        assert!(texts.language.is_none());
+        assert_eq!(texts.title, "Battle.net login");
+        assert_eq!(texts.open_browser, "Open in browser");
+        assert!(texts.open_browser_tooltip.contains("security key"));
+    }
+
+    #[test]
+    fn takes_language_and_texts_from_the_launcher() {
+        let texts = Texts::from_lookup(|name| match name {
+            "HEARTHSTONE_LOGIN_LANGUAGE" => Some("de".to_string()),
+            "HEARTHSTONE_LOGIN_TITLE" => Some("Battle.net-Anmeldung".to_string()),
+            "HEARTHSTONE_LOGIN_OPEN_BROWSER" => Some("Im Browser öffnen".to_string()),
+            "HEARTHSTONE_LOGIN_OPEN_BROWSER_TOOLTIP" => Some("Tooltip".to_string()),
+            _ => None,
+        });
+        assert_eq!(texts.language.as_deref(), Some("de"));
+        assert_eq!(texts.title, "Battle.net-Anmeldung");
+        assert_eq!(texts.open_browser, "Im Browser öffnen");
+        assert_eq!(texts.open_browser_tooltip, "Tooltip");
+    }
+
+    #[test]
+    fn empty_environment_values_use_the_defaults() {
+        let texts = Texts::from_lookup(|name| match name {
+            "HEARTHSTONE_LOGIN_LANGUAGE" | "HEARTHSTONE_LOGIN_TITLE" => Some(String::new()),
+            _ => None,
+        });
+        assert!(texts.language.is_none());
+        assert_eq!(texts.title, "Battle.net login");
     }
 }
