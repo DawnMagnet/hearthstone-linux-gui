@@ -908,7 +908,7 @@ version = "0.3.1"
 
 [[package]]
 name = "hearthstone-linux-gui-commerce-bridge"
-version = "0.3.0"
+version = "0.3.1"
 
 [[package]]
 name = "hearthstone-linux-gui-commerce-http-client-stub"
