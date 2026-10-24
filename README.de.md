@@ -214,6 +214,37 @@ Weder in diesem Repository noch in den Launcher-Paketen liegen proprietäre
 Hearthstone-Dateien. Die Anwendung holt die offiziellen Dateien während der
 Installation von den Verteilservern des Herstellers.
 
+## HSReplay-Sammlungsupload (optional)
+
+Standardmäßig aus. Wenn **Sammlung nach dem Start hochladen** in den
+Einstellungen aktiviert ist (oder `hsreplay_sync = true` in der
+Konfigurationsdatei), liest der Launcher die Kartensammlung aus dem laufenden
+Spiel und lädt sie zu [HSReplay.net](https://hsreplay.net) hoch, so wie es
+Hearthstone Deck Tracker unter Windows tut.
+
+- **Was an HSReplay.net gesendet wird**: deine Blizzard-Konto-ID (hi/lo) und
+  dein BattleTag (zur Verknüpfung des Kontos), deine Kartensammlung und dein
+  Arkanstaub-Stand, wenn er eindeutig gelesen werden konnte. Sonst wird nichts
+  gelesen oder gesendet.
+- **Anmeldung**: Beim ersten Mal öffnet sich ein Browser für die OAuth-
+  Anmeldung bei HSReplay. Das Token liegt im Konfigurationsverzeichnis des
+  Launchers (`hsreplay-token.json`, Modus 0600). Lösche die Datei, um dich
+  abzumelden.
+- **Wie das Spiel gelesen wird**: über `/proc/<pid>/mem`, ohne in das Spiel zu
+  schreiben oder Code einzuschleusen. Dafür ist ptrace-Zugriff nötig, der nur
+  mit `kernel.yama.ptrace_scope` `0` oder `1` und nur für ein von diesem
+  Launcher gestartetes Spiel (direkt oder über Wrapper wie `gamemoderun`)
+  möglich ist. Bei `2` oder `3` schlägt der Upload mit einem
+  Berechtigungsfehler fehl.
+- **Best effort**: Das Speicherlayout ist im Code fest eingetragen (Unity
+  6000.3 auf x86_64 Linux) und wird zur Laufzeit nicht ermittelt. Nach einem
+  Spiel-Update kann der Upload fehlschlagen, bis der Launcher aktualisiert
+  wurde.
+- **Nutzungsbedingungen**: Das Lesen des Speichers eines anderen Programms ist
+  eine Grauzone in Blizzards Nutzungsbedingungen. Das Projekt ist inoffiziell
+  und der Upload ist optional; entscheide selbst, ob du ihn verwendest, auf
+  eigenes Risiko.
+
 ## Stand und Einschränkungen
 
 - Zielarchitektur: **x86_64 Linux**.
