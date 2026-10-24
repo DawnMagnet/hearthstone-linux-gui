@@ -246,11 +246,11 @@ pub enum SettingsPanelInput {
 
 #[derive(Clone, Copy, Debug)]
 pub enum SettingsOutput {
-    RegionChanged(Region),
-    LocaleChanged(Locale),
-    DiscreteGpuChanged(bool),
-    LaunchToolChanged(LaunchTool, bool),
-    HsReplaySyncChanged(bool),
+    Region(Region),
+    Locale(Locale),
+    DiscreteGpu(bool),
+    LaunchTool(LaunchTool, bool),
+    HsReplaySync(bool),
 }
 
 #[relm4::component(pub)]
@@ -433,13 +433,13 @@ impl SimpleComponent for SettingsPanel {
             SettingsPanelInput::RegionChanged(idx) => {
                 if let Some(region) = Region::ALL.get(idx).copied() {
                     self.config.region = region;
-                    sender.output(SettingsOutput::RegionChanged(region)).ok();
+                    sender.output(SettingsOutput::Region(region)).ok();
                 }
             }
             SettingsPanelInput::LocaleChanged(idx) => {
                 if let Some(locale) = Locale::ALL.get(idx).copied() {
                     self.config.locale = locale;
-                    sender.output(SettingsOutput::LocaleChanged(locale)).ok();
+                    sender.output(SettingsOutput::Locale(locale)).ok();
                 }
             }
             SettingsPanelInput::LaunchToolChanged(tool, enabled) => {
@@ -456,7 +456,7 @@ impl SimpleComponent for SettingsPanel {
                 if available && *current != enabled {
                     *current = enabled;
                     sender
-                        .output(SettingsOutput::LaunchToolChanged(tool, enabled))
+                        .output(SettingsOutput::LaunchTool(tool, enabled))
                         .ok();
                 }
             }
@@ -467,16 +467,14 @@ impl SimpleComponent for SettingsPanel {
             SettingsPanelInput::HsReplaySyncChanged(enabled) => {
                 if self.config.hsreplay_sync != enabled {
                     self.config.hsreplay_sync = enabled;
-                    sender
-                        .output(SettingsOutput::HsReplaySyncChanged(enabled))
-                        .ok();
+                    sender.output(SettingsOutput::HsReplaySync(enabled)).ok();
                 }
             }
             SettingsPanelInput::DiscreteGpuChanged(use_discrete_gpu) => {
                 if self.config.use_discrete_gpu != use_discrete_gpu {
                     self.config.use_discrete_gpu = use_discrete_gpu;
                     sender
-                        .output(SettingsOutput::DiscreteGpuChanged(use_discrete_gpu))
+                        .output(SettingsOutput::DiscreteGpu(use_discrete_gpu))
                         .ok();
                 }
             }

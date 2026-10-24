@@ -435,16 +435,16 @@ impl SimpleComponent for MainWindow {
 impl MainWindow {
     fn handle_settings(&mut self, output: SettingsOutput) {
         match output {
-            SettingsOutput::RegionChanged(region) => self.config.region = region,
-            SettingsOutput::LocaleChanged(locale) => self.config.locale = locale,
-            SettingsOutput::DiscreteGpuChanged(use_discrete_gpu) => {
+            SettingsOutput::Region(region) => self.config.region = region,
+            SettingsOutput::Locale(locale) => self.config.locale = locale,
+            SettingsOutput::DiscreteGpu(use_discrete_gpu) => {
                 self.config.use_discrete_gpu = use_discrete_gpu;
             }
-            SettingsOutput::LaunchToolChanged(tool, enabled) => match tool {
+            SettingsOutput::LaunchTool(tool, enabled) => match tool {
                 LaunchTool::GameMode => self.config.use_gamemode = enabled,
                 LaunchTool::MangoHud => self.config.use_mangohud = enabled,
             },
-            SettingsOutput::HsReplaySyncChanged(enabled) => self.config.hsreplay_sync = enabled,
+            SettingsOutput::HsReplaySync(enabled) => self.config.hsreplay_sync = enabled,
         }
         self.save_settings();
         self.refresh_details();
