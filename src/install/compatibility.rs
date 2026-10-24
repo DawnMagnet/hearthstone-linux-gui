@@ -87,6 +87,7 @@ pub fn install_compatibility_files(
         }
     }
     patch_corefoundation_imports(game_dir)?;
+    install_window_icon(game_dir);
     Ok(())
 }
 
