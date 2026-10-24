@@ -73,6 +73,8 @@ jobs:
       - name: Type-check workspace, GUI and tests
         run: cargo check --workspace --all-targets --locked
 
-      # The library does not depend on GTK, so this needs no GUI build.
+      # The binary's unit tests cover the login window's process handling and
+      # the browser openers; the GTK headers installed above are enough for
+      # them. Integration tests are covered by the packaging jobs.
       - name: Unit tests
-        run: cargo test -p hearthstone-linux-gui --lib --locked
+        run: cargo test -p hearthstone-linux-gui --lib --bins --locked
