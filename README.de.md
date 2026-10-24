@@ -266,6 +266,30 @@ Bindestrich, 32 alphanumerischen Zeichen, einem Bindestrich und deiner
 numerischen Konto-ID. Lehnt der Befehl den Wert weiterhin ab, prüfe, ob das
 Regionspräfix beim Kopieren verloren gegangen ist.
 
+
+#### Optionales Anmeldefenster
+
+Blizzard liefert die Hearthstone-Anmeldeseite für den Browser im Spiel aus;
+in einem normalen Browser ist ihr Text deshalb schwer lesbar. Ist das separate
+Programm `hearthstone-linux-gui-login` installiert, zeigt **Anmelden** die
+Seite stattdessen in einem eigenen dunklen Fenster und übergibt das Token
+direkt. Das Fenster hat immer einen Knopf **Im Browser öffnen**, für die
+Anmeldung über Google oder Apple, Passwortmanager und Sicherheitsschlüssel;
+fehlt das Programm oder scheitert es, wird wie bisher der Browser benutzt.
+
+Es liegt in `login-helper/`, hat eine eigene Lock-Datei und braucht
+WebKitGTK 6; der Launcher und seine Pakete hängen nie davon ab. Die
+Release-Pakete (AppImage, `.deb`, `.rpm`) und das Flatpak enthalten das
+Anmeldefenster **nicht**; es wird separat gebaut und installiert, und ohne
+es nutzt **Anmelden** einfach deinen Browser. Der Launcher sucht es neben
+seiner eigenen ausführbaren Datei und dann im `PATH`; für Entwicklungs-Builds
+lässt sich der Pfad mit `HEARTHSTONE_LINUX_LOGIN_WINDOW` überschreiben.
+
+```sh
+cargo build --release --locked --manifest-path login-helper/Cargo.toml
+install -Dm755 login-helper/target/release/hearthstone-linux-gui-login ~/.local/bin/
+```
+
 ### Zertifikatsfehler auf Rolling-Release-Distributionen
 
 Startet das Spiel, kann sich aber nicht bei Battle.net anmelden, und steht in

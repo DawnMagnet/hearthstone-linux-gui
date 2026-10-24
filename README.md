@@ -331,6 +331,30 @@ A valid token is a two-character region prefix, a dash, 32 alphanumeric
 characters, a dash, and your numeric account id. If the command still rejects
 the value, check that the region prefix was not stripped while copying.
 
+
+#### Optional login window
+
+Blizzard serves the Hearthstone login page for the game's built-in browser, so
+in a regular browser its text is hard to read. If the separate program
+`hearthstone-linux-gui-login` is installed, **Login** shows the page in its own
+dark window instead and hands the token back directly. The window always has an
+**Open in browser** button, for Google or Apple sign-in, password managers and
+security keys; if the program is missing or fails, the browser is used as
+before.
+
+It lives in `login-helper/`, has its own lock file and needs WebKitGTK 6, so the
+launcher and its packages never depend on it. The release packages (AppImage,
+`.deb`, `.rpm`) and the Flatpak do **not** include the login window; it is
+built and installed separately, and without it **Login** simply uses your
+browser. The launcher looks for it next to its own executable and then on
+`PATH`; development builds can set `HEARTHSTONE_LINUX_LOGIN_WINDOW` to another
+path.
+
+```sh
+cargo build --release --locked --manifest-path login-helper/Cargo.toml
+install -Dm755 login-helper/target/release/hearthstone-linux-gui-login ~/.local/bin/
+```
+
 ### Certificate failures on rolling distros
 
 If the game starts but cannot sign in to Battle.net, and

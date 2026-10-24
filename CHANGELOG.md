@@ -46,6 +46,12 @@
 
 ### Added
 
+- Optional login window: when the separate program `hearthstone-linux-gui-login`
+  (`login-helper/`, needs WebKitGTK 6) is installed, **Login** shows Blizzard's
+  login page in its own dark window and hands the token back directly. It
+  always offers **Open in browser**, and the browser flow is used whenever the
+  program is missing, fails or the user asks for it. The launcher and its
+  packages do not depend on WebKitGTK; a CI job builds the program.
 - **System information** in the gear menu: launcher version, install kind and
   package manager, distribution, kernel, session, graphics driver module,
   OpenGL renderer and driver/Mesa version, GameMode, MangoHud and the GTK and
