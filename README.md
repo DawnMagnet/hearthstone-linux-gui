@@ -346,10 +346,12 @@ It lives in `login-helper/`, has its own lock file and needs WebKitGTK 6, so the
 launcher and its packages never depend on it. The release packages (AppImage,
 `.deb`, `.rpm`) and the Flatpak do **not** include the login window; it is
 built and installed separately, and without it **Login** simply uses your
-browser:
+browser. The launcher looks for it next to its own executable and then on
+`PATH`; development builds can set `HEARTHSTONE_LINUX_LOGIN_WINDOW` to another
+path.
 
 ```sh
-cargo build --release --manifest-path login-helper/Cargo.toml
+cargo build --release --locked --manifest-path login-helper/Cargo.toml
 install -Dm755 login-helper/target/release/hearthstone-linux-gui-login ~/.local/bin/
 ```
 
