@@ -343,6 +343,24 @@ fn now() -> u64 {
         .map_or(0, |elapsed| elapsed.as_secs())
 }
 
+/// Whether the token can still be used, leaving a minute of slack. Saturating
+/// arithmetic keeps a corrupt saved file from wrapping around.
+fn token_is_valid(token: &Token, at: u64) -> bool {
+    at.saturating_add(60) < token.obtained_at.saturating_add(token.expires_in)
+}
+
+/// Tightens an existing token file even when no refresh is needed, so a file
+/// left world-readable by an older build does not stay that way.
+fn restrict_token_permissions(file: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let metadata = fs::metadata(file)?;
+    if metadata.permissions().mode() & 0o077 != 0 {
+        fs::set_permissions(file, fs::Permissions::from_mode(0o600))
+            .with_context(|| format!("failed to make {} private", file.display()))?;
+    }
+    Ok(())
+}
+
 /// The token endpoint turned the request down (HTTP 400/401, e.g.
 /// `invalid_grant`), as opposed to being unreachable or failing.
 #[derive(Debug)]
@@ -366,11 +384,27 @@ async fn token(
     cancel: &CancellationToken,
     open_url: impl Fn(&str),
 ) -> Result<Token> {
-    let saved = fs::read(file)
-        .ok()
-        .and_then(|data| serde_json::from_slice::<Token>(&data).ok());
+    let saved = match fs::read(file) {
+        Ok(data) => match serde_json::from_slice::<Token>(&data) {
+            Ok(token) => Some(token),
+            Err(error) => {
+                tracing::warn!(error = %error, "saved HSReplay token is unreadable; logging in again");
+                None
+            }
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            tracing::warn!(error = %error, "could not read the saved HSReplay token; logging in again");
+            None
+        }
+    };
     let token = match saved {
-        Some(token) if now() + 60 < token.obtained_at + token.expires_in => return Ok(token),
+        Some(token) if token_is_valid(&token, now()) => {
+            if let Err(error) = restrict_token_permissions(file) {
+                tracing::warn!(error = %format!("{error:#}"), "could not make the saved HSReplay token private");
+            }
+            return Ok(token);
+        }
         Some(token) => {
             let form = [
                 ("grant_type", "refresh_token"),
@@ -704,6 +738,38 @@ mod tests {
         cancel.cancel();
         let error = wait_for_callback(&listener, "good", &cancel).unwrap_err();
         assert!(error.is::<Cancelled>());
+    }
+
+    #[test]
+    fn token_validity_handles_boundaries_and_overflow() {
+        let token = |obtained_at, expires_in| Token {
+            access_token: "a".into(),
+            refresh_token: "r".into(),
+            token_type: "Bearer".into(),
+            expires_in,
+            obtained_at,
+        };
+        assert!(token_is_valid(&token(100, 3600), 100 + 3600 - 61));
+        assert!(!token_is_valid(&token(100, 3600), 100 + 3600 - 60));
+        assert!(!token_is_valid(&token(0, 0), 0));
+        // A corrupt saved token must not wrap the addition.
+        assert!(token_is_valid(&token(u64::MAX - 10, u64::MAX), 0));
+    }
+
+    #[test]
+    fn makes_an_existing_token_file_private_without_saving_again() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir =
+            std::env::temp_dir().join(format!("hsreplay-token-perm-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("token.json");
+        fs::write(&file, b"{}").unwrap();
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
+        restrict_token_permissions(&file).unwrap();
+        let mode = fs::metadata(&file).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
