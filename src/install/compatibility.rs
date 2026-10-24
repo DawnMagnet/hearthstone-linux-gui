@@ -94,41 +94,83 @@ pub fn install_compatibility_files(
 /// `Resources/UnityPlayer.png`, which the macOS game files lack, so the
 /// window shows a generic X11 icon. The macOS `PlayerIcon.icns` already
 /// holds PNG images; the 256 px one is copied out. Best effort: a missing
-/// or odd icon must never prevent the launch.
+/// or odd icon must never prevent installation or launch.
 pub fn install_window_icon(game_dir: &Path) {
     let resources = game_dir.join("Bin/Hearthstone_Data/Resources");
     let icon = resources.join("UnityPlayer.png");
-    if icon.exists() {
+    // Keep the game's own icon (or one installed here) but replace an empty
+    // file left by an interrupted earlier write.
+    if std::fs::metadata(&icon).is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0) {
         return;
     }
-    let Ok(icns) = std::fs::read(resources.join("PlayerIcon.icns")) else {
-        return;
+
+    let icns_path = resources.join("PlayerIcon.icns");
+    let icns = match std::fs::read(&icns_path) {
+        Ok(icns) => icns,
+        Err(error) => {
+            debug!(
+                path = %icns_path.display(),
+                %error,
+                "no source for the game window icon"
+            );
+            return;
+        }
     };
     let Some(png) = icns_png(&icns) else {
-        debug!("no PNG image in PlayerIcon.icns");
+        debug!(
+            path = %icns_path.display(),
+            "no PNG image in the source icon"
+        );
         return;
     };
     match std::fs::write(&icon, png) {
         Ok(()) => info!(path = %icon.display(), "installed game window icon"),
-        Err(error) => debug!(%error, "could not write game window icon"),
+        Err(error) => debug!(
+            path = %icon.display(),
+            %error,
+            "could not write game window icon"
+        ),
     }
 }
 
 /// The PNG image of an `.icns` file, preferring 256 px (`ic08`), which is
 /// plenty for a window icon and keeps the X11 icon property small.
+///
+/// A malformed or truncated file never panics: parsing stops at the image
+/// container's declared end, and a broken trailing entry keeps the images
+/// already found.
 fn icns_png(icns: &[u8]) -> Option<&[u8]> {
     if !icns.starts_with(b"icns") {
         return None;
     }
+    let declared = icns
+        .get(4..8)
+        .and_then(|length| length.try_into().ok())
+        .map(u32::from_be_bytes)? as usize;
+    // Writers normally set the total length, but tolerate a zero or stale
+    // value instead of discarding an otherwise readable file.
+    let end = if declared >= 8 {
+        declared.min(icns.len())
+    } else {
+        icns.len()
+    };
+
     let mut pngs = Vec::new();
     let mut offset = 8;
-    while let Some(header) = icns.get(offset..offset + 8) {
+    while offset + 8 <= end {
+        let header = &icns[offset..offset + 8];
         let len = u32::from_be_bytes(header[4..8].try_into().unwrap()) as usize;
-        let data = icns.get(offset + 8..offset + len.max(8))?;
+        if len < 8 {
+            break;
+        }
+        let Some(next) = offset.checked_add(len).filter(|next| *next <= end) else {
+            break;
+        };
+        let data = &icns[offset + 8..next];
         if data.starts_with(b"\x89PNG") {
             pngs.push((&header[..4], data));
         }
-        offset += len.max(8);
+        offset = next;
     }
     ["ic08", "ic09", "ic07", "ic10"]
         .iter()
@@ -335,6 +377,33 @@ mod tests {
     }
 
     #[test]
+    fn keeps_valid_images_before_a_truncated_entry() {
+        let mut file = icns(&[(b"ic08", b"\x89PNG 256")]);
+        // The header claims another entry, but the file ends inside it.
+        let declared = (file.len() + 16) as u32;
+        file[4..8].copy_from_slice(&declared.to_be_bytes());
+        file.extend_from_slice(b"ic09\0\0\0\x10");
+        assert_eq!(icns_png(&file), Some(b"\x89PNG 256".as_slice()));
+    }
+
+    #[test]
+    fn ignores_entries_after_the_declared_container_length() {
+        let mut file = icns(&[(b"ic08", b"\x89PNG 256")]);
+        let declared = file.len() as u32;
+        file[4..8].copy_from_slice(&declared.to_be_bytes());
+        let trailing = icns(&[(b"ic09", b"\x89PNG 512")]);
+        file.extend_from_slice(&trailing[8..]);
+        assert_eq!(icns_png(&file), Some(b"\x89PNG 256".as_slice()));
+    }
+
+    #[test]
+    fn falls_back_to_the_file_length_when_the_total_is_unset() {
+        let mut file = icns(&[(b"ic10", b"\x89PNG 1024")]);
+        file[4..8].copy_from_slice(&0u32.to_be_bytes());
+        assert_eq!(icns_png(&file), Some(b"\x89PNG 1024".as_slice()));
+    }
+
+    #[test]
     fn installs_the_window_icon_once() {
         let temp = tempfile::tempdir().unwrap();
         let resources = temp.path().join("Bin/Hearthstone_Data/Resources");
@@ -347,6 +416,14 @@ mod tests {
             icns(&[(b"ic08", b"\x89PNG 256")]),
         )
         .unwrap();
+        install_window_icon(temp.path());
+        assert_eq!(
+            std::fs::read(resources.join("UnityPlayer.png")).unwrap(),
+            b"\x89PNG 256"
+        );
+
+        // An empty file from an interrupted earlier write is replaced.
+        std::fs::write(resources.join("UnityPlayer.png"), b"").unwrap();
         install_window_icon(temp.path());
         assert_eq!(
             std::fs::read(resources.join("UnityPlayer.png")).unwrap(),
