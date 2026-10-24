@@ -668,6 +668,32 @@ mod tests {
     use mono::{Card, GameState};
 
     #[test]
+    fn accepts_plausible_reads_and_rejects_corrupt_ones() {
+        let card = |dbf_id, premium, count, trial| Card {
+            dbf_id,
+            premium,
+            count,
+            trial,
+        };
+        let state = |cards, dust| GameState {
+            account_hi: 1,
+            account_lo: 2,
+            battletag: None,
+            dust,
+            cards,
+        };
+        assert!(plausible(&state(vec![card(42, 0, 2, 0)], Some(2280))));
+        assert!(plausible(&state(vec![], None)));
+        assert!(!plausible(&state(vec![card(-1, 0, 1, 0)], None)));
+        assert!(!plausible(&state(vec![card(42, 0, -1, 0)], None)));
+        assert!(!plausible(&state(vec![card(42, 0, 1, 1001)], None)));
+        assert!(!plausible(&state(
+            vec![card(42, 0, 1, 0)],
+            Some(10_000_000)
+        )));
+    }
+
+    #[test]
     fn builds_hdt_collection_rows() {
         let card = |dbf_id, premium, count, trial| Card {
             dbf_id,
