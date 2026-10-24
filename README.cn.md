@@ -229,6 +229,28 @@ Linux player 运行这些官方游戏数据。
 
 本仓库和发布包不包含任何炉石传说专有游戏文件。安装过程中，应用会从官方上游分发端点获取所需文件。
 
+## HSReplay 收藏上传（可选）
+
+默认关闭。在设置中开启 **启动后上传我的收藏**（或在配置文件中设置
+`hsreplay_sync = true`）后，启动器会从运行中的游戏读取卡牌收藏并上传到
+[HSReplay.net](https://hsreplay.net)，与 Windows 上的 Hearthstone Deck
+Tracker 类似。
+
+- **发送到 HSReplay.net 的内容**：暴雪账号 ID（hi/lo）和 BattleTag（用于
+  关联账号）、卡牌收藏，以及在能明确读取时上传的奥术之尘余额。除此之外
+  不读取也不发送任何内容。
+- **登录**：首次使用时，浏览器会打开 HSReplay 的 OAuth 登录页。令牌保存在
+  启动器的配置目录（`hsreplay-token.json`，权限 0600）。删除该文件即可退出
+  登录。
+- **如何读取游戏**：通过 `/proc/<pid>/mem`，不会向游戏写入，也不会注入代码。
+  这需要 ptrace 权限，仅在 `kernel.yama.ptrace_scope` 为 `0` 或 `1` 且游戏由
+  本启动器启动（直接启动或经由 `gamemoderun` 等包装器）时可用。设置为 `2`
+  或 `3` 时，上传会以权限错误失败。
+- **尽力而为**：内存布局固定写在代码中（x86_64 Linux 上的 Unity 6000.3），
+  不会在运行时探测。游戏更新改变布局后，上传可能一直失败，直到启动器更新。
+- **服务条款**：读取其他程序的内存处于暴雪服务条款的灰色地带。本项目为非
+  官方项目，上传为自愿开启；请自行决定是否使用并承担风险。
+
 ## 状态与限制
 
 - 当前目标架构：**x86_64 Linux**。
@@ -270,6 +292,18 @@ scheme 的处理程序,并打开 Battle.net 登录页面。登录完成后,浏�
 
 合法的令牌格式为:两位区域前缀 + 短横线 + 32 位字母数字 + 短横线 + 数字账号
 ID。如果命令仍然拒绝,请检查复制时是否丢失了区域前缀。
+
+
+#### 可选的登录窗口
+
+Blizzard 的炉石传说登录页面是为游戏内置浏览器设计的，因此在普通浏览器中文字难以看清。如果安装了独立程序 `hearthstone-linux-gui-login`，点击**登录**会在它自己的深色窗口中显示该页面，并直接交回登录令牌。窗口始终提供**在浏览器中打开**按钮，便于使用 Google 或 Apple 登录、密码管理器和安全密钥；如果程序缺失或出错，则照旧使用浏览器。
+
+它位于 `login-helper/`，有自己的锁文件并需要 WebKitGTK 6，启动器及其安装包从不依赖它。发布的安装包（AppImage、`.deb`、`.rpm`）和 Flatpak **不**包含登录窗口；它需要单独构建和安装，没有它时 **登录** 会直接使用你的浏览器。启动器会先在自己的可执行文件旁查找它，然后在 `PATH` 中查找；开发构建可用 `HEARTHSTONE_LINUX_LOGIN_WINDOW` 指定其他路径。
+
+```sh
+cargo build --release --locked --manifest-path login-helper/Cargo.toml
+install -Dm755 login-helper/target/release/hearthstone-linux-gui-login ~/.local/bin/
+```
 
 ### 滚动发行版上的证书问题
 

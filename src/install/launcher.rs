@@ -1,5 +1,5 @@
 use super::compatibility;
-use crate::{config::AppConfig, host_env, tr};
+use crate::{config::AppConfig, game_options, host_env, tr};
 use anyhow::{Context, Result};
 use std::{
     collections::HashSet,
@@ -47,6 +47,7 @@ pub fn launch_game(
         tr!("game.missing_client_config")
     );
     compatibility::patch_corefoundation_imports(game_dir)?;
+    compatibility::install_window_icon(game_dir);
     let bundled_interpreter = ensure_bundled_interpreter(&exe);
 
     info!(
@@ -57,7 +58,29 @@ pub fn launch_game(
         "launching Hearthstone"
     );
     let library_path = game_library_path(game_dir, bundled_interpreter);
-    let graphics_env = graphics_env(options.use_discrete_gpu);
+    let mut graphics_env = graphics_env(options.use_discrete_gpu);
+    if game_options::options_path().is_some_and(|path| vsync_disabled_in_options(&path)) {
+        let overrides = vsync_off_env(|name| host_env::host_var(name).is_some());
+        let applied = overrides.iter().map(|(name, _)| *name).collect::<Vec<_>>();
+        if applied.is_empty() {
+            debug!(
+                variables = ?VSYNC_OFF_ENV.map(|(name, _)| name),
+                "options.txt switches VSync off, but the driver variables are already set; leaving them alone"
+            );
+        } else {
+            let user_set = VSYNC_OFF_ENV
+                .iter()
+                .map(|(name, _)| *name)
+                .filter(|name| !applied.contains(name))
+                .collect::<Vec<_>>();
+            info!(
+                variables = ?applied,
+                user_set = ?user_set,
+                "options.txt switches VSync off; overriding the driver"
+            );
+            graphics_env.extend(overrides);
+        }
+    }
     let wrappers = wrapper_chain(options, find_in_path);
     let runner = find_runtime_runner();
     debug!(ld_library_path = ?library_path, "configured game library path");
@@ -531,6 +554,45 @@ fn executable_file(path: &Path) -> Option<PathBuf> {
     (metadata.is_file() && metadata.permissions().mode() & 0o111 != 0).then(|| path.to_path_buf())
 }
 
+/// Whether the game's `options.txt` switches VSync off (`vsync=0`).
+///
+/// A missing file means the game's default (VSync on), and an unreadable one
+/// must not silently change the driver's behaviour either.
+fn vsync_disabled_in_options(path: &Path) -> bool {
+    match game_options::GameOptions::load(path) {
+        Ok(options) => !options.vsync(),
+        Err(error) => {
+            warn!(
+                path = %path.display(),
+                error = %error,
+                "could not read options.txt; leaving the driver's VSync setting alone"
+            );
+            false
+        }
+    }
+}
+
+/// Driver settings that turn VSync off, for when the game keeps it on
+/// despite `vsync=0`: the game requests a swap interval itself, which these
+/// override. Mesa OpenGL (`vblank_mode`), NVIDIA OpenGL
+/// (`__GL_SYNC_TO_VBLANK`) and Mesa Vulkan (`MESA_VK_WSI_PRESENT_MODE`).
+const VSYNC_OFF_ENV: [(&str, &str); 3] = [
+    ("vblank_mode", "0"),
+    ("__GL_SYNC_TO_VBLANK", "0"),
+    ("MESA_VK_WSI_PRESENT_MODE", "immediate"),
+];
+
+/// The subset of [`VSYNC_OFF_ENV`] not set by the user already. Their value
+/// wins: a wrapper script or a desktop session may intentionally force VSync
+/// on or pick another Vulkan present mode.
+fn vsync_off_env(is_set: impl Fn(&str) -> bool) -> Vec<(&'static str, OsString)> {
+    VSYNC_OFF_ENV
+        .into_iter()
+        .filter(|(name, _)| !is_set(name))
+        .map(|(name, value)| (name, OsString::from(value)))
+        .collect()
+}
+
 fn graphics_env(use_discrete_gpu: bool) -> Vec<(&'static str, OsString)> {
     let mut envs = Vec::new();
     push_env_path(
@@ -586,6 +648,48 @@ fn dedupe_paths(paths: &mut Vec<PathBuf>) {
 mod tests {
     use super::*;
     use std::os::unix::process::ExitStatusExt;
+
+    #[test]
+    fn vsync_off_env_keeps_what_the_user_set() {
+        assert_eq!(
+            vsync_off_env(|_| false),
+            [
+                ("vblank_mode", OsString::from("0")),
+                ("__GL_SYNC_TO_VBLANK", OsString::from("0")),
+                ("MESA_VK_WSI_PRESENT_MODE", OsString::from("immediate"))
+            ]
+        );
+        assert!(vsync_off_env(|_| true).is_empty());
+        assert_eq!(
+            vsync_off_env(|name| name == "vblank_mode"),
+            [
+                ("__GL_SYNC_TO_VBLANK", OsString::from("0")),
+                ("MESA_VK_WSI_PRESENT_MODE", OsString::from("immediate"))
+            ]
+        );
+    }
+
+    #[test]
+    fn vsync_off_needs_a_readable_options_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("options.txt");
+
+        // Missing means the game's default, which keeps VSync on.
+        assert!(!vsync_disabled_in_options(&path));
+        std::fs::write(&path, "vsync=1\n").unwrap();
+        assert!(!vsync_disabled_in_options(&path));
+        std::fs::write(&path, "targetframerate=60\n").unwrap();
+        assert!(!vsync_disabled_in_options(&path));
+        std::fs::write(&path, "vsync = false\n").unwrap();
+        assert!(vsync_disabled_in_options(&path));
+        std::fs::write(&path, "vsync=0\n").unwrap();
+        assert!(vsync_disabled_in_options(&path));
+
+        // A path that exists but cannot be read is treated like a missing one.
+        let unreadable = temp.path().join("unreadable");
+        std::fs::create_dir(&unreadable).unwrap();
+        assert!(!vsync_disabled_in_options(&unreadable));
+    }
 
     #[test]
     fn builds_wrapper_chain_in_order_and_skips_missing_tools() {

@@ -239,6 +239,7 @@ pub enum SettingsPanelInput {
     LocaleChanged(usize),
     DiscreteGpuChanged(bool),
     LaunchToolChanged(LaunchTool, bool),
+    HsReplaySyncChanged(bool),
     CommerceBridgeChanged(bool),
     /// Look again for the optional launch tools on the host.
     DetectTools,
@@ -246,11 +247,12 @@ pub enum SettingsPanelInput {
 
 #[derive(Clone, Copy, Debug)]
 pub enum SettingsOutput {
-    RegionChanged(Region),
-    LocaleChanged(Locale),
-    DiscreteGpuChanged(bool),
-    LaunchToolChanged(LaunchTool, bool),
-    CommerceBridgeChanged(bool),
+    Region(Region),
+    Locale(Locale),
+    DiscreteGpu(bool),
+    LaunchTool(LaunchTool, bool),
+    HsReplaySync(bool),
+    CommerceBridge(bool),
 }
 
 #[relm4::component(pub)]
@@ -364,12 +366,30 @@ impl SimpleComponent for SettingsPanel {
             },
 
             attach[0, 4, 1, 1] = &gtk::Label {
-                set_label: &tr!("settings.shop"),
+                set_label: "HSReplay",
                 set_xalign: 0.0,
                 add_css_class: relm4::css::DIM_LABEL,
             },
 
             attach[1, 4, 1, 1] = &gtk::CheckButton {
+                set_label: Some(&tr!("settings.hsreplay_sync")),
+                set_tooltip_text: Some(&tr!("settings.hsreplay_sync_tooltip")),
+
+                #[watch]
+                set_active: model.config.hsreplay_sync,
+
+                connect_toggled[sender] => move |button| {
+                    sender.input(SettingsPanelInput::HsReplaySyncChanged(button.is_active()));
+                },
+            },
+
+            attach[0, 5, 1, 1] = &gtk::Label {
+                set_label: &tr!("settings.shop"),
+                set_xalign: 0.0,
+                add_css_class: relm4::css::DIM_LABEL,
+            },
+
+            attach[1, 5, 1, 1] = &gtk::CheckButton {
                 set_label: Some(&tr!("settings.commerce_bridge")),
                 set_tooltip_text: Some(&tr!("settings.commerce_bridge_tooltip")),
 
@@ -383,7 +403,7 @@ impl SimpleComponent for SettingsPanel {
 
             // Shown as soon as the bridge is on, so the terms risk is not
             // hidden in a tooltip.
-            attach[1, 5, 1, 1] = &gtk::Label {
+            attach[1, 6, 1, 1] = &gtk::Label {
                 set_label: &tr!("settings.commerce_bridge_notice"),
                 set_xalign: 0.0,
                 set_wrap: true,
@@ -447,13 +467,13 @@ impl SimpleComponent for SettingsPanel {
             SettingsPanelInput::RegionChanged(idx) => {
                 if let Some(region) = Region::ALL.get(idx).copied() {
                     self.config.region = region;
-                    sender.output(SettingsOutput::RegionChanged(region)).ok();
+                    sender.output(SettingsOutput::Region(region)).ok();
                 }
             }
             SettingsPanelInput::LocaleChanged(idx) => {
                 if let Some(locale) = Locale::ALL.get(idx).copied() {
                     self.config.locale = locale;
-                    sender.output(SettingsOutput::LocaleChanged(locale)).ok();
+                    sender.output(SettingsOutput::Locale(locale)).ok();
                 }
             }
             SettingsPanelInput::LaunchToolChanged(tool, enabled) => {
@@ -470,7 +490,7 @@ impl SimpleComponent for SettingsPanel {
                 if available && *current != enabled {
                     *current = enabled;
                     sender
-                        .output(SettingsOutput::LaunchToolChanged(tool, enabled))
+                        .output(SettingsOutput::LaunchTool(tool, enabled))
                         .ok();
                 }
             }
@@ -478,19 +498,23 @@ impl SimpleComponent for SettingsPanel {
                 self.gamemode_available = LaunchTool::GameMode.is_installed();
                 self.mangohud_available = LaunchTool::MangoHud.is_installed();
             }
+            SettingsPanelInput::HsReplaySyncChanged(enabled) => {
+                if self.config.hsreplay_sync != enabled {
+                    self.config.hsreplay_sync = enabled;
+                    sender.output(SettingsOutput::HsReplaySync(enabled)).ok();
+                }
+            }
             SettingsPanelInput::CommerceBridgeChanged(enabled) => {
                 if self.config.commerce_bridge != enabled {
                     self.config.commerce_bridge = enabled;
-                    sender
-                        .output(SettingsOutput::CommerceBridgeChanged(enabled))
-                        .ok();
+                    sender.output(SettingsOutput::CommerceBridge(enabled)).ok();
                 }
             }
             SettingsPanelInput::DiscreteGpuChanged(use_discrete_gpu) => {
                 if self.config.use_discrete_gpu != use_discrete_gpu {
                     self.config.use_discrete_gpu = use_discrete_gpu;
                     sender
-                        .output(SettingsOutput::DiscreteGpuChanged(use_discrete_gpu))
+                        .output(SettingsOutput::DiscreteGpu(use_discrete_gpu))
                         .ok();
                 }
             }

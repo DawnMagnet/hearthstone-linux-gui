@@ -214,6 +214,37 @@ Weder in diesem Repository noch in den Launcher-Paketen liegen proprietäre
 Hearthstone-Dateien. Die Anwendung holt die offiziellen Dateien während der
 Installation von den Verteilservern des Herstellers.
 
+## HSReplay-Sammlungsupload (optional)
+
+Standardmäßig aus. Wenn **Sammlung nach dem Start hochladen** in den
+Einstellungen aktiviert ist (oder `hsreplay_sync = true` in der
+Konfigurationsdatei), liest der Launcher die Kartensammlung aus dem laufenden
+Spiel und lädt sie zu [HSReplay.net](https://hsreplay.net) hoch, so wie es
+Hearthstone Deck Tracker unter Windows tut.
+
+- **Was an HSReplay.net gesendet wird**: deine Blizzard-Konto-ID (hi/lo) und
+  dein BattleTag (zur Verknüpfung des Kontos), deine Kartensammlung und dein
+  Arkanstaub-Stand, wenn er eindeutig gelesen werden konnte. Sonst wird nichts
+  gelesen oder gesendet.
+- **Anmeldung**: Beim ersten Mal öffnet sich ein Browser für die OAuth-
+  Anmeldung bei HSReplay. Das Token liegt im Konfigurationsverzeichnis des
+  Launchers (`hsreplay-token.json`, Modus 0600). Lösche die Datei, um dich
+  abzumelden.
+- **Wie das Spiel gelesen wird**: über `/proc/<pid>/mem`, ohne in das Spiel zu
+  schreiben oder Code einzuschleusen. Dafür ist ptrace-Zugriff nötig, der nur
+  mit `kernel.yama.ptrace_scope` `0` oder `1` und nur für ein von diesem
+  Launcher gestartetes Spiel (direkt oder über Wrapper wie `gamemoderun`)
+  möglich ist. Bei `2` oder `3` schlägt der Upload mit einem
+  Berechtigungsfehler fehl.
+- **Best effort**: Das Speicherlayout ist im Code fest eingetragen (Unity
+  6000.3 auf x86_64 Linux) und wird zur Laufzeit nicht ermittelt. Nach einem
+  Spiel-Update kann der Upload fehlschlagen, bis der Launcher aktualisiert
+  wurde.
+- **Nutzungsbedingungen**: Das Lesen des Speichers eines anderen Programms ist
+  eine Grauzone in Blizzards Nutzungsbedingungen. Das Projekt ist inoffiziell
+  und der Upload ist optional; entscheide selbst, ob du ihn verwendest, auf
+  eigenes Risiko.
+
 ## Stand und Einschränkungen
 
 - Zielarchitektur: **x86_64 Linux**.
@@ -265,6 +296,30 @@ Ein gültiges Token besteht aus einem zweistelligen Regionspräfix, einem
 Bindestrich, 32 alphanumerischen Zeichen, einem Bindestrich und deiner
 numerischen Konto-ID. Lehnt der Befehl den Wert weiterhin ab, prüfe, ob das
 Regionspräfix beim Kopieren verloren gegangen ist.
+
+
+#### Optionales Anmeldefenster
+
+Blizzard liefert die Hearthstone-Anmeldeseite für den Browser im Spiel aus;
+in einem normalen Browser ist ihr Text deshalb schwer lesbar. Ist das separate
+Programm `hearthstone-linux-gui-login` installiert, zeigt **Anmelden** die
+Seite stattdessen in einem eigenen dunklen Fenster und übergibt das Token
+direkt. Das Fenster hat immer einen Knopf **Im Browser öffnen**, für die
+Anmeldung über Google oder Apple, Passwortmanager und Sicherheitsschlüssel;
+fehlt das Programm oder scheitert es, wird wie bisher der Browser benutzt.
+
+Es liegt in `login-helper/`, hat eine eigene Lock-Datei und braucht
+WebKitGTK 6; der Launcher und seine Pakete hängen nie davon ab. Die
+Release-Pakete (AppImage, `.deb`, `.rpm`) und das Flatpak enthalten das
+Anmeldefenster **nicht**; es wird separat gebaut und installiert, und ohne
+es nutzt **Anmelden** einfach deinen Browser. Der Launcher sucht es neben
+seiner eigenen ausführbaren Datei und dann im `PATH`; für Entwicklungs-Builds
+lässt sich der Pfad mit `HEARTHSTONE_LINUX_LOGIN_WINDOW` überschreiben.
+
+```sh
+cargo build --release --locked --manifest-path login-helper/Cargo.toml
+install -Dm755 login-helper/target/release/hearthstone-linux-gui-login ~/.local/bin/
+```
 
 ### Zertifikatsfehler auf Rolling-Release-Distributionen
 

@@ -29,9 +29,12 @@ default-members = [
     "crates/stubs/osx-window-management",
 ]
 resolver = "2"
+# The optional login window has its own workspace and lock file, so nothing
+# here depends on WebKitGTK.
+exclude = ["login-helper"]
 
 [workspace.package]
-version = "0.3.0"
+version = "0.3.1"
 
 [features]
 default = ["gui"]
@@ -40,6 +43,7 @@ gui = ["dep:relm4", "dep:relm4-components"]
 [dependencies]
 aes = "0.8"
 anyhow = "1"
+base64 = "0.22"
 bitvec = "1"
 cbc = { version = "0.1", features = ["alloc"] }
 clap = { version = "4", features = ["derive"] }
@@ -52,6 +56,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha1 = "0.10"
+sha2 = "0.10"
 strum = { version = "0.27", features = ["derive"] }
 tar = "0.4"
 tokio = { version = "1", features = ["fs", "io-util", "macros", "process", "rt-multi-thread", "sync", "time"] }

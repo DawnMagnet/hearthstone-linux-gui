@@ -6,14 +6,8 @@
 //! `host_env` can restore it for child processes.
 
 use std::{
-    collections::HashMap,
-    fs,
-    io::Write,
-    os::unix::fs::PermissionsExt,
-    path::Path,
-    process::Command,
-    thread,
-    time::Duration,
+    collections::HashMap, fs, io::Write, os::unix::fs::PermissionsExt, path::Path,
+    process::Command, thread, time::Duration,
 };
 
 use hearthstone_linux::host_env::OVERRIDDEN_VARS;

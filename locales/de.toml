@@ -45,6 +45,8 @@ discrete_gpu_tooltip = "Mit den Umgebungsvariablen für PRIME/DRI-GPU-Offload st
 performance = "Leistung"
 gamemode_tooltip = "Das Spiel über Feral GameMode starten (gamemoderun)"
 mangohud_tooltip = "Das MangoHud-Overlay mit Bildrate und Systemlast einblenden"
+hsreplay_sync = "Sammlung nach dem Start hochladen"
+hsreplay_sync_tooltip = "Liest Kartensammlung, Arkanstaub, Blizzard-Konto-ID und BattleTag aus dem Speicher des laufenden Spiels und lädt sie zu HSReplay.net hoch. Beim ersten Mal öffnet sich ein Browser zur Anmeldung bei HSReplay. Benötigt ptrace-Zugriff auf das Spiel (kernel.yama.ptrace_scope 0 oder 1) und funktioniert nach bestem Bemühen: Nach einem Spiel-Update kann es aufhören zu funktionieren. Siehe README."
 shop = "Shop"
 commerce_bridge = "Shop und Gold über Wine (experimentell)"
 commerce_bridge_tooltip = "Zeigt dein Gold und öffnet den Shop im Spiel, indem Blizzards offizielle Windows-Commerce-Bibliothek unter Wine läuft. Benötigt Wine. Vorerst nur lesend: Käufe sind gesperrt. Werkzeuge von Drittanbietern wie dieses sind laut Blizzards Bedingungen eine Grauzone; Nutzung auf eigenes Risiko."
@@ -126,7 +128,14 @@ handler_failed = "Der Anmelde-Handler konnte nicht registriert werden; die Brows
 opening = "Browser wird für die Anmeldung geöffnet …"
 waiting = "Schließe die Anmeldung im Browser ab; es wird auf die Rückmeldung gewartet"
 no_browser = "Es konnte kein Browser geöffnet werden. Kopiere die Anmelde-URL unten in deinen Browser"
+window_open = "Melde dich im Anmeldefenster bei Battle.net an"
+window_failed = "Das Anmeldefenster ließ sich nicht öffnen; stattdessen wird der Browser geöffnet"
 complete = "Anmeldung abgeschlossen"
+
+[login_window]
+title = "Battle.net-Anmeldung"
+open_browser = "Im Browser öffnen"
+open_browser_tooltip = "Im Systembrowser fortfahren, etwa für die Anmeldung über Google oder Apple, einen Passwortmanager oder einen Sicherheitsschlüssel"
 
 [game]
 stopping = "Spiel wird beendet"
@@ -134,6 +143,9 @@ stop_failed = "Spiel konnte nicht beendet werden: {error}"
 running = "Spiel läuft"
 launch_failed = "Start fehlgeschlagen: {error}"
 exited_toast = "Spiel wurde unerwartet beendet"
+hsreplay_synced = "Sammlung zu HSReplay hochgeladen: {cards} Karten, {dust} Staub"
+hsreplay_synced_no_dust = "Sammlung zu HSReplay hochgeladen: {cards} Karten (Staub konnte nicht gelesen werden)"
+hsreplay_failed = "HSReplay-Upload fehlgeschlagen: {error}"
 stopped = "Spiel beendet"
 status_error = "Fehler beim Abfragen des Spielstatus: {error}"
 exited = "Spiel nach {seconds} s beendet ({status})"

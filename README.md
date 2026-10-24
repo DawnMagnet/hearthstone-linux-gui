@@ -284,6 +284,32 @@ No proprietary Hearthstone files are stored in this repository or shipped in
 the launcher packages. The application retrieves official files from their
 upstream distribution endpoints during installation.
 
+## HSReplay Collection Upload (Optional)
+
+Off by default. When **Upload my collection after launch** is enabled in the
+settings (or `hsreplay_sync = true` in the config file), the launcher reads
+the card collection from the running game and uploads it to
+[HSReplay.net](https://hsreplay.net), as Hearthstone Deck Tracker does on
+Windows.
+
+- **What is sent** to HSReplay.net: your Blizzard account id (hi/lo) and
+  BattleTag (to link the account), your card collection, and your arcane dust
+  balance when it could be read unambiguously. Nothing else is read or sent.
+- **Login**: the first time, a browser opens for HSReplay's OAuth login. The
+  token is stored in the launcher's config directory (`hsreplay-token.json`,
+  mode 0600). Delete that file to log out.
+- **How it reads the game**: through `/proc/<pid>/mem`, without writing to or
+  injecting into the game. That needs ptrace access, which is only available
+  with `kernel.yama.ptrace_scope` set to `0` or `1`, and only for a game
+  started by this launcher (directly or through wrappers such as
+  `gamemoderun`). With `2` or `3` the upload fails with a permission error.
+- **Best effort**: the memory layout is fixed in the code (Unity 6000.3 on
+  x86_64 Linux) and is not discovered at run time. After a game update that
+  changes it, the upload may fail until the launcher is updated.
+- **Terms of service**: reading another program's memory is a grey area under
+  Blizzard's terms. The project is unofficial and the upload is opt-in; decide
+  for yourself whether to use it, at your own risk.
+
 ## Status And Limitations
 
 - Target architecture: **x86_64 Linux**.
@@ -330,6 +356,30 @@ callback fix. You can finish the login manually:
 A valid token is a two-character region prefix, a dash, 32 alphanumeric
 characters, a dash, and your numeric account id. If the command still rejects
 the value, check that the region prefix was not stripped while copying.
+
+
+#### Optional login window
+
+Blizzard serves the Hearthstone login page for the game's built-in browser, so
+in a regular browser its text is hard to read. If the separate program
+`hearthstone-linux-gui-login` is installed, **Login** shows the page in its own
+dark window instead and hands the token back directly. The window always has an
+**Open in browser** button, for Google or Apple sign-in, password managers and
+security keys; if the program is missing or fails, the browser is used as
+before.
+
+It lives in `login-helper/`, has its own lock file and needs WebKitGTK 6, so the
+launcher and its packages never depend on it. The release packages (AppImage,
+`.deb`, `.rpm`) and the Flatpak do **not** include the login window; it is
+built and installed separately, and without it **Login** simply uses your
+browser. The launcher looks for it next to its own executable and then on
+`PATH`; development builds can set `HEARTHSTONE_LINUX_LOGIN_WINDOW` to another
+path.
+
+```sh
+cargo build --release --locked --manifest-path login-helper/Cargo.toml
+install -Dm755 login-helper/target/release/hearthstone-linux-gui-login ~/.local/bin/
+```
 
 ### Certificate failures on rolling distros
 

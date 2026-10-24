@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## v0.3.1 - 2026-10-24
+
+### Added
+
+- Optional login window: when the separate program `hearthstone-linux-gui-login`
+  (`login-helper/`, needs WebKitGTK 6) is installed, **Login** shows Blizzard's
+  login page in its own dark window and hands the token back directly. It
+  always offers **Open in browser**, and the browser flow is used whenever the
+  program is missing, fails or the user asks for it. The launcher and its
+  packages do not depend on WebKitGTK; a CI job builds the program.
+- After the game starts, the launcher can upload the collection to
+  HSReplay.net (#44).
+
 ### Changed
 
 - **Animated logo.** The window shows a 10-second looping 3D animation of
@@ -19,6 +32,12 @@
 
 ### Fixed
 
+- VSync off now also takes effect when the game keeps requesting it: with
+  `vsync=0` in `options.txt` the launcher sets `vblank_mode=0`,
+  `__GL_SYNC_TO_VBLANK=0` and `MESA_VK_WSI_PRESENT_MODE=immediate` for the
+  game. Variables already set in the environment are left untouched, and a
+  missing or unreadable `options.txt` changes nothing.
+- The game window now shows the launcher icon (#45).
 - The download status no longer flickers while Hearthstone installs. The
   speed used to drop out of the line every time a file finished, so the text
   kept changing its length and wrapping point, and the whole column changed

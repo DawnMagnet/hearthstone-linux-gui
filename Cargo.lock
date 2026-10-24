@@ -868,10 +868,11 @@ checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 
 [[package]]
 name = "hearthstone-linux-gui"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "aes",
  "anyhow",
+ "base64",
  "bitvec",
  "cbc",
  "clap",
@@ -886,6 +887,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha1",
+ "sha2",
  "strum",
  "tar",
  "tempfile",
@@ -902,7 +904,7 @@ dependencies = [
 
 [[package]]
 name = "hearthstone-linux-gui-blz-commerce-sdk-plugin-stub"
-version = "0.3.0"
+version = "0.3.1"
 
 [[package]]
 name = "hearthstone-linux-gui-commerce-bridge"
@@ -910,19 +912,19 @@ version = "0.3.0"
 
 [[package]]
 name = "hearthstone-linux-gui-commerce-http-client-stub"
-version = "0.3.0"
+version = "0.3.1"
 
 [[package]]
 name = "hearthstone-linux-gui-core-foundation-stub"
-version = "0.3.0"
+version = "0.3.1"
 
 [[package]]
 name = "hearthstone-linux-gui-native-api-mac-stub"
-version = "0.3.0"
+version = "0.3.1"
 
 [[package]]
 name = "hearthstone-linux-gui-osx-window-management-stub"
-version = "0.3.0"
+version = "0.3.1"
 
 [[package]]
 name = "heck"
@@ -1908,6 +1910,17 @@ name = "sha1"
 version = "0.10.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3bf829a2d51ab4a5ddf1352d8470c140cadc8301b2ae1789db023f01cedd6ba"
+dependencies = [
+ "cfg-if",
+ "cpufeatures",
+ "digest",
+]
+
+[[package]]
+name = "sha2"
+version = "0.10.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7507d819769d01a365ab707794a4084392c824f54a7a6a7862f8c3d0892b283"
 dependencies = [
  "cfg-if",
  "cpufeatures",
