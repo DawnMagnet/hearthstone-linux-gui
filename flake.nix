@@ -130,24 +130,34 @@
           wrapGAppsHook4
         ];
 
-        buildInputs = with pkgs; [
-          cairo
-          dbus.lib
-          gdk-pixbuf
-          glib
-          graphene
-          gtk4
-          libadwaita
-          libglvnd
-          libxcursor
-          libxi
-          libxinerama
-          libxrandr
-          libxscrnsaver
-          libxxf86vm
-          mesa
-          pango
-        ];
+        buildInputs =
+          with pkgs;
+          [
+            cairo
+            dbus.lib
+            gdk-pixbuf
+            glib
+            graphene
+            gtk4
+            libadwaita
+            libglvnd
+            libxcursor
+            libxi
+            libxinerama
+            libxrandr
+            libxscrnsaver
+            libxxf86vm
+            mesa
+            pango
+          ]
+          ++ (with pkgs.gst_all_1; [
+            gstreamer
+            gst-plugins-base
+            gst-plugins-good
+            gst-plugins-bad
+            gst-plugins-ugly
+            gst-libav
+          ]);
 
         hearthstonePackage = pkgs.rustPlatform.buildRustPackage {
           inherit pname;
