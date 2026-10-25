@@ -46,7 +46,7 @@ impl Entry {
 }
 
 /// All shipped languages; the base catalog comes first.
-static CATALOGS: [Entry; 3] = [
+static CATALOGS: [Entry; 4] = [
     Entry::new(
         BASE_CODE,
         include_str!("../locales/en.toml"),
@@ -56,6 +56,11 @@ static CATALOGS: [Entry; 3] = [
         "de",
         include_str!("../locales/de.toml"),
         include_bytes!("../locales/flags/de.png"),
+    ),
+    Entry::new(
+        "fr",
+        include_str!("../locales/fr.toml"),
+        include_bytes!("../locales/flags/fr.png"),
     ),
     Entry::new(
         "zh-CN",
@@ -345,7 +350,9 @@ mod tests {
         assert_eq!(match_code("zh-cn"), Some("zh-CN"));
         assert_eq!(match_code("en_GB"), Some("en"));
         assert_eq!(match_code("C.UTF-8"), Some("en"));
-        assert_eq!(match_code("fr_FR.UTF-8"), None);
+        assert_eq!(match_code("fr_FR.UTF-8"), Some("fr"));
+        assert_eq!(match_code("fr_CA"), Some("fr"));
+        assert_eq!(match_code("ja_JP.UTF-8"), None);
         assert_eq!(match_code(""), None);
     }
 

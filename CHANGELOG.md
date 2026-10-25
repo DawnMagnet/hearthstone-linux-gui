@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- French interface translation (`locales/fr.toml`).
+
 ## v0.3.1 - 2026-10-24
 
 ### Added

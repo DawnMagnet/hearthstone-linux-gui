@@ -57,7 +57,7 @@ to distribute and maintain.
 
 - **One-click desktop experience**: install, update, login, and launch from a
   GTK4 window.
-- **Translated interface**: English, German and Simplified Chinese; the
+- **Translated interface**: English, German, French and Simplified Chinese; the
   launcher follows your system language and can be switched in the gear menu
   at the top right.
 - **GameMode and MangoHud**: optional switches start the game through

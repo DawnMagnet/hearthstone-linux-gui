@@ -262,8 +262,8 @@ fn read_dust(mem: &Mem, class: u64) -> Result<Option<u64>> {
         while chunk_start < end {
             let len = CHUNK.min(end - chunk_start);
             if let Ok(chunk) = mem.read(chunk_start, len as usize) {
-                for (index, word) in chunk.chunks_exact(8).enumerate() {
-                    if u64::from_le_bytes(word.try_into().unwrap()) != vtable {
+                for (index, word) in chunk.as_chunks::<8>().0.iter().enumerate() {
+                    if u64::from_le_bytes(*word) != vtable {
                         continue;
                     }
                     let object = chunk_start + 8 * index as u64;
@@ -522,8 +522,10 @@ impl Mem {
         ensure!(len < 1 << 16, "bad string length {len}");
         let bytes = self.read(object + 0x14, 2 * len)?;
         let units: Vec<u16> = bytes
-            .chunks_exact(2)
-            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| u16::from_le_bytes(*pair))
             .collect();
         Ok(String::from_utf16_lossy(&units))
     }

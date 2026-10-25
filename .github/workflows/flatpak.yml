@@ -24,6 +24,11 @@ on:
         type: string
         required: false
         default: ""
+      ref:
+        description: Commit to check out. release.yml passes the commit whose cargoHash was just verified. Empty checks out the triggering commit.
+        type: string
+        required: false
+        default: ""
     outputs:
       bundle:
         description: Flatpak bundle file name
@@ -54,6 +59,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
+          ref: ${{ inputs.ref || github.sha }}
           submodules: recursive
 
       - name: Prepare names

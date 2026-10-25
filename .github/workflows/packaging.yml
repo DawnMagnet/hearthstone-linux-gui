@@ -26,6 +26,8 @@ on:
       - .envrc
       - .github/workflows/flatpak.yml
       - .github/workflows/release.yml
+      - .github/workflows/cargo-hash.yml
+      - .github/scripts/**
   workflow_dispatch:
     inputs:
       full:
@@ -38,6 +40,11 @@ on:
         description: Smoke test the full distribution matrix instead of three images.
         type: boolean
         default: false
+      ref:
+        description: Commit to check out. release.yml passes the commit whose cargoHash was just verified. Empty checks out the triggering commit.
+        type: string
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -53,6 +60,8 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref || github.sha }}
 
       - uses: docker/setup-buildx-action@v3
 
@@ -112,6 +121,7 @@ jobs:
 
       - uses: actions/checkout@v6
         with:
+          ref: ${{ inputs.ref || github.sha }}
           sparse-checkout: packaging/linux
 
       - uses: actions/download-artifact@v4
