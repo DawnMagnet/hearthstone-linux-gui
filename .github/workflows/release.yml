@@ -4,9 +4,15 @@ name: Release
 # pushes to master run the quick packaging.yml build, so none of them overlap
 # with a release (each has its own concurrency group).
 #
-#   packages  packaging.yml, full distribution matrix  -+
-#   flatpak   flatpak.yml                               +-> publish
-#   validate  tag matches the Cargo.toml version       -+
+#   cargo-hash  flake.nix cargoHash, move the v* tag when it changes
+#   packages    packaging.yml, full distribution matrix  -+
+#   flatpak     flatpak.yml                               +-> publish
+#   validate    tag matches the Cargo.toml version       -+
+#
+# cargo-hash finishes before packages and flatpak. Those jobs check out the
+# commit it reports, so neither build starts until that ref's cargoHash
+# matches Cargo.lock. validate only compares the tag to Cargo.toml, so it
+# stays parallel with the hash job.
 #
 # The builds run in parallel and only upload workflow artifacts. `publish` is
 # the single job that touches the GitHub release. A manual run builds
@@ -26,6 +32,12 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  cargo-hash:
+    name: Cargo hash
+    permissions:
+      contents: write
+    uses: ./.github/workflows/cargo-hash.yml
+
   validate:
     name: Validate tag
     if: startsWith(github.ref, 'refs/tags/v')
@@ -46,19 +58,23 @@ jobs:
 
   packages:
     name: Packages
+    needs: cargo-hash
     uses: ./.github/workflows/packaging.yml
     with:
       full: true
+      ref: ${{ needs.cargo-hash.outputs.sha }}
 
   flatpak:
     name: Flatpak
+    needs: cargo-hash
     uses: ./.github/workflows/flatpak.yml
     with:
       release_tag: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
+      ref: ${{ needs.cargo-hash.outputs.sha }}
 
   publish:
     name: Publish release
-    needs: [validate, packages, flatpak]
+    needs: [validate, cargo-hash, packages, flatpak]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     env:
@@ -67,6 +83,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.cargo-hash.outputs.sha }}
 
       - name: Download AppImage and native packages
         uses: actions/download-artifact@v4
