@@ -4,7 +4,11 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
-    rust-overlay.url = "github:oxalica/rust-overlay";
+    rust-overlay = {
+      url = "github:oxalica/rust-overlay";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    crane.url = "github:ipetkov/crane";
   };
 
   outputs =
@@ -13,6 +17,7 @@
       nixpkgs,
       flake-utils,
       rust-overlay,
+      crane,
     }:
     flake-utils.lib.eachSystem [ "x86_64-linux" ] (
       system:
@@ -34,6 +39,8 @@
             "clippy"
           ];
         };
+
+        craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
 
         rustSource = pkgs.lib.cleanSourceWith {
           src = ./.;
@@ -126,7 +133,6 @@
           gtk4
           libadwaita
           pkg-config
-          rustToolchain
           wrapGAppsHook4
         ];
 
@@ -159,54 +165,66 @@
             gst-libav
           ]);
 
-        hearthstonePackage = pkgs.rustPlatform.buildRustPackage {
+        commonArgs = {
           inherit pname;
           version = packageVersion;
           src = rustSource;
-          cargoHash = "sha256-eAaao+Tm5jP5/NkOUEKU7d+HWkqj+w570Uh8rdSdM3g=";
+          strictDeps = true;
+
           inherit nativeBuildInputs buildInputs;
-          cargoBuildFlags = [ "--workspace" ];
-          cargoTestFlags = [ "--workspace" ];
-
-          preFixup = ''
-            gappsWrapperArgs+=(
-              --set-default HEARTHSTONE_LINUX_RUNNER "${hearthstoneRuntime}/bin/hearthstone-linux-gui-runtime"
-            )
-          '';
-
-          postInstall = ''
-            target_dir="target/${pkgs.stdenv.hostPlatform.config}/release"
-            if [ ! -d "$target_dir" ]; then
-              target_dir="target/release"
-            fi
-
-            install -Dm644 data/${desktopFile} \
-              $out/share/applications/${desktopFile}
-            install -Dm644 data/${appId}.metainfo.xml \
-              $out/share/metainfo/${appId}.metainfo.xml
-            install -Dm644 ${./data/icons/io.github.hearthstone_linux_gui.svg} \
-              $out/share/icons/hicolor/scalable/apps/${iconFile}
-            install -Dm644 assets/client.config.in \
-              $out/share/hearthstone-linux-gui/client.config.in
-            install -Dm755 "$target_dir/libCoreFoundation.so" \
-              $out/share/hearthstone-linux-gui/stubs/CoreFoundation.so
-            install -Dm755 "$target_dir/libOSXWindowManagement.so" \
-              $out/share/hearthstone-linux-gui/stubs/libOSXWindowManagement.so
-            install -Dm755 "$target_dir/libblz_commerce_sdk_plugin.so" \
-              $out/share/hearthstone-linux-gui/stubs/libblz_commerce_sdk_plugin.so
-            install -Dm755 "$target_dir/libcommerce_http_client.so" \
-              $out/share/hearthstone-linux-gui/stubs/libcommerce_http_client.so
-            install -Dm755 "$target_dir/libNativeApiMac.so" \
-              $out/share/hearthstone-linux-gui/stubs/libNativeApiMac.so
-          '';
+          cargoExtraArgs = "--workspace";
         };
+
+        cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+        hearthstonePackage = craneLib.buildPackage (
+          commonArgs
+          // {
+            inherit cargoArtifacts;
+
+            preFixup = ''
+              gappsWrapperArgs+=(
+                --set-default HEARTHSTONE_LINUX_RUNNER "${hearthstoneRuntime}/bin/hearthstone-linux-gui-runtime"
+              )
+            '';
+
+            postInstall = ''
+              target_dir="target/${pkgs.stdenv.hostPlatform.config}/release"
+              if [ ! -d "$target_dir" ]; then
+                target_dir="target/release"
+              fi
+
+              install -Dm644 data/${desktopFile} \
+                $out/share/applications/${desktopFile}
+              install -Dm644 data/${appId}.metainfo.xml \
+                $out/share/metainfo/${appId}.metainfo.xml
+              install -Dm644 ${./data/icons/io.github.hearthstone_linux_gui.svg} \
+                $out/share/icons/hicolor/scalable/apps/${iconFile}
+              install -Dm644 assets/client.config.in \
+                $out/share/hearthstone-linux-gui/client.config.in
+              install -Dm755 "$target_dir/libCoreFoundation.so" \
+                $out/share/hearthstone-linux-gui/stubs/CoreFoundation.so
+              install -Dm755 "$target_dir/libOSXWindowManagement.so" \
+                $out/share/hearthstone-linux-gui/stubs/libOSXWindowManagement.so
+              install -Dm755 "$target_dir/libblz_commerce_sdk_plugin.so" \
+                $out/share/hearthstone-linux-gui/stubs/libblz_commerce_sdk_plugin.so
+              install -Dm755 "$target_dir/libcommerce_http_client.so" \
+                $out/share/hearthstone-linux-gui/stubs/libcommerce_http_client.so
+              install -Dm755 "$target_dir/libNativeApiMac.so" \
+                $out/share/hearthstone-linux-gui/stubs/libNativeApiMac.so
+            '';
+          }
+        );
       in
       {
         packages.default = hearthstonePackage;
         packages.runtime = hearthstoneRuntime;
 
-        devShells.default = pkgs.mkShell {
-          inherit nativeBuildInputs buildInputs;
+        checks = {
+          inherit hearthstonePackage;
+        };
+
+        devShells.default = craneLib.devShell {
+          checks = self.checks.${system};
           packages = with pkgs; [
             appimage-run
             hearthstoneRuntime
