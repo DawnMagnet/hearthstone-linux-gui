@@ -67,6 +67,64 @@ pub fn write_client_config(
     Ok(())
 }
 
+const COMMERCE_SDK_LIBRARY: &str = "Bin/Hearthstone_Data/Plugins/libblz_commerce_sdk_plugin.so";
+const COMMERCE_HTTP_LIBRARIES: &[&str] = &[
+    "Bin/Hearthstone_Data/Plugins/libcommerce_http_client.so",
+    "Bin/Hearthstone_Data/MonoBleedingEdge/x86_64/libcommerce_http_client.so",
+];
+
+/// Installs the commerce bridge library in place of the two commerce stubs,
+/// or puts the stubs back. The HTTP client is a symlink to the bridge, so
+/// the game loads one library and starts one helper.
+pub fn select_commerce_libraries(game_dir: &Path, bridge: Option<&Path>) -> Result<()> {
+    let sdk = game_dir.join(COMMERCE_SDK_LIBRARY);
+    let Some(bridge) = bridge else {
+        if !game_dir.join(COMMERCE_HTTP_LIBRARIES[0]).is_symlink() {
+            return Ok(()); // the stubs are in place
+        }
+        info!("restoring the commerce stubs");
+        for stub in stub_files()? {
+            if stub.spec.installed_name.contains("commerce") {
+                for target in stub.spec.targets {
+                    copy_required(&stub.source, &game_dir.join(target))?;
+                }
+            }
+        }
+        return Ok(());
+    };
+    info!(bridge = %bridge.display(), "installing the commerce bridge");
+    copy_required(bridge, &sdk)?;
+    for http in COMMERCE_HTTP_LIBRARIES {
+        let path = game_dir.join(http);
+        if path.symlink_metadata().is_ok() {
+            std::fs::remove_file(&path)?;
+        }
+        std::os::unix::fs::symlink(&sdk, &path)?;
+    }
+    Ok(())
+}
+
+/// A file shipped next to the stub libraries, such as the commerce bridge.
+pub fn stub_resource(name: &str) -> Option<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(path) = std::env::var_os("HEARTHSTONE_LINUX_STUBS") {
+        dirs.push(PathBuf::from(path));
+    }
+    if let Ok(resources) = resource_dir() {
+        dirs.push(resources.join("stubs"));
+    }
+    if let Some(profile_dir) = std::env::current_exe()
+        .ok()
+        .and_then(|exe| Some(exe.parent()?.to_path_buf()))
+    {
+        dirs.push(profile_dir.join("deps"));
+        dirs.push(profile_dir);
+    }
+    dirs.into_iter()
+        .map(|dir| dir.join(name))
+        .find(|path| path.exists())
+}
+
 pub fn install_compatibility_files(
     game_dir: &Path,
     region: Region,

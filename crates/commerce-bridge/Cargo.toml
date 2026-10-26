@@ -1,0 +1,10 @@
+[package]
+name = "hearthstone-linux-gui-commerce-bridge"
+version.workspace = true
+edition = "2021"
+license = "MIT"
+description = "Opt-in bridge from the Linux game to Blizzard's Windows commerce SDK under Wine"
+
+[lib]
+name = "commerce_bridge"
+crate-type = ["cdylib", "rlib"]

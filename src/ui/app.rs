@@ -453,6 +453,7 @@ impl MainWindow {
                 LaunchTool::MangoHud => self.config.use_mangohud = enabled,
             },
             SettingsOutput::HsReplaySync(enabled) => self.config.hsreplay_sync = enabled,
+            SettingsOutput::CommerceBridge(enabled) => self.config.commerce_bridge = enabled,
         }
         self.save_settings();
         self.refresh_details();
