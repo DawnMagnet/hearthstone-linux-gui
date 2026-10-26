@@ -1,10 +1,37 @@
 # Changelog
 
-## Unreleased
+## v0.3.2 - 2026-10-26
 
 ### Added
 
-- French interface translation (`locales/fr.toml`).
+- French interface translation (`locales/fr.toml`). A `fr_*` system locale
+  selects it automatically, and it can also be chosen from the gear menu
+  (#47).
+
+### Changed
+
+- Nix packaging uses Crane. Dependency builds are cached apart from the
+  application source, `cargoHash` is no longer maintained by hand, and the
+  runtime closure dropped from about 4.1 GB to about 2.2 GB because the Rust
+  toolchain no longer leaks into it (#54).
+
+### Fixed
+
+- On NixOS the launcher no longer crashes at startup with
+  `GstPlay: playbin3 element not found`. The Nix package includes the
+  GStreamer plugins, and `wrapGAppsHook4` sets `GST_PLUGIN_SYSTEM_PATH_1_0`
+  (#53).
+
+### Maintenance
+
+- `cargoHash` and the release job that recomputed it are gone. Crane reads
+  `Cargo.lock` directly, so a `v*` tag no longer rewrites `flake.nix`
+  (#50, #51, #55).
+- The HSReplay memory reader uses `as_chunks` instead of `chunks_exact` plus
+  `try_into().unwrap()`, which clears the `chunks_exact_to_as_chunks` clippy
+  lint (#48).
+- `docs/commerce-spec.md` records the observed commerce SDK surface (init,
+  balance, catalog) from a clean-room capture (#49).
 
 ## v0.3.1 - 2026-10-24
 
