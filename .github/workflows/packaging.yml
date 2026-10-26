@@ -26,8 +26,6 @@ on:
       - .envrc
       - .github/workflows/flatpak.yml
       - .github/workflows/release.yml
-      - .github/workflows/cargo-hash.yml
-      - .github/scripts/**
   workflow_dispatch:
     inputs:
       full:
@@ -41,7 +39,7 @@ on:
         type: boolean
         default: false
       ref:
-        description: Commit to check out. release.yml passes the commit whose cargoHash was just verified. Empty checks out the triggering commit.
+        description: Commit to check out. release.yml passes github.sha. Empty checks out the triggering commit.
         type: string
         required: false
         default: ""
