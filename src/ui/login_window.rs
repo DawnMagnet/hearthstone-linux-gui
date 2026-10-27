@@ -48,21 +48,14 @@ pub enum Outcome {
 /// first, then on the host `PATH`.
 pub fn find() -> Option<PathBuf> {
     if let Some(path) = std::env::var_os(PROGRAM_ENV) {
-        return executable(Path::new(&path));
+        return host_env::executable_file(Path::new(&path));
     }
     let beside = std::env::current_exe()
         .ok()
         .and_then(|exe| exe.parent().map(|dir| dir.join(PROGRAM)));
-    beside.and_then(|path| executable(&path)).or_else(|| {
-        std::env::split_paths(&host_env::host_var("PATH")?)
-            .find_map(|dir| executable(&dir.join(PROGRAM)))
-    })
-}
-
-fn executable(path: &Path) -> Option<PathBuf> {
-    use std::os::unix::fs::PermissionsExt;
-    let metadata = path.metadata().ok()?;
-    (metadata.is_file() && metadata.permissions().mode() & 0o111 != 0).then(|| path.to_path_buf())
+    beside
+        .and_then(|path| host_env::executable_file(&path))
+        .or_else(|| host_env::find_in_path(PROGRAM))
 }
 
 /// Shows the login window for `url` and waits for it. Cancelling `cancel`

@@ -536,16 +536,7 @@ fn print_interpreter(candidates: &[PathBuf], exe: &Path) -> Option<String> {
 /// Looks `command` up in the host `PATH`, so the AppImage's own `usr/bin`
 /// is not mistaken for a system installation.
 fn find_in_path(command: &str) -> Option<PathBuf> {
-    env::split_paths(&host_env::host_var("PATH")?)
-        .find_map(|dir| executable_file(&dir.join(command)))
-}
-
-/// `path` itself when it is a regular file that can be executed.
-fn executable_file(path: &Path) -> Option<PathBuf> {
-    use std::os::unix::fs::PermissionsExt;
-
-    let metadata = path.metadata().ok()?;
-    (metadata.is_file() && metadata.permissions().mode() & 0o111 != 0).then(|| path.to_path_buf())
+    host_env::find_in_path(command)
 }
 
 /// Whether the game's `options.txt` switches VSync off (`vsync=0`).
@@ -792,7 +783,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let tool = dir.path().join("tool");
         std::fs::write(&tool, "#!/bin/sh\n").unwrap();
-        let find = |name: &str| super::executable_file(&dir.path().join(name));
+        let find = |name: &str| crate::host_env::executable_file(&dir.path().join(name));
         assert_eq!(find("tool"), None, "not executable yet");
         std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
         assert_eq!(find("tool"), Some(tool));

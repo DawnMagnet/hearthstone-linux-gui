@@ -24,6 +24,15 @@ impl Bindings {
     }
 }
 
+/// Drops `bindings` together with `widget`, which unregisters its closures.
+pub fn retain(widget: &impl IsA<Widget>, bindings: Bindings) {
+    // The handler lives on the widget, so the bindings do too.
+    let bindings = std::rc::Rc::new(bindings);
+    widget.as_ref().connect_destroy(move |_| {
+        let _keep = &bindings;
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::Bindings;
@@ -73,13 +82,4 @@ mod tests {
         // Cargo's test arguments must not be parsed as application arguments.
         app.run_with_args::<&str>(&[]);
     }
-}
-
-/// Drops `bindings` together with `widget`, which unregisters its closures.
-pub fn retain(widget: &impl IsA<Widget>, bindings: Bindings) {
-    // The handler lives on the widget, so the bindings do too.
-    let bindings = std::rc::Rc::new(bindings);
-    widget.as_ref().connect_destroy(move |_| {
-        let _keep = &bindings;
-    });
 }
