@@ -32,7 +32,9 @@
         desktopFile = "${appId}.desktop";
         iconFile = "${appId}.svg";
 
-        rustToolchain = pkgs.rust-bin.stable.latest.default.override {
+        # Same compiler as rust-toolchain.toml and dtolnay/rust-toolchain@1.92.0
+        # in .github/actions/setup-rust. `stable.latest` drifted ahead of CI.
+        rustToolchain = pkgs.rust-bin.stable."1.92.0".default.override {
           extensions = [
             "rust-src"
             "rustfmt"
