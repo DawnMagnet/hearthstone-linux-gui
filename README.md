@@ -59,7 +59,8 @@ to distribute and maintain.
   GTK4 window.
 - **Translated interface**: English, German, French and Simplified Chinese; the
   launcher follows your system language and can be switched in the gear menu
-  at the top right.
+  at the top right. The window stays open: labels, menus and status text
+  update in place.
 - **GameMode and MangoHud**: optional switches start the game through
   `gamemoderun` and with the MangoHud overlay when they are installed.
 - **Game settings editor**: change the frame-rate limit, VSync and graphics
@@ -428,10 +429,10 @@ debugging locally.
 ## Translations
 
 Interface texts live in `locales/<language>.toml` and are compiled into the
-binary; English (`en.toml`) is the base and the fallback. To add a language,
-copy `en.toml`, translate the values, and register the file in
-`src/i18n.rs`. `cargo test` reports missing, unknown or unused keys and
-placeholders that differ from the English catalog.
+binary; English (`en.toml`) is the base and the fallback. Changing the
+language in the gear menu updates the open window in place. To add a string
+or a language, see [docs/i18n.md](docs/i18n.md). `cargo test` reports missing,
+unknown or unused keys and placeholders that differ from the English catalog.
 
 ## Legal Notice
 

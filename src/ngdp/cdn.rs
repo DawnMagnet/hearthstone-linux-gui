@@ -1,5 +1,5 @@
 use super::{partition_hash, verify_md5};
-use crate::{download, tr, util};
+use crate::{download, i18n::Phrase, phrase, util};
 use anyhow::{Context, Result};
 use std::{
     io::{ErrorKind, SeekFrom},
@@ -68,10 +68,10 @@ impl RemoteCdn {
         self
     }
 
-    pub fn last_transfer_label(&self) -> Option<String> {
+    pub fn last_transfer_label(&self) -> Option<Phrase> {
         let stats = self.last_transfer.lock().ok()?.clone()?;
         if stats.from_cache {
-            return Some(tr!("ngdp.from_cache"));
+            return Some(phrase!("ngdp.from_cache"));
         }
 
         let seconds = stats.elapsed.as_secs_f64();
@@ -79,10 +79,10 @@ impl RemoteCdn {
             return None;
         }
 
-        Some(format!(
+        Some(Phrase::literal(format!(
             "{}/s",
             util::format_bytes(stats.bytes as f64 / seconds)
-        ))
+        )))
     }
 
     pub async fn fetch_config(&self, key: &str, verify: bool) -> Result<Vec<u8>> {

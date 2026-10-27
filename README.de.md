@@ -372,10 +372,11 @@ Umgebungsvariable `RUST_LOG` einschalten.
 ## Übersetzungen
 
 Die Texte der Oberfläche liegen in `locales/<Sprache>.toml` und werden in die
-Binärdatei einkompiliert; Englisch (`en.toml`) ist Basis und Fallback. Für
-eine neue Sprache kopierst du `en.toml`, übersetzt die Werte und trägst die
-Datei in `src/i18n.rs` ein. `cargo test` meldet fehlende, unbekannte und
-ungenutzte Schlüssel sowie Platzhalter, die vom englischen Katalog abweichen.
+Binärdatei einkompiliert; Englisch (`en.toml`) ist Basis und Fallback. Ein
+Wechsel im Zahnradmenü aktualisiert das offene Fenster an Ort und Stelle.
+Neue Texte oder Sprachen: [docs/i18n.md](docs/i18n.md). `cargo test` meldet
+fehlende, unbekannte und ungenutzte Schlüssel sowie Platzhalter, die vom
+englischen Katalog abweichen.
 
 ## Rechtlicher Hinweis
 

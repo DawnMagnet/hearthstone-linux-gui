@@ -1,9 +1,10 @@
 use super::{compatibility, transform, unity};
 use crate::{
     config::AppConfig,
+    i18n::Phrase,
     ngdp::{InstallOptions, NgdpClient},
     paths::AppPaths,
-    tr, util,
+    phrase, util,
 };
 use anyhow::{Context, Result};
 use tokio_util::sync::CancellationToken;
@@ -11,14 +12,15 @@ use tracing::{debug, info};
 
 #[derive(Clone, Debug)]
 pub enum TaskEvent {
-    Started(String),
+    Started(Phrase),
     Progress {
-        message: String,
+        message: Phrase,
         fraction: Option<f64>,
     },
-    Finished(String),
+    Finished(Phrase),
+    /// The raw error. The window wraps it in `install.failed` when showing it.
     Failed(String),
-    Cancelled(String),
+    Cancelled(Phrase),
 }
 
 pub struct InstallManager {
@@ -81,7 +83,9 @@ impl InstallManager {
             cache_dir = %self.paths.cache_dir.display(),
             "starting install/update"
         );
-        event(TaskEvent::Started(tr!("install.preparing_installation")));
+        event(TaskEvent::Started(phrase!(
+            "install.preparing_installation"
+        )));
         util::check_cancelled(cancel.as_ref(), "installation cancelled")?;
 
         cleanup_installation(&self.paths.game_dir).await?;
@@ -116,7 +120,7 @@ impl InstallManager {
         util::check_cancelled(cancel.as_ref(), "installation cancelled")?;
 
         event(TaskEvent::Progress {
-            message: tr!("install.transforming"),
+            message: phrase!("install.transforming"),
             fraction: Some(0.96),
         });
         debug!("transforming macOS layout");
@@ -124,7 +128,7 @@ impl InstallManager {
         util::check_cancelled(cancel.as_ref(), "installation cancelled")?;
 
         event(TaskEvent::Progress {
-            message: tr!("install.unity_player"),
+            message: phrase!("install.unity_player"),
             fraction: Some(0.98),
         });
         debug!("installing Unity player");
@@ -144,7 +148,7 @@ impl InstallManager {
         util::check_cancelled(cancel.as_ref(), "installation cancelled")?;
 
         event(TaskEvent::Progress {
-            message: tr!("install.compatibility"),
+            message: phrase!("install.compatibility"),
             fraction: Some(0.99),
         });
         let overrides = match std::fs::read_to_string(self.paths.client_config_overrides()) {
@@ -170,7 +174,7 @@ impl InstallManager {
         *config = merge_into_saved_settings(config, &self.paths);
         config.save(&self.paths.config_file)?;
         info!("install/update completed");
-        event(TaskEvent::Finished(tr!("install.ready")));
+        event(TaskEvent::Finished(phrase!("install.ready")));
         Ok(())
     }
 }
@@ -198,26 +202,26 @@ fn merge_into_saved_settings(install: &AppConfig, paths: &AppPaths) -> AppConfig
     merged
 }
 
-fn format_unity_download_progress(progress: &unity::UnityDownloadProgress) -> String {
+fn format_unity_download_progress(progress: &unity::UnityDownloadProgress) -> Phrase {
     let action = match progress.phase {
         unity::UnityProgressPhase::Downloading if progress.resumed => {
-            tr!("progress.unity_resuming")
+            phrase!("progress.unity_resuming")
         }
-        unity::UnityProgressPhase::Downloading => tr!("progress.unity_downloading"),
-        unity::UnityProgressPhase::Extracting => tr!("progress.unity_extracting"),
+        unity::UnityProgressPhase::Downloading => phrase!("progress.unity_downloading"),
+        unity::UnityProgressPhase::Extracting => phrase!("progress.unity_extracting"),
     };
     let done = util::format_bytes(progress.downloaded as f64);
     let speed = util::format_speed_suffix(progress.speed_bytes_per_second);
 
     match progress.total {
-        Some(total) if total > 0 => tr!(
+        Some(total) if total > 0 => phrase!(
             "progress.with_total",
             action = action,
             done = done,
             total = util::format_bytes(total as f64),
             speed = speed
         ),
-        _ => tr!(
+        _ => phrase!(
             "progress.without_total",
             action = action,
             done = done,

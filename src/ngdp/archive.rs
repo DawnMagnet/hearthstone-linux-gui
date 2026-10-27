@@ -1,5 +1,5 @@
 use super::{blte, cdn::RemoteCdn, configfile::CdnConfig, verify_md5};
-use crate::tr;
+use crate::phrase;
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use tracing::{debug, trace};
@@ -41,7 +41,7 @@ impl ArchiveMap {
         cdn: &RemoteCdn,
         config: &CdnConfig,
         verify: bool,
-        mut progress: impl FnMut(String, Option<f64>),
+        mut progress: impl FnMut(crate::i18n::Phrase, Option<f64>),
     ) -> Result<Self> {
         let mut map = HashMap::new();
         debug!(
@@ -56,7 +56,7 @@ impl ArchiveMap {
                 idx as f64 / config.archives.len() as f64
             };
             progress(
-                tr!(
+                phrase!(
                     "ngdp.archive_reading",
                     current = idx + 1,
                     total = config.archives.len()
@@ -66,7 +66,7 @@ impl ArchiveMap {
             let index = cdn.fetch_data_index(archive_key, verify).await?;
             if let Some(transfer) = cdn.last_transfer_label() {
                 progress(
-                    tr!(
+                    phrase!(
                         "ngdp.archive_read",
                         current = idx + 1,
                         total = config.archives.len(),
@@ -93,7 +93,7 @@ impl ArchiveMap {
                 );
             }
         }
-        progress(tr!("ngdp.archive_ready"), Some(1.0));
+        progress(phrase!("ngdp.archive_ready"), Some(1.0));
         debug!(item_count = map.len(), "archive map ready");
 
         Ok(Self { items: map })

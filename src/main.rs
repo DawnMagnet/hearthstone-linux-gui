@@ -143,7 +143,7 @@ fn main() -> Result<()> {
             hearthstone_linux::install::manager::TaskEvent::Progress { message, fraction } => {
                 // Progress texts are laid out on several lines for the
                 // window; a terminal gets one line per update.
-                let message = hearthstone_linux::util::single_line(&message);
+                let message = hearthstone_linux::util::single_line(&message.render());
                 if let Some(fraction) = fraction {
                     println!("{:>3.0}% {message}", fraction * 100.0);
                 } else {

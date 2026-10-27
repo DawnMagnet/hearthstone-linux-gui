@@ -10,7 +10,7 @@ pub mod installfile;
 mod local_manifest;
 pub mod psv;
 
-use crate::{tr, util, Locale, Region};
+use crate::{i18n::Phrase, phrase, util, Locale, Region};
 use anyhow::{Context, Result};
 use cdn::RemoteCdn;
 use configfile::{BuildConfig, CdnConfig};
@@ -45,14 +45,15 @@ pub struct InstallOptions {
 
 #[derive(Clone, Debug)]
 pub struct ProgressUpdate {
-    pub message: String,
+    /// Rendered when shown, so a language change updates the line in place.
+    pub message: Phrase,
     pub fraction: Option<f64>,
 }
 
 impl ProgressUpdate {
-    pub fn new(message: impl Into<String>, fraction: impl Into<Option<f64>>) -> Self {
+    pub fn new(message: Phrase, fraction: impl Into<Option<f64>>) -> Self {
         Self {
-            message: message.into(),
+            message,
             fraction: fraction.into().map(|value| value.clamp(0.0, 1.0)),
         }
     }
@@ -178,7 +179,7 @@ impl NgdpClient {
             verify = options.verify,
             "starting NGDP install"
         );
-        progress(ProgressUpdate::new(tr!("ngdp.checking_version"), 0.02));
+        progress(ProgressUpdate::new(phrase!("ngdp.checking_version"), 0.02));
         let version = self.latest_version(options.region).await?;
         check_cancelled(cancel.as_ref())?;
 
@@ -192,7 +193,7 @@ impl NgdpClient {
         debug!(cdn = %options.region.default_cdn(), "configured CDN");
 
         progress(ProgressUpdate::new(
-            tr!("ngdp.build_config", id = version.build_config),
+            phrase!("ngdp.build_config", id = &version.build_config),
             0.06,
         ));
         let build_config = BuildConfig::parse(
@@ -212,7 +213,7 @@ impl NgdpClient {
         check_cancelled(cancel.as_ref())?;
 
         progress(ProgressUpdate::new(
-            tr!("ngdp.cdn_config", id = version.cdn_config),
+            phrase!("ngdp.cdn_config", id = &version.cdn_config),
             0.10,
         ));
         let cdn_config = CdnConfig::parse(
@@ -227,13 +228,13 @@ impl NgdpClient {
         );
         check_cancelled(cancel.as_ref())?;
 
-        progress(ProgressUpdate::new(tr!("ngdp.encoding_table"), 0.14));
+        progress(ProgressUpdate::new(phrase!("ngdp.encoding_table"), 0.14));
         let encoding = self
             .fetch_encoding(&cdn, &build_config, options.verify)
             .await?;
         check_cancelled(cancel.as_ref())?;
 
-        progress(ProgressUpdate::new(tr!("ngdp.install_manifest"), 0.18));
+        progress(ProgressUpdate::new(phrase!("ngdp.install_manifest"), 0.18));
         let install = self
             .fetch_install_manifest(&cdn, &build_config, &encoding, options.verify)
             .await?;
@@ -247,7 +248,7 @@ impl NgdpClient {
             "filtered install manifest"
         );
         progress(ProgressUpdate::new(
-            tr!("ngdp.checking_files", count = entries.len()),
+            phrase!("ngdp.checking_files", count = entries.len()),
             0.22,
         ));
 
@@ -297,7 +298,7 @@ impl NgdpClient {
         );
 
         if install_scan.missing.is_empty() {
-            progress(ProgressUpdate::new(tr!("ngdp.all_present"), 0.95));
+            progress(ProgressUpdate::new(phrase!("ngdp.all_present"), 0.95));
             let manifest = InstalledManifest::for_version(&version, options, install_scan.records);
             let desired_paths = manifest.desired_paths();
             manifest.save(out_dir).await?;
@@ -306,7 +307,7 @@ impl NgdpClient {
         }
 
         progress(ProgressUpdate::new(
-            tr!(
+            phrase!(
                 "ngdp.downloading_changed",
                 count = install_scan.missing.len()
             ),

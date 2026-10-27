@@ -6,16 +6,18 @@ use super::{
         SettingsPanelInput, StatusPanel, StatusPanelInput, StatusPanelState,
     },
     game_settings, login_window, status,
+    text::Bindings,
 };
 use hearthstone_linux::{
     config::AppConfig,
-    game_options, hsreplay, i18n,
+    game_options, hsreplay,
+    i18n::Phrase,
     install::{
         launcher::{self, LaunchTool},
         manager::{InstallManager, TaskEvent},
     },
     paths::AppPaths,
-    tr,
+    phrase, tr,
     update::{self, Release},
 };
 use relm4::adw::prelude::*;
@@ -72,6 +74,8 @@ struct MainWindow {
     actions: Controller<ActionBar>,
     toaster: Toaster,
     window: adw::ApplicationWindow,
+    /// Refreshes texts that were set once when the window was built.
+    locale_bindings: Bindings,
     /// Status line above the logo.
     details: gtk::Label,
     game_settings_button: gtk::Button,
@@ -141,7 +145,7 @@ const UPDATE_BUTTON_CSS: &str = "
 pub struct ProgressState {
     pub visible: bool,
     pub fraction: Option<f64>,
-    pub text: Option<String>,
+    pub text: Option<Phrase>,
 }
 
 #[relm4::component]
@@ -164,6 +168,7 @@ impl SimpleComponent for MainWindow {
 
                     adw::HeaderBar {
                         #[wrap(Some)]
+                        #[name(header_title)]
                         set_title_widget = &adw::WindowTitle {
                             set_title: &tr!("app.name"),
                             // Keeps the launcher from passing as an official product.
@@ -300,11 +305,13 @@ impl SimpleComponent for MainWindow {
             .launch(ActionBarState::default())
             .forward(sender.input_sender(), AppMsg::Action);
         let toaster = Toaster::default();
+        let mut locale_bindings = Bindings::default();
         let preferences_menu = {
             let open_input = sender.input_sender().clone();
             let language_input = sender.input_sender().clone();
             let updates_input = sender.input_sender().clone();
             preferences_menu(
+                &mut locale_bindings,
                 init.config.ui_language.as_deref(),
                 init.config.check_for_updates,
                 move || open_input.emit(AppMsg::OpenGameSettings),
@@ -318,17 +325,17 @@ impl SimpleComponent for MainWindow {
         };
 
         let refresh = gtk::Button::from_icon_name("view-refresh-symbolic");
-        refresh.set_tooltip_text(Some(&tr!("action.refresh")));
+        {
+            let refresh = refresh.clone();
+            locale_bindings.watch(move || refresh.set_tooltip_text(Some(&tr!("action.refresh"))));
+        }
         refresh.add_css_class(relm4::css::FLAT);
         {
             let input = sender.input_sender().clone();
             refresh.connect_clicked(move |_| input.emit(AppMsg::Refresh));
         }
 
-        // The window is built again on a language change; the style sheet
-        // must not be added again each time.
-        static UPDATE_BUTTON_STYLE: std::sync::Once = std::sync::Once::new();
-        UPDATE_BUTTON_STYLE.call_once(|| relm4::set_global_css(UPDATE_BUTTON_CSS));
+        relm4::set_global_css(UPDATE_BUTTON_CSS);
         let update_button = gtk::Button::from_icon_name("software-update-available-symbolic");
         update_button.add_css_class(relm4::css::CIRCULAR);
         update_button.add_css_class(relm4::css::SUGGESTED_ACTION);
@@ -344,7 +351,7 @@ impl SimpleComponent for MainWindow {
         }
 
         let logo = super::logo::Logo::new(&init.paths.cache_dir);
-        let model = MainWindow {
+        let mut model = MainWindow {
             paths: init.paths,
             config: init.config,
             status: init.snapshot,
@@ -359,6 +366,7 @@ impl SimpleComponent for MainWindow {
             actions,
             toaster,
             window: root.clone(),
+            locale_bindings,
             details: gtk::Label::new(None),
             game_settings_button: preferences_menu.game_settings,
             update_button: update_button.clone(),
@@ -386,6 +394,16 @@ impl SimpleComponent for MainWindow {
         let actions = model.actions.widget();
 
         let widgets = view_output!();
+        {
+            let window = widgets.main_window.clone();
+            let header = widgets.header_title.clone();
+            model.locale_bindings.watch(move || {
+                let name = tr!("app.name");
+                window.set_title(Some(&name));
+                header.set_title(&name);
+                header.set_subtitle(&tr!("app.unofficial"));
+            });
+        }
         model.render_children();
 
         ComponentParts { model, widgets }
@@ -466,40 +484,11 @@ impl MainWindow {
         if !self.save_settings() {
             return;
         }
+        // Widgets registered with the locale bindings refresh inside `select`.
+        // `update` then re-renders the children, which re-reads every `tr!`
+        // behind a `#[watch]` and every stored [`Phrase`].
+        hearthstone_linux::i18n::select(language);
         self.refresh_details();
-
-        // Texts are fixed once a window is built, so the language is applied
-        // by building the window again. Never throw away the state of an
-        // install, a pending login or a running game for that.
-        let busy = self.install_state != InstallState::Idle
-            || self.login_session.is_some()
-            || self.game_session.is_some();
-        if busy {
-            self.toast(&tr!("settings.language_after_restart"));
-        } else {
-            i18n::select(language);
-            self.rebuild_window();
-        }
-    }
-
-    /// Opens a fresh main window, which picks up the selected language, and
-    /// closes this one. The application keeps running throughout.
-    fn rebuild_window(&self) {
-        let (config, snapshot) = status::reconcile(&self.paths);
-        let mut controller = MainWindow::builder()
-            .launch(AppInit {
-                paths: self.paths.clone(),
-                config,
-                snapshot,
-            })
-            .detach();
-        let window = controller.widget().clone();
-        // The new window has to belong to the application before the old one
-        // closes, or closing the last window would quit it.
-        relm4::main_application().add_window(&window);
-        controller.detach_runtime();
-        window.present();
-        self.window.close();
     }
 
     /// Asks for the latest release in the background. Failures only go to
@@ -564,7 +553,8 @@ impl MainWindow {
             Ok(()) => true,
             Err(error) => {
                 tracing::error!(error = %format!("{error:#}"), "failed to save settings");
-                self.status.headline = tr!("settings.save_failed", error = format!("{error:#}"));
+                self.status.headline =
+                    phrase!("settings.save_failed", error = format!("{error:#}"));
                 false
             }
         }
@@ -600,9 +590,9 @@ impl MainWindow {
         self.progress = ProgressState {
             visible: true,
             fraction: Some(0.0),
-            text: Some("0%".into()),
+            text: Some(Phrase::literal("0%")),
         };
-        self.status.headline = tr!("install.preparing");
+        self.status.headline = phrase!("install.preparing");
 
         tracing::info!(?action, "install/update requested from UI");
         let paths = self.paths.clone();
@@ -620,7 +610,7 @@ impl MainWindow {
             if let Err(error) = result {
                 tracing::error!(error = %format!("{error:#}"), "install/update failed");
                 let event = if cancel_for_thread.is_cancelled() {
-                    TaskEvent::Cancelled(tr!("install.cancelled"))
+                    TaskEvent::Cancelled(phrase!("install.cancelled"))
                 } else {
                     TaskEvent::Failed(format!("{error:#}"))
                 };
@@ -634,13 +624,13 @@ impl MainWindow {
         if let Some(cancel) = self.install_cancel.as_ref() {
             cancel.cancel();
             self.install_state = InstallState::Stopping;
-            self.status.headline = tr!("install.stopping");
+            self.status.headline = phrase!("install.stopping");
         }
     }
 
     fn handle_uninstall_pressed(&mut self, sender: ComponentSender<Self>) {
         if self.game_session.is_some() {
-            self.status.headline = tr!("install.stop_game_first");
+            self.status.headline = phrase!("install.stop_game_first");
             self.refresh_details();
             return;
         }
@@ -652,9 +642,9 @@ impl MainWindow {
         self.progress = ProgressState {
             visible: true,
             fraction: None,
-            text: Some(tr!("install.removing")),
+            text: Some(phrase!("install.removing")),
         };
-        self.status.headline = tr!("install.uninstalling");
+        self.status.headline = phrase!("install.uninstalling");
 
         tracing::info!("uninstall requested from UI");
         let paths = self.paths.clone();
@@ -677,12 +667,12 @@ impl MainWindow {
         match result {
             Ok(()) => {
                 auth::sync_config_from_disk(&self.paths, &mut self.config);
-                self.refresh_status_with_headline(tr!("install.uninstalled"));
+                self.refresh_status_with_headline(phrase!("install.uninstalled"));
                 self.toast(&tr!("install.uninstalled"));
             }
             Err(message) => {
                 tracing::error!(error = %message, "uninstall failed in UI");
-                self.status.headline = tr!("install.uninstall_failed", error = message);
+                self.status.headline = phrase!("install.uninstall_failed", error = message);
                 self.refresh_details();
                 self.toast(&tr!("install.uninstall_failed_toast"));
             }
@@ -701,7 +691,8 @@ impl MainWindow {
                 self.status.headline = message;
                 self.progress.visible = true;
                 self.progress.fraction = fraction;
-                self.progress.text = fraction.map(|value| format!("{:.0}%", value * 100.0));
+                self.progress.text =
+                    fraction.map(|value| Phrase::literal(format!("{:.0}%", value * 100.0)));
             }
             TaskEvent::Finished(message) => {
                 tracing::info!("install/update finished");
@@ -710,7 +701,7 @@ impl MainWindow {
                 self.progress = ProgressState {
                     visible: false,
                     fraction: Some(1.0),
-                    text: Some("100%".into()),
+                    text: Some(Phrase::literal("100%")),
                 };
                 auth::sync_config_from_disk(&self.paths, &mut self.config);
                 self.refresh_status_with_headline(message);
@@ -721,7 +712,7 @@ impl MainWindow {
                 self.install_state = InstallState::Idle;
                 self.install_cancel = None;
                 self.progress.visible = false;
-                self.status.headline = tr!("install.failed", error = message);
+                self.status.headline = phrase!("install.failed", error = message);
                 self.refresh_details();
                 self.toast(&tr!("install.failed_toast"));
             }
@@ -747,7 +738,7 @@ impl MainWindow {
         if let Some(session) = self.login_session.take() {
             tracing::info!("login wait cancelled from UI");
             session.cancel.cancel();
-            self.status.headline = tr!("login.cancelled");
+            self.status.headline = phrase!("login.cancelled");
             self.refresh_details();
             return;
         }
@@ -768,11 +759,11 @@ impl MainWindow {
         match auth::mark_logged_out(&self.paths, &mut self.config) {
             Ok(()) => {
                 auth::sync_config_from_disk(&self.paths, &mut self.config);
-                self.refresh_status_with_headline(tr!("status.logged_out"));
+                self.refresh_status_with_headline(phrase!("status.logged_out"));
             }
             Err(error) => {
                 tracing::error!(error = %format!("{error:#}"), "logout failed");
-                self.status.headline = tr!("login.logout_failed", error = format!("{error:#}"));
+                self.status.headline = phrase!("login.logout_failed", error = format!("{error:#}"));
                 self.refresh_details();
             }
         }
@@ -783,7 +774,7 @@ impl MainWindow {
             Ok(()) => self.begin_login(sender),
             Err(error) => {
                 tracing::error!(error = %format!("{error:#}"), "failed to clear previous login");
-                self.status.headline = tr!("login.switch_failed", error = format!("{error:#}"));
+                self.status.headline = phrase!("login.switch_failed", error = format!("{error:#}"));
                 self.refresh_details();
             }
         }
@@ -799,7 +790,7 @@ impl MainWindow {
         current.game_dir = Some(self.paths.game_dir.clone());
         if let Err(error) = current.save(&self.paths.config_file) {
             tracing::error!(error = %format!("{error:#}"), "failed to save login settings");
-            self.status.headline = tr!("login.setup_failed", error = format!("{error:#}"));
+            self.status.headline = phrase!("login.setup_failed", error = format!("{error:#}"));
             self.refresh_details();
             return;
         }
@@ -816,9 +807,9 @@ impl MainWindow {
 
         if let Err(error) = auth::ensure_auth_scheme_handlers() {
             tracing::warn!(error = %format!("{error:#}"), "failed to register auth URI handlers");
-            self.status.headline = tr!("login.handler_failed");
+            self.status.headline = phrase!("login.handler_failed");
         } else {
-            self.status.headline = tr!("login.opening");
+            self.status.headline = phrase!("login.opening");
         }
         self.refresh_details();
 
@@ -826,7 +817,7 @@ impl MainWindow {
         // without it, or when it gives up, the system browser is used.
         if let Some(program) = login_window::find() {
             tracing::info!(program = %program.display(), "opening the login window");
-            self.status.headline = tr!("login.window_open");
+            self.status.headline = phrase!("login.window_open");
             self.refresh_details();
             let input = sender.input_sender().clone();
             let cancel = cancel.clone();
@@ -877,7 +868,8 @@ impl MainWindow {
                     if let Some(session) = self.login_session.take() {
                         session.cancel.cancel();
                     }
-                    self.status.headline = tr!("login.setup_failed", error = format!("{error:#}"));
+                    self.status.headline =
+                        phrase!("login.setup_failed", error = format!("{error:#}"));
                     self.refresh_details();
                     return;
                 }
@@ -886,7 +878,7 @@ impl MainWindow {
             }
             login_window::Outcome::OpenBrowser => {
                 let url = current.url.clone();
-                self.status.headline = tr!("login.opening");
+                self.status.headline = phrase!("login.opening");
                 self.refresh_details();
                 Self::open_browser_login(&sender, session, url);
             }
@@ -894,13 +886,13 @@ impl MainWindow {
                 if let Some(session) = self.login_session.take() {
                     session.cancel.cancel();
                 }
-                self.status.headline = tr!("login.cancelled");
+                self.status.headline = phrase!("login.cancelled");
                 self.refresh_details();
             }
             login_window::Outcome::Failed(error) => {
                 tracing::warn!(%error, "login window failed; using the browser");
                 let url = current.url.clone();
-                self.status.headline = tr!("login.window_failed");
+                self.status.headline = phrase!("login.window_failed");
                 self.refresh_details();
                 Self::open_browser_login(&sender, session, url);
             }
@@ -917,7 +909,7 @@ impl MainWindow {
         match result {
             Ok(opener) => {
                 tracing::info!(opener = %opener, "opened login URL");
-                self.status.headline = tr!("login.waiting");
+                self.status.headline = phrase!("login.waiting");
             }
             Err(error) => {
                 tracing::error!(
@@ -925,7 +917,7 @@ impl MainWindow {
                     error = %error,
                     "failed to open browser login"
                 );
-                self.status.headline = tr!("login.no_browser");
+                self.status.headline = phrase!("login.no_browser");
             }
         }
         self.refresh_details();
@@ -949,7 +941,7 @@ impl MainWindow {
                 session.cancel.cancel();
             }
             auth::sync_config_from_disk(&self.paths, &mut self.config);
-            self.refresh_status_with_headline(tr!("login.complete"));
+            self.refresh_status_with_headline(phrase!("login.complete"));
             self.toast(&tr!("login.complete"));
         }
     }
@@ -961,12 +953,12 @@ impl MainWindow {
                 Ok(()) => {
                     session.stop_requested = true;
                     session.sync_cancel.cancel();
-                    self.status.headline = tr!("game.stopping");
+                    self.status.headline = phrase!("game.stopping");
                     self.refresh_details();
                 }
                 Err(error) => {
                     tracing::error!(error = %error, "failed to stop game");
-                    self.status.headline = tr!("game.stop_failed", error = error);
+                    self.status.headline = phrase!("game.stop_failed", error = error.to_string());
                     self.refresh_details();
                 }
             }
@@ -991,7 +983,7 @@ impl MainWindow {
                     stop_requested: false,
                     output_log,
                 });
-                self.status.headline = tr!("game.running");
+                self.status.headline = phrase!("game.running");
                 self.refresh_details();
 
                 Self::start_poll(&sender, AppMsg::GamePoll, poll_cancel);
@@ -1001,7 +993,7 @@ impl MainWindow {
             }
             Err(error) => {
                 tracing::error!(error = %format!("{error:#}"), "launch failed");
-                self.status.headline = tr!("game.launch_failed", error = format!("{error:#}"));
+                self.status.headline = phrase!("game.launch_failed", error = format!("{error:#}"));
                 self.refresh_details();
             }
         }
@@ -1089,7 +1081,7 @@ impl MainWindow {
                         self.status.headline = message;
                         self.toast(&tr!("game.exited_toast"));
                     }
-                    None => self.status.headline = tr!("game.stopped"),
+                    None => self.status.headline = phrase!("game.stopped"),
                 }
                 self.refresh_details();
             }
@@ -1099,7 +1091,7 @@ impl MainWindow {
                 session.poll_cancel.cancel();
                 session.sync_cancel.cancel();
                 self.game_session = None;
-                self.status.headline = tr!("game.status_error", error = error);
+                self.status.headline = phrase!("game.status_error", error = error.to_string());
                 self.refresh_details();
             }
         }
@@ -1113,13 +1105,12 @@ impl MainWindow {
         self.settings_panel.emit(SettingsPanelInput::DetectTools);
     }
 
-    fn refresh_status_with_headline(&mut self, headline: impl Into<String>) {
+    fn refresh_status_with_headline(&mut self, headline: Phrase) {
         self.status = status::snapshot(headline, &self.config, self.paths.game_token().exists());
     }
 
     fn refresh_details(&mut self) {
-        let headline = self.status.headline.clone();
-        self.refresh_status_with_headline(headline);
+        self.status.details = status::details(&self.config, self.paths.game_token().exists());
     }
 
     fn render_children(&self) {

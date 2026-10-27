@@ -1,7 +1,9 @@
+use super::text::Bindings;
 use super::{app::ProgressState, status::StatusSnapshot};
 use hearthstone_linux::{
     config::{AppConfig, Locale, Region},
     host_env, i18n,
+    i18n::Phrase,
     install::launcher::LaunchTool,
     tr, update,
 };
@@ -31,6 +33,10 @@ pub struct StatusPanel {
     shown_at: Instant,
     /// Newest state waiting for the shown message's minimum time.
     pending: Option<StatusPanelState>,
+    /// Headline drawn right now, rendered from [`StatusSnapshot::headline`].
+    headline: String,
+    /// Progress-bar caption, rendered from [`ProgressState::text`].
+    progress_text: Option<String>,
 }
 
 impl StatusPanel {
@@ -40,9 +46,18 @@ impl StatusPanel {
         }
         let task_ended = self.state.progress.visible && !state.progress.visible;
         self.state = state;
+        self.sync_text();
         if task_ended {
             self.shrink_window();
         }
+    }
+
+    /// Renders the phrases of the state on screen. A language change sends
+    /// the same phrases again; this is what makes the new wording appear
+    /// without waiting for the next install step.
+    fn sync_text(&mut self) {
+        self.headline = headline_text(&self.state);
+        self.progress_text = self.state.progress.text.as_ref().map(Phrase::render);
     }
 
     /// A window grows with its content but never shrinks on its own; once
@@ -75,9 +90,9 @@ pub enum StatusPanelInput {
 const RUNNING_HEADLINE_LINES: usize = 3;
 
 fn headline_text(state: &StatusPanelState) -> String {
-    let headline = &state.snapshot.headline;
+    let headline = state.snapshot.headline.render();
     if !state.progress.visible {
-        return headline.clone();
+        return headline;
     }
     let padding = RUNNING_HEADLINE_LINES.saturating_sub(headline.lines().count().max(1));
     format!("{headline}{}", "\n".repeat(padding))
@@ -110,7 +125,7 @@ impl SimpleComponent for StatusPanel {
                 set_attributes: Some(&tabular_digits()),
 
                 #[watch]
-                set_label: &headline_text(&model.state),
+                set_label: &model.headline,
             },
 
             gtk::Box {
@@ -127,6 +142,7 @@ impl SimpleComponent for StatusPanel {
                     set_justify: gtk::Justification::Center,
                     set_wrap: true,
                     set_margin_bottom: 6,
+                    #[watch]
                     set_label: &tr!("login.page_hint"),
                 },
 
@@ -134,6 +150,7 @@ impl SimpleComponent for StatusPanel {
                     set_justify: gtk::Justification::Center,
                     set_wrap: true,
                     add_css_class: relm4::css::DIM_LABEL,
+                    #[watch]
                     set_label: &tr!("login.url_hint"),
                 },
 
@@ -151,7 +168,9 @@ impl SimpleComponent for StatusPanel {
                     },
 
                     gtk::Button {
+                        #[watch]
                         set_label: &tr!("login.copy"),
+                        #[watch]
                         set_tooltip_text: Some(&tr!("login.copy_tooltip")),
                         connect_clicked => StatusPanelInput::CopyLoginUrl,
                     },
@@ -168,7 +187,7 @@ impl SimpleComponent for StatusPanel {
                 set_fraction: model.state.progress.fraction.unwrap_or_default(),
 
                 #[watch]
-                set_text: model.state.progress.text.as_deref(),
+                set_text: model.progress_text.as_deref(),
             },
         }
     }
@@ -178,12 +197,15 @@ impl SimpleComponent for StatusPanel {
         root: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
-        let model = StatusPanel {
+        let mut model = StatusPanel {
             state,
             root: root.clone(),
             shown_at: Instant::now(),
             pending: None,
+            headline: String::new(),
+            progress_text: None,
         };
+        model.sync_text();
         let widgets = view_output!();
 
         ComponentParts { model, widgets }
@@ -192,6 +214,9 @@ impl SimpleComponent for StatusPanel {
     fn update(&mut self, input: Self::Input, sender: ComponentSender<Self>) {
         match input {
             StatusPanelInput::Render(state) => {
+                // Retranslate what is already visible before deciding whether
+                // a newer task message has to wait out its minimum time.
+                self.sync_text();
                 let task_message = state.snapshot.headline != self.state.snapshot.headline
                     && (state.progress.visible || self.state.progress.visible);
                 let wait = MIN_MESSAGE_TIME.saturating_sub(self.shown_at.elapsed());
@@ -267,6 +292,7 @@ impl SimpleComponent for SettingsPanel {
             set_row_spacing: 8,
 
             attach[0, 0, 1, 1] = &gtk::Label {
+                #[watch]
                 set_label: &tr!("settings.region"),
                 set_xalign: 0.0,
                 add_css_class: relm4::css::DIM_LABEL,
@@ -278,6 +304,7 @@ impl SimpleComponent for SettingsPanel {
             },
 
             attach[0, 1, 1, 1] = &gtk::Label {
+                #[watch]
                 set_label: &tr!("settings.game_language"),
                 set_xalign: 0.0,
                 add_css_class: relm4::css::DIM_LABEL,
@@ -289,13 +316,16 @@ impl SimpleComponent for SettingsPanel {
             },
 
             attach[0, 2, 1, 1] = &gtk::Label {
+                #[watch]
                 set_label: &tr!("settings.graphics"),
                 set_xalign: 0.0,
                 add_css_class: relm4::css::DIM_LABEL,
             },
 
             attach[1, 2, 1, 1] = &gtk::CheckButton {
+                #[watch]
                 set_label: Some(&tr!("settings.discrete_gpu")),
+                #[watch]
                 set_tooltip_text: Some(&tr!("settings.discrete_gpu_tooltip")),
 
                 #[watch]
@@ -307,6 +337,7 @@ impl SimpleComponent for SettingsPanel {
             },
 
             attach[0, 3, 1, 1] = &gtk::Label {
+                #[watch]
                 set_label: &tr!("settings.performance"),
                 set_xalign: 0.0,
                 add_css_class: relm4::css::DIM_LABEL,
@@ -370,7 +401,9 @@ impl SimpleComponent for SettingsPanel {
             },
 
             attach[1, 4, 1, 1] = &gtk::CheckButton {
+                #[watch]
                 set_label: Some(&tr!("settings.hsreplay_sync")),
+                #[watch]
                 set_tooltip_text: Some(&tr!("settings.hsreplay_sync_tooltip")),
 
                 #[watch]
@@ -588,6 +621,7 @@ impl SimpleComponent for ActionBar {
 
             #[name(install_button)]
             adw::SplitButton {
+                #[watch]
                 set_tooltip_text: Some(&tr!("action.install_tooltip")),
                 #[watch]
                 set_label: &model.install_label(),
@@ -699,11 +733,14 @@ impl ActionBar {
 
     fn render_menu_items(&self) {
         if let Some(button) = self.uninstall_button.as_ref() {
+            button.set_label(&tr!("action.uninstall"));
             button.set_sensitive(self.install_menu_sensitive());
         }
+        let account_labels = [tr!("action.log_out"), tr!("action.switch_account")];
         let account_menu_sensitive =
             self.state.login == LoginState::LoggedIn && self.state.launch == LaunchState::Idle;
-        for button in &self.account_menu_buttons {
+        for (button, label) in self.account_menu_buttons.iter().zip(account_labels) {
+            button.set_label(&label);
             button.set_sensitive(account_menu_sensitive);
         }
     }
@@ -755,6 +792,7 @@ fn index_of<T: Copy + Eq>(items: &[T], value: T) -> Option<usize> {
 /// its flag) and the update check. `current` is the saved language, `None` meaning the system
 /// language.
 pub fn preferences_menu(
+    bindings: &mut Bindings,
     current: Option<&str>,
     check_for_updates: bool,
     on_game_settings: impl Fn() + 'static,
@@ -769,7 +807,11 @@ pub fn preferences_menu(
     content.set_margin_end(10);
 
     let popover = gtk::Popover::new();
-    let game_settings = gtk::Button::with_label(&tr!("game_settings.menu"));
+    let game_settings = gtk::Button::new();
+    {
+        let game_settings = game_settings.clone();
+        bindings.watch(move || game_settings.set_label(&tr!("game_settings.menu")));
+    }
     {
         let popover = popover.clone();
         game_settings.connect_clicked(move |_| {
@@ -778,7 +820,11 @@ pub fn preferences_menu(
         });
     }
     content.append(&game_settings);
-    let system_info = gtk::Button::with_label(&tr!("sysinfo.menu"));
+    let system_info = gtk::Button::new();
+    {
+        let system_info = system_info.clone();
+        bindings.watch(move || system_info.set_label(&tr!("sysinfo.menu")));
+    }
     {
         let popover = popover.clone();
         system_info.connect_clicked(move |_| {
@@ -789,18 +835,28 @@ pub fn preferences_menu(
     content.append(&system_info);
     content.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
 
-    let title = gtk::Label::new(Some(&tr!("settings.language")));
+    let title = gtk::Label::new(None);
     title.add_css_class(relm4::css::HEADING);
+    {
+        let title = title.clone();
+        bindings.watch(move || title.set_label(&tr!("settings.language")));
+    }
     content.append(&title);
 
     let system_icon = gtk::Image::from_icon_name("preferences-desktop-locale-symbolic");
-    let system = (None, system_icon, tr!("settings.language_system"));
+    let system_label = gtk::Label::new(None);
+    system_label.set_xalign(0.0);
+    system_label.set_hexpand(true);
+    {
+        let system_label = system_label.clone();
+        bindings.watch(move || system_label.set_label(&tr!("settings.language_system")));
+    }
+    let system = (None, system_icon, system_label);
     let languages = i18n::available().into_iter().map(|language| {
-        (
-            Some(language.code),
-            embedded_image(language.flag),
-            language.name,
-        )
+        let label = gtk::Label::new(Some(&language.name));
+        label.set_xalign(0.0);
+        label.set_hexpand(true);
+        (Some(language.code), embedded_image(language.flag), label)
     });
 
     let list = gtk::ListBox::new();
@@ -808,11 +864,8 @@ pub fn preferences_menu(
     list.add_css_class(relm4::css::BOXED_LIST);
     let mut codes = Vec::new();
     let mut checks = Vec::new();
-    for (code, icon, name) in std::iter::once(system).chain(languages) {
+    for (code, icon, label) in std::iter::once(system).chain(languages) {
         icon.set_pixel_size(24);
-        let label = gtk::Label::new(Some(&name));
-        label.set_xalign(0.0);
-        label.set_hexpand(true);
         let check = gtk::Image::from_icon_name("object-select-symbolic");
         check.set_opacity(if code == current { 1.0 } else { 0.0 });
 
@@ -839,9 +892,13 @@ pub fn preferences_menu(
     });
     content.append(&list);
 
-    let hint = gtk::Label::new(Some(&tr!("settings.language_tooltip")));
+    let hint = gtk::Label::new(None);
     hint.add_css_class(relm4::css::DIM_LABEL);
     hint.add_css_class(relm4::css::CAPTION);
+    {
+        let hint = hint.clone();
+        bindings.watch(move || hint.set_label(&tr!("settings.language_tooltip")));
+    }
     content.append(&hint);
 
     if update::enabled() {
@@ -851,7 +908,11 @@ pub fn preferences_menu(
         updates.set_valign(gtk::Align::Start);
         updates.set_active(check_for_updates);
         updates.connect_toggled(move |button| on_check_for_updates(button.is_active()));
-        let updates_label = gtk::Label::new(Some(&tr!("settings.auto_update")));
+        let updates_label = gtk::Label::new(None);
+        {
+            let updates_label = updates_label.clone();
+            bindings.watch(move || updates_label.set_label(&tr!("settings.auto_update")));
+        }
         updates_label.set_wrap(true);
         updates_label.set_xalign(0.0);
         updates_label.set_max_width_chars(30);
@@ -872,7 +933,10 @@ pub fn preferences_menu(
 
     let button = gtk::MenuButton::new();
     button.set_icon_name("emblem-system-symbolic");
-    button.set_tooltip_text(Some(&tr!("settings.menu")));
+    {
+        let button = button.clone();
+        bindings.watch(move || button.set_tooltip_text(Some(&tr!("settings.menu"))));
+    }
     button.add_css_class(relm4::css::FLAT);
     button.set_popover(Some(&popover));
     PreferencesMenu {
@@ -914,7 +978,7 @@ fn install_popover(sender: ComponentSender<ActionBar>) -> PopoverButton {
     content.set_margin_start(10);
     content.set_margin_end(10);
 
-    let uninstall = gtk::Button::with_label(&tr!("action.uninstall"));
+    let uninstall = gtk::Button::new();
     uninstall.add_css_class(relm4::css::DESTRUCTIVE_ACTION);
     {
         let popover = popover.clone();
@@ -942,13 +1006,10 @@ fn account_popover(sender: ComponentSender<ActionBar>) -> (gtk::Popover, Vec<gtk
     content.set_margin_start(10);
     content.set_margin_end(10);
 
-    let entries = [
-        (tr!("action.log_out"), ActionBarOutput::Logout),
-        (tr!("action.switch_account"), ActionBarOutput::SwitchAccount),
-    ];
+    let entries = [ActionBarOutput::Logout, ActionBarOutput::SwitchAccount];
     let mut buttons = Vec::new();
-    for (label, action) in entries {
-        let button = gtk::Button::with_label(&label);
+    for action in entries {
+        let button = gtk::Button::new();
         let popover = popover.clone();
         let output = sender.output_sender().clone();
         button.connect_clicked(move |_| {
