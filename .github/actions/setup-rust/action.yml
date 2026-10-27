@@ -1,0 +1,43 @@
+name: Set up Rust and GTK
+description: >
+  Install the Rust toolchain pinned in rust-toolchain.toml (1.92.0), restore
+  the Cargo cache, and install GTK development packages. Shared by ci.yml
+  and login-helper.yml.
+
+inputs:
+  apt-packages:
+    description: Apt packages to install, in addition to pkg-config.
+    required: false
+    default: libgtk-4-dev libadwaita-1-dev
+  cache-workspaces:
+    description: >
+      Swatinem/rust-cache workspaces value. Empty caches the repository root.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - uses: dtolnay/rust-toolchain@1.92.0
+
+    - uses: Swatinem/rust-cache@v2
+      if: inputs.cache-workspaces == ''
+      with:
+        cache-on-failure: true
+
+    - uses: Swatinem/rust-cache@v2
+      if: inputs.cache-workspaces != ''
+      with:
+        cache-on-failure: true
+        workspaces: ${{ inputs.cache-workspaces }}
+
+    # The runner is thrown away afterwards, so skip fsync and man-page
+    # indexing while dpkg unpacks the development files.
+    - name: Install GTK development packages
+      shell: bash
+      run: |
+        echo 'force-unsafe-io' | sudo tee /etc/dpkg/dpkg.cfg.d/unsafe-io >/dev/null
+        sudo rm -f /var/lib/man-db/auto-update
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq --no-install-recommends \
+          pkg-config ${{ inputs.apt-packages }}

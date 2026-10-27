@@ -43,7 +43,7 @@ jobs:
         run: |
           set -euo pipefail
           tag_version="${GITHUB_REF_NAME#v}"
-          cargo_version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)"
+          cargo_version="$(sh packaging/cargo-version.sh)"
           if [ "$tag_version" != "$cargo_version" ]; then
             echo "Tag ${GITHUB_REF_NAME} does not match Cargo.toml version ${cargo_version}" >&2
             exit 1
