@@ -1,3 +1,4 @@
+use super::bytes;
 use super::{blte, cdn::RemoteCdn, configfile::CdnConfig, verify_md5};
 use crate::phrase;
 use anyhow::{Context, Result};
@@ -153,7 +154,7 @@ impl ArchiveIndex {
         let offset_size = footer[12] as usize;
         let size_size = footer[13] as usize;
         let key_size = footer[14] as usize;
-        let num_items = u32::from_le_bytes(footer[16..20].try_into().unwrap()) as usize;
+        let num_items = bytes::le_u32(footer, 16)? as usize;
         trace!(
             key = %key,
             block_size_kb = block_size_kb,
@@ -187,8 +188,8 @@ impl ArchiveIndex {
             let record = &data[position..position + record_size];
             items.push(ArchiveIndexItem {
                 key: hex::encode(&record[0..16]),
-                size: u32::from_be_bytes(record[16..20].try_into().unwrap()) as usize,
-                offset: u32::from_be_bytes(record[20..24].try_into().unwrap()) as usize,
+                size: bytes::be_u32(record, 16)? as usize,
+                offset: bytes::be_u32(record, 20)? as usize,
             });
             position += record_size;
             bytes_left_in_block -= record_size;

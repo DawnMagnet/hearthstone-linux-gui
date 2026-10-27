@@ -1,6 +1,7 @@
 pub mod archive;
 pub mod blizini;
 pub mod blte;
+mod bytes;
 pub mod cdn;
 pub mod configfile;
 pub mod encoding;
@@ -426,7 +427,7 @@ fn version_urls() -> Vec<String> {
 
 pub(crate) fn verify_md5(name: &str, data: &[u8], expected: &str, verify: bool) -> Result<()> {
     if verify {
-        let actual = format!("{:x}", md5::compute(data));
+        let actual = bytes::md5_hex(data);
         anyhow::ensure!(
             actual == expected,
             "{name} failed md5 verification: expected {expected}, got {actual}"
@@ -451,8 +452,4 @@ pub(crate) fn read_cstr(cursor: &mut std::io::Cursor<&[u8]>) -> Result<String> {
         out.push(byte[0]);
     }
     String::from_utf8(out).context("invalid utf-8 c-string")
-}
-
-pub(crate) fn read_be_u24(bytes: &[u8]) -> u32 {
-    ((bytes[0] as u32) << 16) | ((bytes[1] as u32) << 8) | bytes[2] as u32
 }

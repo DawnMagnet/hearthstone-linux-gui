@@ -487,7 +487,7 @@ impl RemoteCdn {
 }
 
 fn data_md5_matches(data: &[u8], expected: &str) -> bool {
-    format!("{:x}", md5::compute(data)) == expected
+    super::bytes::md5_hex(data) == expected
 }
 
 fn verify_index_footer(data: &[u8], key: &str, verify: bool) -> Result<()> {
