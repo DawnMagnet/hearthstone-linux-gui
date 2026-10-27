@@ -13,7 +13,11 @@
 //! when it was unset) and sets `HEARTHSTONE_LINUX_APPIMAGE_ENV=1`.  This module
 //! turns that back into the host environment for child processes.
 
-use std::{ffi::OsString, process::Command};
+use std::{
+    ffi::OsString,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 /// Variables `AppRun` overrides with AppImage-internal paths.
 pub const OVERRIDDEN_VARS: &[&str] = &[
@@ -109,6 +113,20 @@ pub fn apply(command: &mut Command) -> &mut Command {
         }
     }
     command
+}
+
+/// `path` when it is a regular file with an execute bit set.
+pub fn executable_file(path: &Path) -> Option<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let metadata = path.metadata().ok()?;
+    (metadata.is_file() && metadata.permissions().mode() & 0o111 != 0).then(|| path.to_path_buf())
+}
+
+/// Looks `command` up in the host `PATH`, so an AppImage's own `usr/bin`
+/// is not mistaken for a system installation.
+pub fn find_in_path(command: &str) -> Option<PathBuf> {
+    std::env::split_paths(&host_var("PATH")?).find_map(|dir| executable_file(&dir.join(command)))
 }
 
 /// A `Command` for a host program, with the AppImage environment undone.

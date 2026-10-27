@@ -1,4 +1,5 @@
-use super::{read_be_u24, verify_md5};
+use super::bytes;
+use super::verify_md5;
 use anyhow::{Context, Result};
 use flate2::read::ZlibDecoder;
 use std::io::Read;
@@ -14,7 +15,7 @@ pub fn decode(data: &[u8], key: &str, verify: bool) -> Result<Vec<u8>> {
     anyhow::ensure!(data.len() >= 8, "BLTE data is too short");
     anyhow::ensure!(&data[0..4] == b"BLTE", "missing BLTE magic");
 
-    let header_size = u32::from_be_bytes(data[4..8].try_into().unwrap()) as usize;
+    let header_size = bytes::be_u32(data, 4)? as usize;
     let mut offset = 8;
     let mut blocks = Vec::new();
 
@@ -22,14 +23,15 @@ pub fn decode(data: &[u8], key: &str, verify: bool) -> Result<Vec<u8>> {
         anyhow::ensure!(data.len() >= header_size, "BLTE header is truncated");
         anyhow::ensure!(data[offset] == 0x0f, "unsupported BLTE header version");
         offset += 1;
-        let block_count = read_be_u24(&data[offset..offset + 3]) as usize;
+        let block_count = bytes::be_u24(data, offset)? as usize;
         offset += 3;
         for _ in 0..block_count {
-            let encoded_size =
-                u32::from_be_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
-            let decoded_size =
-                u32::from_be_bytes(data[offset + 4..offset + 8].try_into().unwrap()) as usize;
-            let digest = hex::encode(&data[offset + 8..offset + 24]);
+            let encoded_size = bytes::be_u32(data, offset)? as usize;
+            let decoded_size = bytes::be_u32(data, offset + 4)? as usize;
+            let digest = hex::encode(
+                data.get(offset + 8..offset + 24)
+                    .context("truncated BLTE block table")?,
+            );
             offset += 24;
             blocks.push(BlockInfo {
                 encoded_size,
@@ -81,5 +83,24 @@ fn decode_block(data: &[u8]) -> Result<Vec<u8>> {
             Ok(out)
         }
         other => anyhow::bail!("unsupported BLTE block type `{}`", other as char),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decode;
+
+    #[test]
+    fn truncated_block_table_is_an_error() {
+        // Header claims one block, but the table stops after the count.
+        let mut data = b"BLTE".to_vec();
+        data.extend_from_slice(&12u32.to_be_bytes());
+        data.extend_from_slice(&[0x0f, 0x00, 0x00, 0x01]);
+        let error = decode(&data, "ignored", false).unwrap_err();
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("truncated"),
+            "expected a truncation error, got {message}"
+        );
     }
 }

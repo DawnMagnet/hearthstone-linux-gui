@@ -1,8 +1,9 @@
 # Packaging pipeline: audit and rebuild plan
 
-Status: steps 0–3 and 5–6 implemented (step 0 with the fix for #22; steps
-1–3 and 5–6 in the follow-up "oldest baseline" change). Step 4 (Flatpak) is
-open.
+Status: steps 0–6 implemented (step 0 with the fix for #22; steps 1–3 and
+5–6 in the follow-up "oldest baseline" change; step 4, Flatpak, first
+shipped for v0.2.3). The Nix package has since moved from
+`buildRustPackage` to Crane.
 
 ## Why
 
@@ -26,25 +27,31 @@ into processes we start.**
   container          │ (packaging/linux/Dockerfile)         │
                      └──────────────────┬──────────────────┘
                                         │ packaging/linux/stage.sh
-          ┌─────────────────────────────┼──────────────────────────┐
-          ▼                             ▼                          ▼
-   nfpm: deb / rpm / pacman      AppImage: linuxdeploy +      (later) Flatpak
-   host GTK/adw/GLib             appimagetool, bundles
-   (packages.sh)                 GTK/adw/GLib but NOT glibc,
-                                 ld-linux, libstdc++, GL, X11
-                                 (appimage.sh)
-   Nix package: unchanged, built by flake.nix for Nix users
+                         ┌──────────────┴──────────────┐
+                         ▼                             ▼
+                  nfpm: deb / rpm / pacman      AppImage: linuxdeploy +
+                  host GTK/adw/GLib             appimagetool, bundles
+                  (packages.sh)                 GTK/adw/GLib but NOT glibc,
+                                                ld-linux, libstdc++, GL, X11
+                                                (appimage.sh)
+
+  Flatpak (separate build): GNOME 51 SDK, then PREFIX=/app packaging/linux/stage.sh
+                            (packaging/flatpak/, .github/workflows/flatpak.yml)
+  Nix package: flake.nix via Crane (craneLib.buildPackage) + wrapGAppsHook4;
+               the game runs in a buildFHSEnv runtime
 ```
 
 | Artifact | Built by | Libraries | Assessment |
 | --- | --- | --- | --- |
-| Nix package (`nix build`) | `flake.nix`, `buildRustPackage` + `wrapGAppsHook4` | Nix store; game runs in a `buildFHSEnv` runtime | Fine on Nix/NixOS. Keep. |
+| Nix package (`nix build`) | `flake.nix`, Crane (`craneLib.buildPackage`) + `wrapGAppsHook4` | Nix store; game runs in a `buildFHSEnv` runtime | Fine on Nix/NixOS. Keep. |
+| Flatpak | `packaging/flatpak/`, `.github/workflows/flatpak.yml` | GNOME 51 runtime (its own glibc and GTK) | Done (first shipped for v0.2.3). |
 | AppImage | `packaging/linux/appimage.sh` (AlmaLinux 9 + linuxdeploy) | Bundles EL9 GTK 4.12 / libadwaita 1.4 / GLib 2.68 only; **no** glibc, `ld-linux`, libstdc++, GL, X11/Wayland core; no exported `LD_LIBRARY_PATH` | Done. |
 | deb / rpm / pacman | `packaging/linux/packages.sh` (AlmaLinux 9 build, nfpm) | Host libraries only (glibc ≥ 2.34, GTK ≥ 4.0, libadwaita ≥ 1.0, GLib ≥ 2.66, Pango ≥ 1.46); RPM soname deps; x86_64 only | Done. |
 
 ### Principles
 
-- **One baseline build** for every non-Nix artifact.
+- **One baseline build** for the AppImage and the native packages (AlmaLinux 9).
+  Flatpak is a separate build on the GNOME 51 SDK. The Nix package is Crane.
 - **Never bundle glibc, `ld-linux`, libstdc++, libgcc_s or GL/Vulkan/Wayland
   client/X11 core libraries.** linuxdeploy applies the AppImage excludelist;
   `check-glibc.sh` fails the build if any of these slips in or if any bundled
@@ -185,9 +192,9 @@ hearthstone-linux-gui --print-child-env              # dump restored child env
 ## Risks
 
 - Hosts with glibc older than 2.34 (Ubuntu 20.04, Debian 11, RHEL 8) cannot
-  run any artifact. Today they only worked by accident of the bundled Nix
-  glibc, and none of them ships GTK 4. If needed later: build the GTK 4 stack
-  from source on AlmaLinux 8 for the AppImage only, or offer a Flatpak.
+  run the native packages or the AppImage. They only worked before by
+  accident of the bundled Nix glibc, and none of them ships GTK 4. The
+  Flatpak covers those hosts: it brings the GNOME 51 runtime.
 - The AppImage's GTK is 4.12 (EL9). It gets security fixes through EL9
   updates, but not new GTK features; the native packages use the host GTK.
 - Input methods on X11 work through the bundled ibus module (fcitx5 via its

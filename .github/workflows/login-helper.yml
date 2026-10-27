@@ -12,6 +12,7 @@ on:
     paths:
       - login-helper/**
       - .github/workflows/login-helper.yml
+      - .github/actions/**
   workflow_dispatch:
 
 permissions:
@@ -38,20 +39,10 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: dtolnay/rust-toolchain@1.92.0
-
-      - uses: Swatinem/rust-cache@v2
+      - uses: ./.github/actions/setup-rust
         with:
-          workspaces: login-helper
-          cache-on-failure: true
-
-      - name: Install GTK 4, libadwaita and WebKitGTK 6 headers
-        run: |
-          echo 'force-unsafe-io' | sudo tee /etc/dpkg/dpkg.cfg.d/unsafe-io >/dev/null
-          sudo rm -f /var/lib/man-db/auto-update
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends \
-            libgtk-4-dev libadwaita-1-dev libwebkitgtk-6.0-dev pkg-config
+          apt-packages: libgtk-4-dev libadwaita-1-dev libwebkitgtk-6.0-dev
+          cache-workspaces: login-helper
 
       - name: Type-check
         run: cargo check --manifest-path login-helper/Cargo.toml --all-targets --locked

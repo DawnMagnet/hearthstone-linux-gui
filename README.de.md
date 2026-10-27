@@ -86,9 +86,10 @@ lässt.
 
 ### Systemvoraussetzungen
 
-Alle Release-Artefakte werden auf der ältesten noch unterstützten
+AppImage und die nativen Pakete werden auf der ältesten noch unterstützten
 Distribution gebaut, die GTK 4 und libadwaita mitbringt: Enterprise Linux 9
-(glibc 2.34). Sie laufen deshalb auf alten wie auf neuen Systemen.
+(glibc 2.34). Flatpak baut auf dem GNOME-51-SDK, das Nix-Paket über den
+Flake.
 
 | | Minimum |
 | --- | --- |
@@ -99,9 +100,9 @@ Distribution gebaut, die GTK 4 und libadwaita mitbringt: Enterprise Linux 9
 | Flatpak | Nur Flatpak selbst; die GNOME-51-Laufzeit (mit eigener glibc und eigenem GTK) wird von Flathub installiert |
 
 Unter NixOS nimmst du das Nix-Paket (siehe unten); das AppImage braucht dort
-`programs.nix-ld` oder `appimage-run`. Ältere Systeme wie Ubuntu 20.04,
-Debian 11 oder RHEL 8 werden nicht unterstützt, weil sie kein GTK 4
-mitbringen.
+`programs.nix-ld` oder `appimage-run`. Ubuntu 20.04, Debian 11 und RHEL 8
+liefern kein GTK 4, deshalb laufen dort AppImage und die nativen Pakete
+nicht. Das Flatpak schon: es bringt die GNOME-51-Laufzeit mit.
 
 AppImage und die DEB/RPM/Pacman-Pakete stammen aus einem gemeinsamen
 Container-Build (`packaging/linux/Dockerfile`); das Nix-Paket baut der Flake.
@@ -372,10 +373,11 @@ Umgebungsvariable `RUST_LOG` einschalten.
 ## Übersetzungen
 
 Die Texte der Oberfläche liegen in `locales/<Sprache>.toml` und werden in die
-Binärdatei einkompiliert; Englisch (`en.toml`) ist Basis und Fallback. Für
-eine neue Sprache kopierst du `en.toml`, übersetzt die Werte und trägst die
-Datei in `src/i18n.rs` ein. `cargo test` meldet fehlende, unbekannte und
-ungenutzte Schlüssel sowie Platzhalter, die vom englischen Katalog abweichen.
+Binärdatei einkompiliert; Englisch (`en.toml`) ist Basis und Fallback. Ein
+Wechsel im Zahnradmenü aktualisiert das offene Fenster an Ort und Stelle.
+Neue Texte oder Sprachen: [docs/i18n.md](docs/i18n.md). `cargo test` meldet
+fehlende, unbekannte und ungenutzte Schlüssel sowie Platzhalter, die vom
+englischen Katalog abweichen.
 
 ## Rechtlicher Hinweis
 

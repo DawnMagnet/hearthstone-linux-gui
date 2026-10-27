@@ -2,18 +2,22 @@
 //! and graphics quality, plus plain editors for `options.txt` and for
 //! additional `client.config` entries.
 
-use super::browser;
+use super::{
+    browser,
+    text::{self, Bindings},
+};
 use hearthstone_linux::{
     config::AppConfig,
     game_options::{GameOptions, Quality},
+    i18n::Phrase,
     install::compatibility,
     paths::AppPaths,
-    tr,
+    phrase, tr,
 };
 use relm4::adw::prelude::*;
 use relm4::{adw, gtk};
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
     path::{Path, PathBuf},
     rc::Rc,
 };
@@ -52,20 +56,41 @@ pub fn open(
     let initial_overrides = std::fs::read_to_string(&overrides_path).unwrap_or_default();
     overrides_buffer.set_text(&initial_overrides);
 
+    let mut bindings = Bindings::default();
+    // The text of `options.txt` is the single source of truth. Controls write
+    // into it and follow it; `syncing` keeps the two directions from looping.
+    let syncing = Rc::new(Cell::new(false));
     let frame_rate = gtk::SpinButton::with_range(30.0, 360.0, 1.0);
     frame_rate.set_valign(gtk::Align::Center);
     let vsync = gtk::Switch::new();
     vsync.set_valign(gtk::Align::Center);
-    let quality = gtk::DropDown::from_strings(&[
-        &tr!("game_settings.quality_low"),
-        &tr!("game_settings.quality_medium"),
-        &tr!("game_settings.quality_high"),
-    ]);
+    let quality_labels = gtk::StringList::new(&[]);
+    let quality = gtk::DropDown::builder().model(&quality_labels).build();
+    {
+        let quality_labels = quality_labels.clone();
+        let quality = quality.clone();
+        let syncing = syncing.clone();
+        bindings.watch(move || {
+            // Replacing the strings notifies the dropdown; that must not
+            // write the selected level back into options.txt.
+            let selected = quality.selected();
+            let _busy = syncing.replace(true);
+            while quality_labels.n_items() > 0 {
+                quality_labels.remove(0);
+            }
+            for text in [
+                tr!("game_settings.quality_low"),
+                tr!("game_settings.quality_medium"),
+                tr!("game_settings.quality_high"),
+            ] {
+                quality_labels.append(&text);
+            }
+            quality.set_selected(selected);
+            syncing.set(false);
+        });
+    }
     quality.set_valign(gtk::Align::Center);
 
-    // The text of `options.txt` is the single source of truth. Controls write
-    // into it and follow it; `syncing` keeps the two directions from looping.
-    let syncing = Rc::new(Cell::new(false));
     let show_options = {
         let (frame_rate, vsync, quality) = (frame_rate.clone(), vsync.clone(), quality.clone());
         move |options: &GameOptions| {
@@ -125,40 +150,71 @@ pub fn open(
     }
 
     let graphics = adw::PreferencesGroup::new();
-    graphics.set_title(&tr!("game_settings.graphics"));
-    graphics.add(&row(
-        &tr!("game_settings.frame_rate"),
-        &tr!("game_settings.frame_rate_subtitle"),
-        &frame_rate,
-    ));
-    graphics.add(&row(
-        &tr!("game_settings.vsync"),
-        &tr!("game_settings.vsync_subtitle"),
-        &vsync,
-    ));
-    graphics.add(&row(&tr!("game_settings.quality"), "", &quality));
+    let frame_row = row("", "", &frame_rate);
+    let vsync_row = row("", "", &vsync);
+    let quality_row = row("", "", &quality);
+    graphics.add(&frame_row);
+    graphics.add(&vsync_row);
+    graphics.add(&quality_row);
+    {
+        let graphics = graphics.clone();
+        let frame_row = frame_row.clone();
+        let vsync_row = vsync_row.clone();
+        let quality_row = quality_row.clone();
+        bindings.watch(move || {
+            graphics.set_title(&tr!("game_settings.graphics"));
+            frame_row.set_title(&tr!("game_settings.frame_rate"));
+            frame_row.set_subtitle(&tr!("game_settings.frame_rate_subtitle"));
+            vsync_row.set_title(&tr!("game_settings.vsync"));
+            vsync_row.set_subtitle(&tr!("game_settings.vsync_subtitle"));
+            quality_row.set_title(&tr!("game_settings.quality"));
+        });
+    }
 
     let advanced = adw::PreferencesGroup::new();
-    advanced.set_title(&tr!("game_settings.advanced"));
-    advanced.add(&editor_row(
-        "options.txt",
-        &tr!("game_settings.options_subtitle"),
-        &options_buffer,
-    ));
-    advanced.add(&editor_row(
-        "client.config",
-        &tr!("game_settings.client_config_subtitle"),
-        &overrides_buffer,
-    ));
+    let options_row = editor_row("options.txt", "", &options_buffer);
+    let client_row = editor_row("client.config", "", &overrides_buffer);
+    advanced.add(&options_row);
+    advanced.add(&client_row);
+    {
+        let advanced = advanced.clone();
+        let options_row = options_row.clone();
+        let client_row = client_row.clone();
+        bindings.watch(move || {
+            advanced.set_title(&tr!("game_settings.advanced"));
+            options_row.set_subtitle(&tr!("game_settings.options_subtitle"));
+            client_row.set_subtitle(&tr!("game_settings.client_config_subtitle"));
+        });
+    }
 
     let status = gtk::Label::new(None);
     status.set_wrap(true);
     status.add_css_class(relm4::css::ERROR);
     status.set_visible(false);
+    let status_phrase: Rc<RefCell<Option<Phrase>>> = Rc::new(RefCell::new(None));
+    {
+        let status = status.clone();
+        let status_phrase = Rc::clone(&status_phrase);
+        bindings.watch(move || {
+            if let Some(phrase) = status_phrase.borrow().as_ref() {
+                status.set_label(&phrase.render());
+            }
+        });
+    }
 
-    let reset = gtk::Button::with_label(&tr!("game_settings.reset"));
-    let open_external = gtk::Button::with_label(&tr!("game_settings.open_external"));
-    let save = gtk::Button::with_label(&tr!("game_settings.save"));
+    let reset = gtk::Button::new();
+    let open_external = gtk::Button::new();
+    let save = gtk::Button::new();
+    {
+        let reset = reset.clone();
+        let open_external = open_external.clone();
+        let save = save.clone();
+        bindings.watch(move || {
+            reset.set_label(&tr!("game_settings.reset"));
+            open_external.set_label(&tr!("game_settings.open_external"));
+            save.set_label(&tr!("game_settings.save"));
+        });
+    }
     save.add_css_class(relm4::css::SUGGESTED_ACTION);
     let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     buttons.set_halign(gtk::Align::Center);
@@ -167,10 +223,9 @@ pub fn open(
     buttons.append(&save);
 
     if let Some(error) = read_error {
-        status.set_label(&tr!(
-            "game_settings.read_failed",
-            error = format!("{error:#}")
-        ));
+        let phrase = phrase!("game_settings.read_failed", error = format!("{error:#}"));
+        status.set_label(&phrase.render());
+        *status_phrase.borrow_mut() = Some(phrase);
         status.set_visible(true);
         graphics.set_sensitive(false);
         advanced.set_sensitive(false);
@@ -196,16 +251,22 @@ pub fn open(
     scrolled.set_child(Some(&clamp));
 
     let header = adw::HeaderBar::new();
-    header.set_title_widget(Some(&adw::WindowTitle::new(
-        &tr!("game_settings.title"),
-        "",
-    )));
+    let header_title = adw::WindowTitle::new("", "");
+    header.set_title_widget(Some(&header_title));
     let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
     content.append(&header);
     content.append(&scrolled);
 
     let window = adw::Window::new();
-    window.set_title(Some(&tr!("game_settings.title")));
+    {
+        let window = window.clone();
+        let header_title = header_title.clone();
+        bindings.watch(move || {
+            let title = tr!("game_settings.title");
+            window.set_title(Some(&title));
+            header_title.set_title(&title);
+        });
+    }
     window.set_transient_for(Some(parent));
     window.set_modal(true);
     window.set_default_size(520, 560);
@@ -241,10 +302,11 @@ pub fn open(
         })
     };
     {
-        let (save_files, on_saved, status, window) = (
+        let (save_files, on_saved, status, status_phrase, window) = (
             save_files.clone(),
             on_saved.clone(),
             status.clone(),
+            Rc::clone(&status_phrase),
             window.clone(),
         );
         open_external.connect_clicked(move |_| {
@@ -252,7 +314,7 @@ pub fn open(
             // first and the dialog closes: its text would otherwise go stale
             // and a later Save would overwrite what the editor wrote.
             if let Err(error) = save_files() {
-                show_error(&status, &error);
+                show_error(&status, &status_phrase, &error);
                 return;
             }
             let options_path = options_path.clone();
@@ -267,15 +329,17 @@ pub fn open(
     }
     {
         let window = window.clone();
+        let status_phrase = Rc::clone(&status_phrase);
         save.connect_clicked(move |_| match save_files() {
             Ok(()) => {
                 on_saved();
                 window.close();
             }
-            Err(error) => show_error(&status, &error),
+            Err(error) => show_error(&status, &status_phrase, &error),
         });
     }
 
+    text::retain(&window, bindings);
     window.present();
 }
 
@@ -326,11 +390,10 @@ fn save_overrides(path: &Path, overrides: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn show_error(status: &gtk::Label, error: &anyhow::Error) {
+fn show_error(status: &gtk::Label, status_phrase: &RefCell<Option<Phrase>>, error: &anyhow::Error) {
     tracing::error!(error = %format!("{error:#}"), "failed to save game settings");
-    status.set_label(&tr!(
-        "game_settings.save_failed",
-        error = format!("{error:#}")
-    ));
+    let phrase = phrase!("game_settings.save_failed", error = format!("{error:#}"));
+    status.set_label(&phrase.render());
+    *status_phrase.borrow_mut() = Some(phrase);
     status.set_visible(true);
 }

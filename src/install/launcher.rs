@@ -1,5 +1,5 @@
 use super::compatibility;
-use crate::{config::AppConfig, game_options, host_env, tr};
+use crate::{config::AppConfig, game_options, host_env, i18n::Phrase, phrase, tr};
 use anyhow::{Context, Result};
 use std::{
     collections::HashSet,
@@ -233,20 +233,20 @@ pub fn player_log_path() -> Option<PathBuf> {
 
 /// Describes how the game process ended, e.g. `exit code 1` or
 /// `signal 11 (SIGSEGV)`.
-pub fn describe_exit_status(status: &ExitStatus) -> String {
+pub fn describe_exit_status(status: &ExitStatus) -> Phrase {
     #[cfg(unix)]
     {
         use std::os::unix::process::ExitStatusExt;
         if let Some(signal) = status.signal() {
             return match signal_name(signal) {
-                Some(name) => tr!("game.signal_named", signal = signal, name = name),
-                None => tr!("game.signal", signal = signal),
+                Some(name) => phrase!("game.signal_named", signal = signal, name = name),
+                None => phrase!("game.signal", signal = signal),
             };
         }
     }
     match status.code() {
-        Some(code) => tr!("game.exit_code", code = code),
-        None => status.to_string(),
+        Some(code) => phrase!("game.exit_code", code = code),
+        None => Phrase::literal(status.to_string()),
     }
 }
 
@@ -274,29 +274,29 @@ pub fn unexpected_exit_message(
     elapsed: Duration,
     player_log: Option<&Path>,
     output_log: Option<&Path>,
-) -> Option<String> {
+) -> Option<Phrase> {
     let quick = elapsed < QUICK_EXIT_THRESHOLD;
     if status.success() && !quick {
         return None;
     }
 
-    let message = tr!(
+    let message = phrase!(
         "game.exited",
         seconds = elapsed.as_secs(),
         status = describe_exit_status(status)
     );
-    let logs: Vec<String> = [player_log, output_log]
+    let logs: Vec<Phrase> = [player_log, output_log]
         .into_iter()
         .flatten()
-        .map(|path| path.display().to_string())
+        .map(|path| Phrase::literal(path.display().to_string()))
         .collect();
     if logs.is_empty() {
         return Some(message);
     }
-    Some(tr!(
+    Some(phrase!(
         "game.check_logs",
         message = message,
-        logs = logs.join(&tr!("game.logs_and"))
+        logs = Phrase::join(phrase!("game.logs_and"), logs)
     ))
 }
 
@@ -536,16 +536,7 @@ fn print_interpreter(candidates: &[PathBuf], exe: &Path) -> Option<String> {
 /// Looks `command` up in the host `PATH`, so the AppImage's own `usr/bin`
 /// is not mistaken for a system installation.
 fn find_in_path(command: &str) -> Option<PathBuf> {
-    env::split_paths(&host_env::host_var("PATH")?)
-        .find_map(|dir| executable_file(&dir.join(command)))
-}
-
-/// `path` itself when it is a regular file that can be executed.
-fn executable_file(path: &Path) -> Option<PathBuf> {
-    use std::os::unix::fs::PermissionsExt;
-
-    let metadata = path.metadata().ok()?;
-    (metadata.is_file() && metadata.permissions().mode() & 0o111 != 0).then(|| path.to_path_buf())
+    host_env::find_in_path(command)
 }
 
 /// Whether the game's `options.txt` switches VSync off (`vsync=0`).
@@ -792,7 +783,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let tool = dir.path().join("tool");
         std::fs::write(&tool, "#!/bin/sh\n").unwrap();
-        let find = |name: &str| super::executable_file(&dir.path().join(name));
+        let find = |name: &str| crate::host_env::executable_file(&dir.path().join(name));
         assert_eq!(find("tool"), None, "not executable yet");
         std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
         assert_eq!(find("tool"), Some(tool));
@@ -804,14 +795,17 @@ mod tests {
     #[test]
     fn describes_exit_codes_and_signals() {
         assert_eq!(
-            describe_exit_status(&ExitStatus::from_raw(1 << 8)),
+            describe_exit_status(&ExitStatus::from_raw(1 << 8)).render(),
             "exit code 1"
         );
         assert_eq!(
-            describe_exit_status(&ExitStatus::from_raw(11)),
+            describe_exit_status(&ExitStatus::from_raw(11)).render(),
             "signal 11 (SIGSEGV)"
         );
-        assert_eq!(describe_exit_status(&ExitStatus::from_raw(42)), "signal 42");
+        assert_eq!(
+            describe_exit_status(&ExitStatus::from_raw(42)).render(),
+            "signal 42"
+        );
     }
 
     #[test]
@@ -824,7 +818,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            message,
+            message.render(),
             "Game exited after 1s (exit code 0). Check /tmp/Player.log and /tmp/game.log"
         );
     }
@@ -838,7 +832,10 @@ mod tests {
             None,
         )
         .unwrap();
-        assert_eq!(message, "Game exited after 600s (signal 6 (SIGABRT))");
+        assert_eq!(
+            message.render(),
+            "Game exited after 600s (signal 6 (SIGABRT))"
+        );
     }
 
     #[test]

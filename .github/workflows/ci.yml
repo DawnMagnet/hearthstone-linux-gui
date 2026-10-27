@@ -25,7 +25,9 @@ on:
       - data/icons/**
       - Cargo.toml
       - Cargo.lock
+      - rust-toolchain.toml
       - .github/workflows/ci.yml
+      - .github/actions/**
   workflow_dispatch:
 
 permissions:
@@ -51,21 +53,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: dtolnay/rust-toolchain@1.92.0
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          cache-on-failure: true
-
-      # The runner is thrown away afterwards, so skip fsync and man-page
-      # indexing while dpkg unpacks the GTK 4 / libadwaita development files.
-      - name: Install GTK 4 and libadwaita headers
-        run: |
-          echo 'force-unsafe-io' | sudo tee /etc/dpkg/dpkg.cfg.d/unsafe-io >/dev/null
-          sudo rm -f /var/lib/man-db/auto-update
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends \
-            libgtk-4-dev libadwaita-1-dev pkg-config
+      - uses: ./.github/actions/setup-rust
 
       # `check` stops before code generation and linking, which is enough to
       # catch GUI compile errors without a full build. Running it first fails

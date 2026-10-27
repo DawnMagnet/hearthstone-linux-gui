@@ -7,6 +7,7 @@ mod login_window;
 mod logo;
 mod status;
 mod system_info;
+mod text;
 
 use relm4::gtk::prelude::*;
 use relm4::{

@@ -1,3 +1,4 @@
+use super::bytes::{read_be_u16, read_be_u32, read_u8};
 use super::{read_cstr, verify_md5};
 use anyhow::{Context, Result};
 use bitvec::{order::Msb0, view::BitView};
@@ -85,22 +86,4 @@ impl InstallFile {
             .map(|(_, entry)| entry.clone())
             .collect())
     }
-}
-
-fn read_u8(cursor: &mut Cursor<&[u8]>) -> Result<u8> {
-    let mut byte = [0u8; 1];
-    cursor.read_exact(&mut byte)?;
-    Ok(byte[0])
-}
-
-fn read_be_u16(cursor: &mut Cursor<&[u8]>) -> Result<u16> {
-    let mut bytes = [0u8; 2];
-    cursor.read_exact(&mut bytes)?;
-    Ok(u16::from_be_bytes(bytes))
-}
-
-fn read_be_u32(cursor: &mut Cursor<&[u8]>) -> Result<u32> {
-    let mut bytes = [0u8; 4];
-    cursor.read_exact(&mut bytes)?;
-    Ok(u32::from_be_bytes(bytes))
 }

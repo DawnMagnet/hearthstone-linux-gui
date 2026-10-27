@@ -59,7 +59,8 @@ to distribute and maintain.
   GTK4 window.
 - **Translated interface**: English, German, French and Simplified Chinese; the
   launcher follows your system language and can be switched in the gear menu
-  at the top right.
+  at the top right. The window stays open: labels, menus and status text
+  update in place.
 - **GameMode and MangoHud**: optional switches start the game through
   `gamemoderun` and with the MangoHud overlay when they are installed.
 - **Game settings editor**: change the frame-rate limit, VSync and graphics
@@ -100,9 +101,10 @@ to distribute and maintain.
 
 ### System requirements
 
-All release artifacts are built on the oldest still-supported distribution
-that ships GTK 4 and libadwaita, Enterprise Linux 9 (glibc 2.34), so they run
-on old and new systems alike:
+The AppImage and the native packages are built on the oldest still-supported
+distribution that ships GTK 4 and libadwaita, Enterprise Linux 9 (glibc
+2.34). Flatpak is built on the GNOME 51 SDK, and the Nix package is built by
+the flake.
 
 | | Minimum |
 | --- | --- |
@@ -113,8 +115,9 @@ on old and new systems alike:
 | Flatpak | Only Flatpak itself; the GNOME 51 runtime (with its own glibc and GTK) is installed from Flathub |
 
 On NixOS, use the Nix package below; the AppImage needs `programs.nix-ld`
-or `appimage-run`. Older systems such as Ubuntu 20.04, Debian 11 or RHEL 8
-are not supported: they do not ship GTK 4.
+or `appimage-run`. Ubuntu 20.04, Debian 11 and RHEL 8 do not ship GTK 4, so
+the AppImage and the native packages do not run there. The Flatpak does: it
+brings the GNOME 51 runtime.
 
 The AppImage and the DEB/RPM/Pacman packages come from one container build
 (`packaging/linux/Dockerfile`); the Nix package is built by the flake. See
@@ -123,9 +126,10 @@ and [`packaging/README.md`](packaging/README.md).
 
 ### Building packages
 
-All non-Nix release artifacts are built on **AlmaLinux 9** (glibc **2.34**),
-the oldest still-supported distribution that ships GTK 4 and libadwaita.
-Newer hosts run these binaries without change.
+The AppImage and the native packages are built on **AlmaLinux 9** (glibc
+**2.34**), the oldest still-supported distribution that ships GTK 4 and
+libadwaita. Newer hosts run these binaries without change. Flatpak is a
+separate build; see [`packaging/README.md`](packaging/README.md).
 
 ```sh
 # deb + rpm + pacman + AppImage → dist/
@@ -428,10 +432,10 @@ debugging locally.
 ## Translations
 
 Interface texts live in `locales/<language>.toml` and are compiled into the
-binary; English (`en.toml`) is the base and the fallback. To add a language,
-copy `en.toml`, translate the values, and register the file in
-`src/i18n.rs`. `cargo test` reports missing, unknown or unused keys and
-placeholders that differ from the English catalog.
+binary; English (`en.toml`) is the base and the fallback. Changing the
+language in the gear menu updates the open window in place. To add a string
+or a language, see [docs/i18n.md](docs/i18n.md). `cargo test` reports missing,
+unknown or unused keys and placeholders that differ from the English catalog.
 
 ## Legal Notice
 

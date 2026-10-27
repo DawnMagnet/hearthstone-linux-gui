@@ -10,12 +10,15 @@ pub fn check_cancelled(cancel: Option<&CancellationToken>, message: &'static str
 }
 
 /// Localized transfer speed to append to a progress message, e.g.
-/// ` at 3.2 MiB/s`; empty while the speed is unknown.
-pub fn format_speed_suffix(bytes_per_second: f64) -> String {
+/// a line `3.2 MiB/s`; empty while the speed is unknown.
+///
+/// Returned as a [`Phrase`](crate::i18n::Phrase) so the unit follows a
+/// language change together with the message it is embedded in.
+pub fn format_speed_suffix(bytes_per_second: f64) -> crate::i18n::Phrase {
     if bytes_per_second > 0.0 {
-        crate::tr!("progress.speed", speed = format_bytes(bytes_per_second))
+        crate::phrase!("progress.speed", speed = format_bytes(bytes_per_second))
     } else {
-        String::new()
+        crate::i18n::Phrase::literal("")
     }
 }
 

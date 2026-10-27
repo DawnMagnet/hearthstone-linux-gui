@@ -6,7 +6,7 @@ use super::{
     local_manifest::InstalledFileRecord,
     verify_md5, ProgressUpdate,
 };
-use crate::{tr, util};
+use crate::{phrase, util};
 use anyhow::{Context, Result};
 use std::{
     path::{Path, PathBuf},
@@ -124,7 +124,7 @@ pub(super) async fn install_entries_parallel(
         }
     }
 
-    progress(ProgressUpdate::new(tr!("ngdp.installed"), 0.95));
+    progress(ProgressUpdate::new(phrase!("ngdp.installed"), 0.95));
     Ok(installed)
 }
 
@@ -142,7 +142,7 @@ fn emit_install_progress(
         .min(total_bytes);
     let fraction = visible_bytes as f64 / total_bytes as f64;
     progress(ProgressUpdate::new(
-        tr!(
+        phrase!(
             "ngdp.downloading",
             files = completed_files,
             total_files = total_files,

@@ -197,6 +197,8 @@ fn auth_handler_executable() -> std::io::Result<PathBuf> {
     std::env::current_exe()
 }
 
+/// Replaces the mode with `0o755`. [`crate::util::make_executable`] only adds
+/// execute bits, which would leave a group-writable desktop file writable.
 #[cfg(unix)]
 fn make_executable(path: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
