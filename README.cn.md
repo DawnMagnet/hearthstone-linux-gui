@@ -77,7 +77,7 @@
 
 ### 系统要求
 
-所有发布产物都在「仍受支持、且自带 GTK 4 和 libadwaita 的最老发行版」——Enterprise Linux 9（glibc 2.34）上编译，因此新老系统都能运行：
+AppImage 和原生包在「仍受支持、且自带 GTK 4 和 libadwaita 的最老发行版」——Enterprise Linux 9（glibc 2.34）上编译。Flatpak 在 GNOME 51 SDK 上构建，Nix 包由 flake 构建。
 
 | | 最低要求 |
 | --- | --- |
@@ -87,13 +87,13 @@
 | GTK / libadwaita（AppImage） | 自带（GTK 4.12、libadwaita 1.4）；glibc、显卡驱动、字体和 X11/Wayland 用系统自己的 |
 | Flatpak | 只需要 Flatpak；GNOME 51 运行时（自带 glibc 和 GTK）会自动从 Flathub 安装 |
 
-NixOS 请使用下面的 Nix 包；AppImage 需要 `programs.nix-ld` 或 `appimage-run`。Ubuntu 20.04、Debian 11、RHEL 8 等更老的系统没有 GTK 4，不在支持范围内。
+NixOS 请使用下面的 Nix 包；AppImage 需要 `programs.nix-ld` 或 `appimage-run`。Ubuntu 20.04、Debian 11、RHEL 8 等系统没有 GTK 4，AppImage 和原生包无法在上面运行。Flatpak 可以：它自带 GNOME 51 运行时。
 
 AppImage 和 DEB/RPM/Pacman 包来自同一次容器构建（`packaging/linux/Dockerfile`），Nix 包由 flake 构建。详见 [`docs/design/packaging-pipeline.md`](docs/design/packaging-pipeline.md) 与 [`packaging/README.md`](packaging/README.md)。
 
 ### 构建发布包
 
-所有非 Nix 发布产物都在 **AlmaLinux 9**（glibc **2.34**）上编译——这是仍受支持、且自带 GTK 4 与 libadwaita 的最老发行版。更新的系统可以直接运行这些二进制。
+AppImage 和原生包在 **AlmaLinux 9**（glibc **2.34**）上编译——这是仍受支持、且自带 GTK 4 与 libadwaita 的最老发行版。更新的系统可以直接运行这些二进制。Flatpak 是单独的构建，见 [`packaging/README.md`](packaging/README.md)。
 
 ```sh
 # deb + rpm + pacman + AppImage → dist/
@@ -113,8 +113,12 @@ AppImage 使用固定版本的 **linuxdeploy** / **appimagetool** / **type2-runt
 3. 用桌面环境打开：
    - AppImage：直接打开下载好的 AppImage。如果文件管理器提示权限问题，在文件属性里勾选“允许作为程序执行”。
    - DEB/RPM：双击安装包，用图形化软件中心安装。
+   - Flatpak：`flatpak install --user ./hearthstone-linux-gui-*-x86_64.flatpak`
+     （安装 GNOME 运行时所需的 Flathub 会自动加入），然后
+     `flatpak run io.github.hearthstone_linux_gui`。游戏文件和设置位于
+     `~/.var/app/io.github.hearthstone_linux_gui/`。
    - Nix/NixOS：通过你平时使用的 Nix 图形化或系统配置流程安装原生 Nix 包。
-4. 从应用菜单启动 **hearthstone-linux-gui**。
+4. 从应用菜单启动 **Hearthstone Linux Launcher**。
 
 应用打开后的正常流程是：
 

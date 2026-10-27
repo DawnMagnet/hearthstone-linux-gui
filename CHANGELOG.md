@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- The interface language switches in the open window. Headers, menus,
+  dialogs and status text update in place; the window is not rebuilt, and
+  an install, login or running game no longer defers the change until the
+  next start.
+
 ## v0.3.2 - 2026-10-26
 
 ### Added
