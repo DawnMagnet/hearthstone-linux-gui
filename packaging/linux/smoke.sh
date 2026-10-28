@@ -4,8 +4,10 @@
 #
 #   packaging/linux/smoke.sh <dist-dir>
 #
-# 1. Installs the matching native package, checks every library resolves and
-#    the launcher starts (--no-gui and a few seconds of GUI under Xvfb).
+# 1. Installs the matching native package when the distro ships GTK 4, checks
+#    every library resolves and the launcher starts (--no-gui and a few
+#    seconds of GUI under Xvfb). Debian 11 and Ubuntu 20.04 have no GTK 4
+#    packages; there the native package is skipped and only the AppImage runs.
 # 2. Extracts the AppImage (on top of a plain desktop library set, without
 #    GTK 4) and does the same, checking that bundled libraries come from the
 #    AppImage and core libraries (glibc, GL, X11) from the host.
@@ -19,6 +21,54 @@ set -euo pipefail
 dist="$(readlink -f "${1:?usage: smoke.sh <dist-dir>}")"
 . /etc/os-release
 echo "== ${PRETTY_NAME:-$ID}"
+
+# Debian 11 and Ubuntu 20.04 have left the main mirrors. Fall back to the
+# archive when the primary update fails so the smoke job can still install
+# Xvfb and the host GL/X11 libraries.
+apt_update() {
+  # Debian 11's security index on deb.debian.org still updates, but individual
+  # debs 404. archive.debian.org has a consistent snapshot of that release.
+  case "$ID:${VERSION_ID:-}" in
+    debian:10 | debian:11)
+      sed -i \
+        -e 's|http://deb.debian.org/debian|http://archive.debian.org/debian|g' \
+        -e 's|http://security.debian.org/debian-security|http://archive.debian.org/debian-security|g' \
+        /etc/apt/sources.list
+      printf 'Acquire::Check-Valid-Until "false";\n' >/etc/apt/apt.conf.d/99no-check-valid
+      ;;
+  esac
+  if apt-get update -qq; then
+    return 0
+  fi
+  case "$ID:${VERSION_ID:-}" in
+    ubuntu:*)
+      sed -i \
+        -e 's|http://archive.ubuntu.com/ubuntu|http://old-releases.ubuntu.com/ubuntu|g' \
+        -e 's|http://security.ubuntu.com/ubuntu|http://old-releases.ubuntu.com/ubuntu|g' \
+        /etc/apt/sources.list
+      ;;
+  esac
+  apt-get update -qq
+}
+
+# Host libraries the AppImage does not bundle (GL, X11, glibc, libstdc++).
+install_appimage_host_deps() {
+  case "$ID ${ID_LIKE:-}" in
+    *debian* | *ubuntu*)
+      export DEBIAN_FRONTEND=noninteractive
+      apt_update
+      apt-get install -y -qq \
+        xvfb libgl1 libegl1 libx11-6 libx11-xcb1 libxcb1 libxext6 libxrender1 \
+        libxrandr2 libxi6 libxcursor1 libxfixes3 libxinerama1 libxdamage1 \
+        libdrm2 libgbm1 libstdc++6 libexpat1 zlib1g libuuid1 \
+        fonts-dejavu-core >/dev/null
+      ;;
+    *)
+      echo "error: no AppImage host library set for $ID" >&2
+      exit 1
+      ;;
+  esac
+}
 
 # First line of a multi-line string without a head|pipe SIGPIPE.
 first_line() {
@@ -35,7 +85,7 @@ install_native() {
   case "$ID ${ID_LIKE:-}" in
     *debian* | *ubuntu*)
       export DEBIAN_FRONTEND=noninteractive
-      apt-get update -qq
+      apt_update
       apt-get install -y -qq "$dist"/*.deb xvfb libgtk-3-0 >/dev/null
       ;;
     *fedora* | *rhel* | *centos*)
@@ -184,16 +234,30 @@ check_child_env() {
   echo "child environment OK"
 }
 
-install_native
+# These releases have glibc new enough for the AppImage and no GTK 4 in the
+# official repositories, so the native deb cannot be installed here.
+ships_gtk4=1
+case "$ID:${VERSION_ID:-}" in
+  debian:10 | debian:11 | ubuntu:20.04) ships_gtk4=0 ;;
+esac
+
+if [ "$ships_gtk4" = 1 ]; then
+  install_native
+else
+  echo "-- no GTK 4 packages on ${PRETTY_NAME:-$ID}; testing the AppImage only"
+  install_appimage_host_deps
+fi
 
 ldd_ver="$(ldd --version 2>&1 || true)"
 first_line "$ldd_ver"
 
-echo "-- native package"
-check_ldd /usr/bin/hearthstone-linux-gui /usr/share/hearthstone-linux-gui/stubs
-hearthstone-linux-gui --no-gui
-check_child_env hearthstone-linux-gui
-gui_smoke hearthstone-linux-gui
+if [ "$ships_gtk4" = 1 ]; then
+  echo "-- native package"
+  check_ldd /usr/bin/hearthstone-linux-gui /usr/share/hearthstone-linux-gui/stubs
+  hearthstone-linux-gui --no-gui
+  check_child_env hearthstone-linux-gui
+  gui_smoke hearthstone-linux-gui
+fi
 
 echo "-- AppImage"
 work="$(mktemp -d)"

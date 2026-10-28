@@ -1,11 +1,13 @@
 #!/bin/sh
 # AppRun for the AppImage built by packaging/linux/appimage.sh.
 #
-# The AppImage bundles GTK 4, libadwaita, GLib and their dependencies from the
-# Enterprise Linux 9 build baseline, but never glibc, the dynamic loader,
-# libstdc++ or GL/Wayland/X11 driver libraries: those always come from the
-# host. Bundled libraries are found through RUNPATH ($ORIGIN/../lib), so
-# LD_LIBRARY_PATH is never touched.
+# The AppImage bundles GTK 4.12, libadwaita 1.4 and their dependencies
+# (including Wayland client libraries and fontconfig/FreeType/HarfBuzz) built
+# on AlmaLinux 8. It never bundles glibc, the dynamic loader, libstdc++,
+# libgcc_s or GL/EGL/drm/gbm/X11 libraries: those always come from the host.
+# Bundled libraries are found through RUNPATH ($ORIGIN/../lib), so
+# LD_LIBRARY_PATH is never touched. fontconfig locates its private config
+# from the library path, not from an environment variable.
 #
 # The variables below point GTK at its bundled modules and data. Their host
 # values are recorded as HEARTHSTONE_LINUX_HOST_<NAME> (or

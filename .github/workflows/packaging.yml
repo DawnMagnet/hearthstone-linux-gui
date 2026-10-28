@@ -1,9 +1,13 @@
 name: Packaging
 
-# Builds every non-Nix artifact on the Enterprise Linux 9 baseline
-# (glibc 2.34) and smoke-tests it. Smoke also runs the hidden
-# --print-child-env probe so AppImage children do not inherit bundled
-# LD_LIBRARY_PATH / GTK paths.
+# Builds native packages on the Enterprise Linux 9 baseline (glibc 2.34) and
+# the AppImage on AlmaLinux 8 (glibc 2.28, GTK 4.12 from source). Smoke also
+# runs the hidden --print-child-env probe so AppImage children do not inherit
+# bundled LD_LIBRARY_PATH / GTK paths.
+#
+# The EL8 GTK toolchain is published to GHCR, tagged by a hash of its sources,
+# and reused so CI does not recompile GTK on every run. Pull requests build
+# the image when it is missing and do not push it.
 #
 #   pull request   -> not run (ci.yml does the cheap type-check and tests)
 #   push to master -> one quick build, smoke-tested on three distributions
@@ -53,9 +57,13 @@ concurrency:
 
 jobs:
   build:
-    name: Build packages (EL9 baseline)
+    name: Build packages (EL9 native, EL8 AppImage)
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 240
+    permissions:
+      contents: read
+      # Push the EL8 GTK toolchain image. Pull requests do not push.
+      packages: write
     steps:
       - uses: actions/checkout@v6
         with:
@@ -63,9 +71,40 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
+      # Log in before the inspect. The published image is private to this
+      # repository, so an anonymous inspect would miss it and rebuild GTK.
+      - name: Log in to GHCR
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GITHUB_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: EL8 GTK toolchain image ref
+        id: el8gtk
+        run: |
+          set -euo pipefail
+          hash="$(
+            {
+              find packaging/linux/el8-gtk -type f -print | sort | xargs sha256sum
+              sha256sum packaging/linux/Dockerfile
+            } | sha256sum | cut -c1-16
+          )"
+          repo="$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+          ref="ghcr.io/${repo}/el8-gtk:${hash}"
+          echo "ref=${ref}" >> "$GITHUB_OUTPUT"
+          echo "EL8 GTK toolchain ref: ${ref}"
+          if docker buildx imagetools inspect "$ref" >/dev/null 2>&1; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+            echo "build_arg=EL8_GTK_IMAGE=${ref}" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "build_arg=EL8_GTK_IMAGE=el8-gtk-build" >> "$GITHUB_OUTPUT"
+          fi
+
       # dnf, rustup and nfpm rarely change; cache that layer on its own so a
       # source-only commit does not reinstall the whole toolchain. A failed
       # cache export (for example on fork pull requests) must not fail the run.
+      # el8-gtk is the from-source GTK stack. When the GHCR tag above exists,
+      # the dist build pulls it and does not recompile GTK.
       - name: Cache EL9 toolchain layer
         uses: docker/build-push-action@v6
         with:
@@ -82,8 +121,25 @@ jobs:
           context: .
           file: packaging/linux/Dockerfile
           target: dist
+          build-args: ${{ steps.el8gtk.outputs.build_arg }}
           outputs: type=local,dest=dist
-          cache-from: type=gha,scope=el9-toolchain
+          cache-from: |
+            type=gha,scope=el9-toolchain
+            type=gha,scope=el8-gtk
+          cache-to: type=gha,mode=max,scope=el8-gtk,ignore-error=true
+
+      # Same layers as the dist build when the image was missing, so this
+      # push does not compile GTK again. Pull requests never push.
+      - name: Push EL8 GTK toolchain image
+        if: steps.el8gtk.outputs.present != 'true' && github.event_name != 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: packaging/linux/Dockerfile
+          target: el8-gtk-build
+          push: true
+          tags: ${{ steps.el8gtk.outputs.ref }}
+          cache-from: type=gha,scope=el8-gtk
 
       - name: List packages
         run: ls -l dist
@@ -103,12 +159,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Quick: the EL9 baseline (rpm), a current deb distribution and Arch
-        # (pacman). Full: oldest baselines (glibc 2.34 / 2.35 / 2.36) and
-        # current releases.
+        # Quick: EL9 (rpm), a current deb, Arch, and the two glibc>=2.28
+        # desktops that have no GTK 4 packages (AppImage only). Full adds the
+        # rest of the native-package matrix.
         image: ${{ fromJSON(inputs.full
-          && '["almalinux:9","ubuntu:22.04","debian:12","ubuntu:24.04","debian:13","fedora:latest","archlinux:latest","opensuse/tumbleweed:latest"]'
-          || '["almalinux:9","ubuntu:24.04","archlinux:latest"]') }}
+          && '["almalinux:9","ubuntu:22.04","debian:12","ubuntu:24.04","debian:13","fedora:latest","archlinux:latest","opensuse/tumbleweed:latest","debian:11","ubuntu:20.04"]'
+          || '["almalinux:9","ubuntu:24.04","archlinux:latest","debian:11","ubuntu:20.04"]') }}
     container:
       image: ${{ matrix.image }}
     steps:

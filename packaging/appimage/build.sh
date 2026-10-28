@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
-# Builds release artifacts into dist/ using the Enterprise Linux 9 baseline
-# container (packaging/linux/Dockerfile). Works with docker or podman.
+# Builds release artifacts into dist/ (packaging/linux/Dockerfile).
+# Native packages use the AlmaLinux 9 stage. The AppImage uses the AlmaLinux 8
+# GTK toolchain stage in the same Dockerfile. Works with docker or podman.
+#
+#   EL8_GTK_IMAGE=ghcr.io/<owner>/<repo>/el8-gtk:<tag> packaging/appimage/build.sh
+# reuses a published toolchain image instead of compiling GTK.
 #
 #   packaging/appimage/build.sh                  # AppImage + deb/rpm/pacman
 #   TARGET=appimage-out packaging/appimage/build.sh   # AppImage only
@@ -15,6 +19,10 @@ TARGET="${TARGET:-dist}"
 ENGINE="${CONTAINER_ENGINE:-$(command -v docker || command -v podman)}"
 
 mkdir -p "$DIST"
+build_args=()
+if [ -n "${EL8_GTK_IMAGE:-}" ]; then
+  build_args+=(--build-arg "EL8_GTK_IMAGE=${EL8_GTK_IMAGE}")
+fi
 "$ENGINE" build -f "$ROOT/packaging/linux/Dockerfile" --target "$TARGET" \
-  --output "type=local,dest=$DIST" "$@" "$ROOT"
+  --output "type=local,dest=$DIST" "${build_args[@]}" "$@" "$ROOT"
 ls -l "$DIST"

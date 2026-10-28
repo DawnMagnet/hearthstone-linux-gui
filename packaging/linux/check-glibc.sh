@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 # Fails when any ELF file under the given paths needs a glibc symbol version
 # newer than <max>, or when a core host library that must never be bundled
-# (glibc, ld-linux, libstdc++, libgcc_s, GL/EGL, libdrm, X11/xcb, Wayland)
-# is present in the tree.
+# (glibc, ld-linux, libstdc++, libgcc_s, GL/EGL, libdrm, libgbm, X11/xcb,
+# Wayland server) is present in the tree.
+#
+# Wayland client/cursor/egl are bundled on purpose: GTK 4.12 needs Wayland
+# >= 1.21 and Ubuntu 20.04 ships 1.18. fontconfig, FreeType and HarfBuzz are
+# bundled for the same reason and are not in this list.
 #
 #   check-glibc.sh 2.34 /pkgroot AppDir
 set -euo pipefail
@@ -26,8 +30,7 @@ is_forbidden_basename() {
     libGLdispatch.so.* | libGLX.so.* | libglapi.so.* | libgbm.so.* | \
     libdrm.so.* | libdrm_*.so.* | \
     libX11.so.* | libX11-xcb.so.* | libxcb.so.* | \
-    libwayland-client.so.* | libwayland-server.so.* | libwayland-egl.so.* | \
-    libwayland-cursor.so.*)
+    libwayland-server.so.*)
       return 0
       ;;
   esac
