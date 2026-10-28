@@ -722,10 +722,9 @@ async fn cancel_mid_download_keeps_partial() {
     assert!(partial_download_path(&destination).exists());
 }
 
-// IDLE_TIMEOUT is a 30s constant. Leaving it alone keeps this PR test-only;
-// running the stall case would wait out that timer.
+// Idle timeout stays 30s in production. This waits that long, then checks
+// that a connection with no bytes is reported as stalled.
 #[tokio::test]
-#[ignore = "IDLE_TIMEOUT is hard-coded to 30s; stalling a connection waits that long"]
 async fn stalled_connection_times_out() {
     let behavior = Behavior {
         stall_after_headers: true,
