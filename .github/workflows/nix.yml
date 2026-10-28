@@ -38,13 +38,11 @@ jobs:
     if: github.event.pull_request.draft != true
     runs-on: ubuntu-latest
     timeout-minutes: 90
-    # actions: write is the Actions cache, not repository contents. The
-    # workflow token still cannot push. Fork pull requests are read-only;
-    # a cache save failure must not hide a successful build, so the cache
-    # step does not fail the job.
+    # Read-only token. The cache step may restore but cannot delete old
+    # caches; a cache failure must not hide a successful build, so that step
+    # does not fail the job.
     permissions:
       contents: read
-      actions: write
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:

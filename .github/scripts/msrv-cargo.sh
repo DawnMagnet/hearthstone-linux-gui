@@ -33,7 +33,7 @@ echo "rust-toolchain.toml pins 1.92.0; overriding with RUSTUP_TOOLCHAIN=${versio
 rustup toolchain install "$version" --profile minimal --no-self-update
 
 export RUSTUP_TOOLCHAIN="$version"
-actual=$(cargo "+${version}" rustc --version)
+actual=$(rustc "+${version}" --version)
 echo "rustc: ${actual}"
 reported=${actual#rustc }
 reported=${reported%% *}

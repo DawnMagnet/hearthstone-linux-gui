@@ -11,9 +11,12 @@ key entirely, ``[workspace.package].rust-version`` is the manifest's value.
 
 from __future__ import annotations
 
+import re
 import sys
 import tomllib
 from pathlib import Path
+
+VERSION_RE = re.compile(r"^[0-9]+(\.[0-9]+){1,2}$")
 
 
 def rust_version(path: Path) -> str | None:
@@ -36,6 +39,8 @@ def main() -> None:
         raise SystemExit(f"usage: {sys.argv[0]} <Cargo.toml>")
     found = rust_version(Path(sys.argv[1]))
     if found:
+        if not VERSION_RE.fullmatch(found):
+            raise SystemExit(f"{sys.argv[1]}: rust-version {found!r} is not a plain version like 1.88 or 1.88.0")
         print(found)
 
 

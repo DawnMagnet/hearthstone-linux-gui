@@ -66,17 +66,19 @@ jobs:
 
       - name: Read rust-version
         id: msrv
+        env:
+          MANIFEST: ${{ matrix.manifest }}
         run: |
           set -euo pipefail
-          version=$(python3 .github/scripts/rust-version.py "${{ matrix.manifest }}")
+          version=$(python3 .github/scripts/rust-version.py "$MANIFEST")
           if [ -z "$version" ]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "::warning::${{ matrix.manifest }} has no rust-version; skipping MSRV check"
-            echo "${{ matrix.manifest }} has no rust-version; skipping MSRV check"
+            echo "::warning::${MANIFEST} has no rust-version; skipping MSRV check"
+            echo "${MANIFEST} has no rust-version; skipping MSRV check"
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
             echo "version=${version}" >> "$GITHUB_OUTPUT"
-            echo "${{ matrix.manifest }} rust-version=${version}"
+            echo "${MANIFEST} rust-version=${version}"
           fi
 
       # Skipped manifests stop here. This ref installs Rust 1.92.0 only, which
@@ -87,10 +89,12 @@ jobs:
 
       - name: Install the manifest toolchain
         if: steps.msrv.outputs.skip != 'true'
+        env:
+          MSRV: ${{ steps.msrv.outputs.version }}
         run: |
           set -euo pipefail
-          rustup toolchain install "${{ steps.msrv.outputs.version }}" --profile minimal --no-self-update
-          echo "RUSTUP_TOOLCHAIN=${{ steps.msrv.outputs.version }}" >> "$GITHUB_ENV"
+          rustup toolchain install "$MSRV" --profile minimal --no-self-update
+          echo "RUSTUP_TOOLCHAIN=${MSRV}" >> "$GITHUB_ENV"
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         if: steps.msrv.outputs.skip != 'true'
@@ -100,15 +104,20 @@ jobs:
 
       - name: Install system libraries
         if: steps.msrv.outputs.skip != 'true'
+        env:
+          APT_PACKAGES: ${{ matrix.apt }}
         run: |
           echo 'force-unsafe-io' | sudo tee /etc/dpkg/dpkg.cfg.d/unsafe-io >/dev/null
           sudo rm -f /var/lib/man-db/auto-update
           sudo apt-get update -qq
+          # shellcheck disable=SC2086 # word splitting is intended
           sudo apt-get install -y -qq --no-install-recommends \
-            pkg-config ${{ matrix.apt }}
+            pkg-config $APT_PACKAGES
 
       - name: Check at the manifest rust-version
         if: steps.msrv.outputs.skip != 'true'
+        env:
+          MANIFEST: ${{ matrix.manifest }}
         run: >
-          bash .github/scripts/msrv-cargo.sh "${{ matrix.manifest }}"
-          check --manifest-path "${{ matrix.manifest }}" --locked --all-targets
+          bash .github/scripts/msrv-cargo.sh "$MANIFEST"
+          check --manifest-path "$MANIFEST" --locked --all-targets
