@@ -1,6 +1,7 @@
 [package]
 name = "hearthstone-linux-gui-osx-window-management-stub"
 version.workspace = true
+rust-version.workspace = true
 edition = "2021"
 license = "MIT"
 

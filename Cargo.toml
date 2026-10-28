@@ -1,6 +1,7 @@
 [package]
 name = "hearthstone-linux-gui"
 version.workspace = true
+rust-version.workspace = true
 edition = "2021"
 license = "MIT"
 description = "Native GTK4 Linux GUI manager for crafting and launching Hearthstone"
@@ -33,6 +34,7 @@ exclude = ["login-helper"]
 
 [workspace.package]
 version = "0.3.2"
+rust-version = "1.88"
 
 [features]
 default = ["gui"]
