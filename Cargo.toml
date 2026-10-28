@@ -1,6 +1,7 @@
 [package]
 name = "hearthstone-linux-gui"
 version.workspace = true
+rust-version.workspace = true
 edition = "2021"
 license = "MIT"
 description = "Native GTK4 Linux GUI manager for crafting and launching Hearthstone"
@@ -33,10 +34,12 @@ exclude = ["login-helper"]
 
 [workspace.package]
 version = "0.3.2"
+# MSRV is set by relm4-css / relm4-macros 0.10.1. Recheck when upgrading relm4.
+rust-version = "1.92"
 
 [features]
 default = ["gui"]
-gui = ["dep:relm4", "dep:relm4-components"]
+gui = ["dep:relm4", "dep:relm4-components", "dep:gtk4", "dep:libadwaita"]
 
 [dependencies]
 aes = "0.8"
@@ -69,6 +72,16 @@ xz2 = "0.1"
 
 relm4 = { version = "=0.10.0", default-features = false, features = ["css", "macros", "libadwaita"], optional = true }
 relm4-components = { version = "=0.10.0", features = ["libadwaita"], optional = true }
+# Runtime baseline is still GTK 4.6 + libadwaita 1.1 (adw 1.1 needs GTK >= 4.5),
+# but we compile against the 4.4 API surface so EL9's pango 1.48 works.
+# gtk4-rs 0.10's v4_6 feature enables pango/v1_50, and pango-sys then requires
+# pango >= 1.50. EL9 ships pango 1.48.7 (Red Hat's GTK 4.6.9 is built against
+# it). Anything needing a 4.6-only API must fail to compile. gtk-rs gates
+# newer APIs behind cumulative v4_* / v1_* features, so these direct deps —
+# unified with relm4's gtk4 and libadwaita — keep that ceiling. relm4's
+# gnome_43+ features are unused; they would raise GTK (and pango) too.
+gtk4 = { version = "0.10", features = ["v4_4"], optional = true }
+libadwaita = { version = "0.8", features = ["v1_1"], optional = true }
 
 [dev-dependencies]
 tempfile = "3"
