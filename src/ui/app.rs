@@ -83,6 +83,8 @@ struct MainWindow {
     logo: super::logo::Logo,
     /// Newer launcher release found by the update check.
     update: Option<Release>,
+    /// Open uninstall confirmation, kept alive until it closes.
+    uninstall_dialog: Option<gtk::MessageDialog>,
 }
 
 #[derive(Clone, Debug)]
@@ -100,6 +102,10 @@ pub enum AppMsg {
     Action(ActionBarOutput),
     InstallEvent(TaskEvent),
     UninstallFinished(Result<(), String>),
+    /// The uninstall confirmation closed. `confirmed` is the Uninstall button.
+    UninstallDialogFinished {
+        confirmed: bool,
+    },
     LoginPoll,
     /// The login window finished; see [`login_window::Outcome`].
     LoginWindowClosed {
@@ -372,6 +378,7 @@ impl SimpleComponent for MainWindow {
             update_button: update_button.clone(),
             logo,
             update: None,
+            uninstall_dialog: None,
         };
 
         let logo_image = model.logo.image.clone();
@@ -443,6 +450,9 @@ impl SimpleComponent for MainWindow {
             AppMsg::Action(output) => self.handle_action(output, sender),
             AppMsg::InstallEvent(event) => self.handle_install_event(event),
             AppMsg::UninstallFinished(result) => self.handle_uninstall_finished(result),
+            AppMsg::UninstallDialogFinished { confirmed } => {
+                self.handle_uninstall_dialog(confirmed, sender)
+            }
             AppMsg::LoginPoll => self.handle_login_poll(),
             AppMsg::LoginWindowClosed { session, outcome } => {
                 self.handle_login_window_closed(session, outcome, sender.clone())
@@ -563,7 +573,7 @@ impl MainWindow {
     fn handle_action(&mut self, output: ActionBarOutput, sender: ComponentSender<Self>) {
         match output {
             ActionBarOutput::Install => self.handle_install_pressed(sender),
-            ActionBarOutput::Uninstall => self.handle_uninstall_pressed(sender),
+            ActionBarOutput::Uninstall => self.confirm_uninstall(sender),
             ActionBarOutput::Account => self.handle_account_pressed(sender),
             ActionBarOutput::Logout => self.handle_logout(),
             ActionBarOutput::SwitchAccount => self.handle_switch_account(sender),
@@ -625,6 +635,66 @@ impl MainWindow {
             cancel.cancel();
             self.install_state = InstallState::Stopping;
             self.status.headline = phrase!("install.stopping");
+        }
+    }
+
+    /// Asks before deleting the installed game.
+    ///
+    /// `gtk::MessageDialog` is the GTK 4.0 dialog. It stays free of deprecation
+    /// warnings as long as gtk4's `v4_10` feature is not enabled, and it does
+    /// not need libadwaita 1.2.
+    fn confirm_uninstall(&mut self, sender: ComponentSender<Self>) {
+        if self.uninstall_dialog.is_some() {
+            return;
+        }
+
+        let dialog = gtk::MessageDialog::builder()
+            .transient_for(&self.window)
+            .modal(true)
+            .destroy_with_parent(true)
+            .message_type(gtk::MessageType::Warning)
+            .text(tr!("install.confirm_uninstall"))
+            .secondary_text(tr!(
+                "install.confirm_uninstall_body",
+                path = self.paths.game_dir.display()
+            ))
+            .build();
+        dialog.add_button(
+            &tr!("install.confirm_uninstall_cancel"),
+            gtk::ResponseType::Cancel,
+        );
+        dialog
+            .add_button(&tr!("action.uninstall"), gtk::ResponseType::Accept)
+            .add_css_class(relm4::css::DESTRUCTIVE_ACTION);
+        // Enter, and the dialog's default styling, stay on Cancel.
+        dialog.set_default_response(gtk::ResponseType::Cancel);
+
+        let input = sender.input_sender().clone();
+        dialog.connect_response(move |_dialog, response| {
+            input.emit(AppMsg::UninstallDialogFinished {
+                confirmed: response == gtk::ResponseType::Accept,
+            });
+        });
+        // Escape is the dialog's close keybinding, and the window close button
+        // uses the same request. Neither one may uninstall.
+        let input = sender.input_sender().clone();
+        dialog.connect_close_request(move |_| {
+            input.emit(AppMsg::UninstallDialogFinished { confirmed: false });
+            glib::Propagation::Proceed
+        });
+        dialog.present();
+        self.uninstall_dialog = Some(dialog);
+    }
+
+    fn handle_uninstall_dialog(&mut self, confirmed: bool, sender: ComponentSender<Self>) {
+        let Some(dialog) = self.uninstall_dialog.take() else {
+            return;
+        };
+        // `destroy` dismisses the dialog after Cancel, Escape, or the window
+        // close button. Only Uninstall continues into the existing flow.
+        dialog.destroy();
+        if confirmed {
+            self.handle_uninstall_pressed(sender);
         }
     }
 
