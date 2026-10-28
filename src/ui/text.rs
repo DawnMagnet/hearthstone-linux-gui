@@ -56,6 +56,7 @@ mod tests {
             .application_id("io.github.hearthstone_linux_gui.i18n_test")
             .build();
         app.connect_activate(move |app| {
+            super::super::components::assert_choice_dropdown_follows_language(&hold);
             let window = adw::ApplicationWindow::builder()
                 .application(app)
                 .default_width(320)
