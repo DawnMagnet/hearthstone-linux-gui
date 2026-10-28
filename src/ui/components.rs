@@ -8,8 +8,9 @@ use hearthstone_linux::{
     tr, update,
 };
 use relm4::adw::prelude::*;
-use relm4::{adw, gtk, prelude::*, ComponentController, Controller, RelmWidgetExt, Sender};
-use relm4_components::simple_combo_box::{SimpleComboBox, SimpleComboBoxMsg};
+use relm4::{adw, gtk, prelude::*, RelmWidgetExt, Sender};
+use std::cell::Cell;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug)]
@@ -249,12 +250,83 @@ impl SimpleComponent for StatusPanel {
     }
 }
 
+/// Region or game-language dropdown. The strings are display names; the
+/// selected index still maps to [`Region::ALL`] / [`Locale::ALL`].
+struct TranslatedDropDown {
+    widget: gtk::DropDown,
+    /// Set while labels are replaced or the selection is restored, so that
+    /// work does not look like the user picked a new value.
+    refreshing: Rc<Cell<bool>>,
+}
+
+impl TranslatedDropDown {
+    fn new(
+        bindings: &mut Bindings,
+        labels: impl Fn() -> Vec<String> + 'static,
+        selected: usize,
+        on_selected: impl Fn(usize) + 'static,
+    ) -> Self {
+        let initial = labels();
+        let initial_refs: Vec<&str> = initial.iter().map(String::as_str).collect();
+        let widget = gtk::DropDown::from_strings(&initial_refs);
+        let list = widget
+            .model()
+            .expect("choice dropdown has a model")
+            .dynamic_cast::<gtk::StringList>()
+            .expect("choice dropdown model is a string list");
+        widget.set_selected(selected as u32);
+
+        let refreshing = Rc::new(Cell::new(false));
+        let refreshing_for_signal = Rc::clone(&refreshing);
+        widget.connect_selected_notify(move |dropdown| {
+            if refreshing_for_signal.get() {
+                return;
+            }
+            let position = dropdown.selected();
+            if position == gtk::INVALID_LIST_POSITION {
+                return;
+            }
+            on_selected(position as usize);
+        });
+
+        let widget_for_watch = widget.clone();
+        let list_for_watch = list;
+        let refreshing_for_watch = Rc::clone(&refreshing);
+        bindings.watch(move || {
+            refreshing_for_watch.set(true);
+            let selected = widget_for_watch.selected();
+            let next = labels();
+            let additions: Vec<&str> = next.iter().map(String::as_str).collect();
+            list_for_watch.splice(0, list_for_watch.n_items(), &additions);
+            if selected != gtk::INVALID_LIST_POSITION {
+                widget_for_watch.set_selected(selected);
+            }
+            refreshing_for_watch.set(false);
+        });
+
+        Self { widget, refreshing }
+    }
+
+    fn set_selected(&self, index: usize) {
+        self.refreshing.set(true);
+        self.widget.set_selected(index as u32);
+        self.refreshing.set(false);
+    }
+}
+
+fn label_dropdown(dropdown: &gtk::DropDown, label: &gtk::Label) {
+    dropdown.update_relation(&[gtk::accessible::Relation::LabelledBy(&[label.upcast_ref()])]);
+}
+
 pub struct SettingsPanel {
     config: AppConfig,
     gamemode_available: bool,
     mangohud_available: bool,
-    region: Controller<SimpleComboBox<Region>>,
-    locale: Controller<SimpleComboBox<Locale>>,
+    region: TranslatedDropDown,
+    locale: TranslatedDropDown,
+    /// Lives as long as the panel so a language change refreshes the dropdowns.
+    #[allow(dead_code)]
+    bindings: Bindings,
 }
 
 #[derive(Debug)]
@@ -291,6 +363,7 @@ impl SimpleComponent for SettingsPanel {
             set_column_spacing: 12,
             set_row_spacing: 8,
 
+            #[name(region_label)]
             attach[0, 0, 1, 1] = &gtk::Label {
                 #[watch]
                 set_label: &tr!("settings.region"),
@@ -300,9 +373,10 @@ impl SimpleComponent for SettingsPanel {
 
             attach[1, 0, 1, 1] = &gtk::Box {
                 #[local_ref]
-                region -> gtk::ComboBoxText {},
+                region -> gtk::DropDown {},
             },
 
+            #[name(game_language_label)]
             attach[0, 1, 1, 1] = &gtk::Label {
                 #[watch]
                 set_label: &tr!("settings.game_language"),
@@ -312,7 +386,7 @@ impl SimpleComponent for SettingsPanel {
 
             attach[1, 1, 1, 1] = &gtk::Box {
                 #[local_ref]
-                locale -> gtk::ComboBoxText {},
+                locale -> gtk::DropDown {},
             },
 
             attach[0, 2, 1, 1] = &gtk::Label {
@@ -421,29 +495,47 @@ impl SimpleComponent for SettingsPanel {
         root: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
-        let region = SimpleComboBox::builder()
-            .launch(SimpleComboBox {
-                variants: Region::ALL.to_vec(),
-                active_index: index_of(&Region::ALL, config.region),
-            })
-            .forward(sender.input_sender(), SettingsPanelInput::RegionChanged);
-        let locale = SimpleComboBox::builder()
-            .launch(SimpleComboBox {
-                variants: Locale::ALL.to_vec(),
-                active_index: index_of(&Locale::ALL, config.locale),
-            })
-            .forward(sender.input_sender(), SettingsPanelInput::LocaleChanged);
+        let mut bindings = Bindings::default();
+        let region = TranslatedDropDown::new(
+            &mut bindings,
+            || {
+                Region::ALL
+                    .map(|region| region.display_name().render())
+                    .to_vec()
+            },
+            index_of(&Region::ALL, config.region).unwrap_or(0),
+            {
+                let sender = sender.input_sender().clone();
+                move |idx| sender.emit(SettingsPanelInput::RegionChanged(idx))
+            },
+        );
+        let locale = TranslatedDropDown::new(
+            &mut bindings,
+            || {
+                Locale::ALL
+                    .map(|locale| locale.display_name().render())
+                    .to_vec()
+            },
+            index_of(&Locale::ALL, config.locale).unwrap_or(0),
+            {
+                let sender = sender.input_sender().clone();
+                move |idx| sender.emit(SettingsPanelInput::LocaleChanged(idx))
+            },
+        );
         let model = SettingsPanel {
             config,
             gamemode_available: LaunchTool::GameMode.is_installed(),
             mangohud_available: LaunchTool::MangoHud.is_installed(),
             region,
             locale,
+            bindings,
         };
 
-        let region = model.region.widget();
-        let locale = model.locale.widget();
+        let region = &model.region.widget;
+        let locale = &model.locale.widget;
         let widgets = view_output!();
+        label_dropdown(&model.region.widget, &widgets.region_label);
+        label_dropdown(&model.locale.widget, &widgets.game_language_label);
 
         ComponentParts { model, widgets }
     }
@@ -455,24 +547,26 @@ impl SimpleComponent for SettingsPanel {
                 let locale_changed = self.config.locale != config.locale;
                 self.config = config;
                 if region_changed {
-                    self.region
-                        .emit(SimpleComboBoxMsg::SetActiveIdx(self.region_index()));
+                    self.region.set_selected(self.region_index());
                 }
                 if locale_changed {
-                    self.locale
-                        .emit(SimpleComboBoxMsg::SetActiveIdx(self.locale_index()));
+                    self.locale.set_selected(self.locale_index());
                 }
             }
             SettingsPanelInput::RegionChanged(idx) => {
                 if let Some(region) = Region::ALL.get(idx).copied() {
-                    self.config.region = region;
-                    sender.output(SettingsOutput::Region(region)).ok();
+                    if self.config.region != region {
+                        self.config.region = region;
+                        sender.output(SettingsOutput::Region(region)).ok();
+                    }
                 }
             }
             SettingsPanelInput::LocaleChanged(idx) => {
                 if let Some(locale) = Locale::ALL.get(idx).copied() {
-                    self.config.locale = locale;
-                    sender.output(SettingsOutput::Locale(locale)).ok();
+                    if self.config.locale != locale {
+                        self.config.locale = locale;
+                        sender.output(SettingsOutput::Locale(locale)).ok();
+                    }
                 }
             }
             SettingsPanelInput::LaunchToolChanged(tool, enabled) => {
@@ -782,6 +876,86 @@ impl ActionBar {
             tr!("action.account_tooltip")
         }
     }
+}
+
+#[cfg(test)]
+pub(super) fn assert_choice_dropdown_follows_language(
+    hold: &hearthstone_linux::i18n::LanguageHold,
+) {
+    hold.select(Some("en"));
+    let chosen = Rc::new(Cell::new(None));
+    let chosen_for_callback = Rc::clone(&chosen);
+    let mut bindings = Bindings::default();
+    let region = TranslatedDropDown::new(
+        &mut bindings,
+        || {
+            Region::ALL
+                .map(|region| region.display_name().render())
+                .to_vec()
+        },
+        1,
+        move |idx| chosen_for_callback.set(Some(idx)),
+    );
+    let locale_index = index_of(&Locale::ALL, Locale::ZhCn).unwrap();
+    let locale = TranslatedDropDown::new(
+        &mut bindings,
+        || {
+            Locale::ALL
+                .map(|locale| locale.display_name().render())
+                .to_vec()
+        },
+        locale_index,
+        |_| {},
+    );
+
+    assert_eq!(region.widget.selected(), 1);
+    assert_eq!(
+        dropdown_labels(&region.widget),
+        ["Americas", "Europe", "Asia", "China"]
+    );
+    assert_eq!(locale.widget.selected(), locale_index as u32);
+    let english_locales = dropdown_labels(&locale.widget);
+    assert_eq!(english_locales[locale_index], "简体中文");
+    assert_eq!(english_locales[0], "Deutsch");
+    assert!(chosen.get().is_none());
+
+    assert!(hold.select(Some("zh-CN")));
+    assert_eq!(region.widget.selected(), 1);
+    assert_eq!(
+        dropdown_labels(&region.widget),
+        ["美洲", "欧洲", "亚洲", "中国"]
+    );
+    assert_eq!(locale.widget.selected(), locale_index as u32);
+    // Game languages keep their own names when the UI language changes.
+    assert_eq!(dropdown_labels(&locale.widget), english_locales);
+    assert!(chosen.get().is_none());
+
+    assert!(hold.select(Some("de")));
+    assert_eq!(region.widget.selected(), 1);
+    assert_eq!(
+        dropdown_labels(&region.widget),
+        ["Amerika", "Europa", "Asien", "China"]
+    );
+    assert_eq!(dropdown_labels(&locale.widget), english_locales);
+    assert!(chosen.get().is_none());
+
+    region.widget.set_selected(3);
+    assert_eq!(chosen.get(), Some(3));
+    assert_eq!(Region::ALL[3].as_str(), "cn");
+
+    hold.select(Some("en"));
+}
+
+#[cfg(test)]
+fn dropdown_labels(dropdown: &gtk::DropDown) -> Vec<String> {
+    let list = dropdown
+        .model()
+        .expect("choice dropdown has a model")
+        .dynamic_cast::<gtk::StringList>()
+        .expect("choice dropdown model is a string list");
+    (0..list.n_items())
+        .map(|position| list.string(position).unwrap_or_default().to_string())
+        .collect()
 }
 
 fn index_of<T: Copy + Eq>(items: &[T], value: T) -> Option<usize> {

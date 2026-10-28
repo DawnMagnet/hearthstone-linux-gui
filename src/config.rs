@@ -1,3 +1,4 @@
+use crate::{i18n::Phrase, phrase};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -22,6 +23,29 @@ impl Region {
             Region::Us => "us",
             Region::Kr => "kr",
             Region::Cn => "cn",
+        }
+    }
+
+    /// Catalog key of the name shown in the settings dropdown.
+    /// Config files and the game keep using [`Self::as_str`].
+    pub fn display_key(self) -> &'static str {
+        match self {
+            Region::Us => "region.us",
+            Region::Eu => "region.eu",
+            Region::Kr => "region.kr",
+            Region::Cn => "region.cn",
+        }
+    }
+
+    /// Name shown in the settings dropdown, in the current UI language.
+    /// Call it again after the language changes. Config files and the game
+    /// keep using [`Self::as_str`].
+    pub fn display_name(self) -> Phrase {
+        match self {
+            Region::Us => phrase!("region.us"),
+            Region::Eu => phrase!("region.eu"),
+            Region::Kr => phrase!("region.kr"),
+            Region::Cn => phrase!("region.cn"),
         }
     }
 
@@ -143,6 +167,54 @@ impl Locale {
             Locale::ThTh => "thTH",
             Locale::ZhCn => "zhCN",
             Locale::ZhTw => "zhTW",
+        }
+    }
+
+    /// Catalog key of the name shown in the settings dropdown.
+    /// Config files and the game keep using [`Self::as_str`].
+    pub fn display_key(self) -> &'static str {
+        match self {
+            Locale::DeDe => "game_locale.deDE",
+            Locale::EnGb => "game_locale.enGB",
+            Locale::EnUs => "game_locale.enUS",
+            Locale::EsEs => "game_locale.esES",
+            Locale::EsMx => "game_locale.esMX",
+            Locale::FrFr => "game_locale.frFR",
+            Locale::ItIt => "game_locale.itIT",
+            Locale::JaJp => "game_locale.jaJP",
+            Locale::KoKr => "game_locale.koKR",
+            Locale::PlPl => "game_locale.plPL",
+            Locale::PtBr => "game_locale.ptBR",
+            Locale::RuRu => "game_locale.ruRU",
+            Locale::ThTh => "game_locale.thTH",
+            Locale::ZhCn => "game_locale.zhCN",
+            Locale::ZhTw => "game_locale.zhTW",
+        }
+    }
+
+    /// Name shown in the settings dropdown, in the current UI language.
+    /// Call it again after the language changes. Config files and the game
+    /// keep using [`Self::as_str`].
+    ///
+    /// Game languages use their own name (Deutsch, 简体中文, …) in every
+    /// catalog, the same way launcher languages use `meta.name`.
+    pub fn display_name(self) -> Phrase {
+        match self {
+            Locale::DeDe => phrase!("game_locale.deDE"),
+            Locale::EnGb => phrase!("game_locale.enGB"),
+            Locale::EnUs => phrase!("game_locale.enUS"),
+            Locale::EsEs => phrase!("game_locale.esES"),
+            Locale::EsMx => phrase!("game_locale.esMX"),
+            Locale::FrFr => phrase!("game_locale.frFR"),
+            Locale::ItIt => phrase!("game_locale.itIT"),
+            Locale::JaJp => phrase!("game_locale.jaJP"),
+            Locale::KoKr => phrase!("game_locale.koKR"),
+            Locale::PlPl => phrase!("game_locale.plPL"),
+            Locale::PtBr => phrase!("game_locale.ptBR"),
+            Locale::RuRu => phrase!("game_locale.ruRU"),
+            Locale::ThTh => phrase!("game_locale.thTH"),
+            Locale::ZhCn => phrase!("game_locale.zhCN"),
+            Locale::ZhTw => phrase!("game_locale.zhTW"),
         }
     }
 }
@@ -297,7 +369,7 @@ fn detect_region_and_locale(system_locale: &str) -> (Region, Locale) {
 
 #[cfg(test)]
 mod tests {
-    use super::{detect_region_and_locale, Locale, Region};
+    use super::{detect_region_and_locale, AppConfig, Locale, Region};
 
     #[test]
     fn detects_region_and_game_language_from_system_locale() {
@@ -341,5 +413,88 @@ mod tests {
         assert_eq!("enUS".parse::<Locale>().unwrap(), Locale::EnUs);
         assert_eq!(Locale::ZhTw.to_string(), "zhTW");
         assert!("en-us".parse::<Locale>().is_err());
+    }
+
+    #[test]
+    fn config_file_keeps_region_and_locale_codes() {
+        let config = AppConfig {
+            region: Region::Kr,
+            locale: Locale::JaJp,
+            ..AppConfig::default()
+        };
+        let text = toml::to_string(&config).unwrap();
+        assert!(text.contains("region = \"kr\""), "{text}");
+        assert!(text.contains("locale = \"jaJP\""), "{text}");
+        assert!(!text.contains("Asia"), "{text}");
+        assert!(!text.contains("日本語"), "{text}");
+        let parsed: AppConfig = toml::from_str(&text).unwrap();
+        assert_eq!((parsed.region, parsed.locale), (Region::Kr, Locale::JaJp));
+        assert_eq!(parsed.region.as_str(), "kr");
+        assert_eq!(parsed.locale.as_str(), "jaJP");
+    }
+
+    /// Every shipped catalog has a display name for every variant, and
+    /// [`Region::display_name`] / [`Locale::display_name`] read that entry.
+    #[test]
+    fn every_catalog_names_every_region_and_locale() {
+        use crate::i18n::LanguageHold;
+        use std::collections::HashMap;
+
+        fn flatten(prefix: &str, table: &toml::Table, into: &mut HashMap<String, String>) {
+            for (name, value) in table {
+                let key = if prefix.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{prefix}.{name}")
+                };
+                match value {
+                    toml::Value::String(text) => {
+                        into.insert(key, text.clone());
+                    }
+                    toml::Value::Table(nested) => flatten(&key, nested, into),
+                    _ => {}
+                }
+            }
+        }
+
+        fn catalog(code: &str) -> HashMap<String, String> {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join(format!("locales/{code}.toml"));
+            let table: toml::Table = toml::from_str(
+                &std::fs::read_to_string(&path)
+                    .unwrap_or_else(|error| panic!("{}: {error}", path.display())),
+            )
+            .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+            let mut parsed = HashMap::new();
+            flatten("", &table, &mut parsed);
+            parsed
+        }
+
+        let english = catalog("en");
+        let hold = LanguageHold::acquire();
+        for code in ["en", "de", "fr", "zh-CN"] {
+            let parsed = catalog(code);
+            hold.select(Some(code));
+            for region in Region::ALL {
+                let key = region.display_key();
+                let value = parsed
+                    .get(key)
+                    .unwrap_or_else(|| panic!("locales/{code}.toml misses {key}"));
+                assert!(!value.is_empty(), "{key}");
+                assert_ne!(value, region.as_str(), "{key}");
+                assert_eq!(region.display_name().render(), *value, "{code} {key}");
+            }
+            for locale in Locale::ALL {
+                let key = locale.display_key();
+                let value = parsed
+                    .get(key)
+                    .unwrap_or_else(|| panic!("locales/{code}.toml misses {key}"));
+                assert!(!value.is_empty(), "{key}");
+                assert_ne!(value, locale.as_str(), "{key}");
+                assert_eq!(locale.display_name().render(), *value, "{code} {key}");
+                // The game language is named in that language in every catalog.
+                assert_eq!(value, &english[key], "{code} {key}");
+            }
+        }
     }
 }
