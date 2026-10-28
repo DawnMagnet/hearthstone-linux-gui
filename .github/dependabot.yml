@@ -1,14 +1,25 @@
 version: 2
+# Routine version updates: at most one grouped PR per ecosystem per month.
+# The groups apply to version updates only, so security updates are not
+# grouped and still open right away, one PR each.
 updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
+    groups:
+      github-actions:
+        applies-to: version-updates
+        patterns:
+          - "*"
   - package-ecosystem: cargo
-    directory: /
+    directories:
+      - /
+      - /login-helper
     schedule:
-      interval: weekly
-  - package-ecosystem: cargo
-    directory: /login-helper
-    schedule:
-      interval: weekly
+      interval: monthly
+    groups:
+      cargo:
+        applies-to: version-updates
+        patterns:
+          - "*"
