@@ -1,19 +1,25 @@
 name: Packaging
 
-# Builds every non-Nix artifact on the Enterprise Linux 9 baseline
-# (glibc 2.34) and smoke-tests it. Smoke also runs the hidden
-# --print-child-env probe so AppImage children do not inherit bundled
-# LD_LIBRARY_PATH / GTK paths.
+# Native packages stay on the Enterprise Linux 9 baseline. The AppImage is
+# built on AlmaLinux 8 (glibc 2.28) against the from-source GTK 4.12 stack.
+# check-glibc.sh runs inside that build. Smoke runs --print-child-env so
+# children do not inherit bundled library or GTK paths. Debian 11 and
+# Ubuntu 20.04 also launch the AppImage on a headless Wayland compositor.
 #
-#   pull request   -> same quick build and smoke as master when packaging,
-#                     dependencies or sources change. Build only: no login,
-#                     no push, no release.
-#   push to master -> one quick build, smoke-tested on three distributions
-#   release.yml    -> called with full=true: the full distribution matrix
-#   manual run     -> quick by default, full with the `full` input
+#   pull request        -> deb/rpm/pacman and the AppImage, smoke on
+#                          AlmaLinux 9, Debian 11 and Ubuntu 20.04.
+#                          Never pushes the toolchain image.
+#   workflow_dispatch   -> same AppImage build and smoke, unless `full` is
+#                          set. Pushes the toolchain image only when
+#                          `push_image` is set and the ref is master.
+#   push to master      -> deb/rpm/pacman and the AppImage, quick smoke
+#                          matrix, then a separate job pushes the toolchain
+#                          image to GHCR.
+#   release.yml         -> workflow_call with full=true.
 #
-# This workflow only builds and uploads the `linux-packages` artifact. It never
-# touches a GitHub release; release.yml publishes.
+# The toolchain image tag is a hash of packaging/linux/el8-gtk and the
+# Dockerfile. Builds use the GitHub Actions cache. Only the push job has
+# packages: write, and it never runs for a pull request.
 
 on:
   pull_request:
@@ -43,7 +49,11 @@ on:
   workflow_dispatch:
     inputs:
       full:
-        description: Smoke test the full distribution matrix instead of three images.
+        description: Also build native packages and smoke the full distribution matrix.
+        type: boolean
+        default: false
+      push_image:
+        description: Push the EL8 GTK toolchain image to GHCR. Only honored on master.
         type: boolean
         default: false
   workflow_call:
@@ -67,9 +77,11 @@ concurrency:
 
 jobs:
   build:
-    name: Build packages (EL9 baseline)
+    name: Build packages
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 240
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
@@ -78,27 +90,22 @@ jobs:
 
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
-      # dnf, rustup and nfpm rarely change; cache that layer on its own so a
-      # source-only commit does not reinstall the whole toolchain. A failed
-      # cache export (for example on fork pull requests) must not fail the run.
-      - name: Cache EL9 toolchain layer
+      # A manual run without `full` only needs the AppImage. Pull requests
+      # build the EL9 native packages too, so EL9 regressions show up before
+      # merge. check-glibc.sh 2.28 runs inside packaging/linux/appimage.sh.
+      - name: Build AppImage and native packages
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           file: packaging/linux/Dockerfile
-          target: toolchain
-          outputs: type=cacheonly
-          cache-from: type=gha,scope=el9-toolchain
-          cache-to: type=gha,mode=max,scope=el9-toolchain,ignore-error=true
-
-      - name: Build deb, rpm, pacman and AppImage
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
-        with:
-          context: .
-          file: packaging/linux/Dockerfile
-          target: dist
+          target: ${{ (github.event_name == 'workflow_dispatch' && inputs.full == false) && 'appimage-out' || 'dist' }}
           outputs: type=local,dest=dist
-          cache-from: type=gha,scope=el9-toolchain
+          cache-from: |
+            type=gha,scope=el9-toolchain
+            type=gha,scope=el8-gtk
+          cache-to: |
+            type=gha,mode=max,scope=el9-toolchain,ignore-error=true
+            type=gha,mode=max,scope=el8-gtk,ignore-error=true
 
       - name: List packages
         run: ls -l dist
@@ -110,25 +117,108 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
+  # Separate from the build on purpose: a pull request never reaches this job.
+  push-toolchain:
+    name: Push EL8 GTK toolchain image
+    needs: build
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/master') ||
+      (github.event_name == 'workflow_dispatch' && inputs.push_image && github.ref == 'refs/heads/master')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: Log in to GHCR
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+        run: echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+
+      - name: Image tag
+        id: tag
+        run: |
+          set -euo pipefail
+          hash="$(
+            {
+              find packaging/linux/el8-gtk -type f -print | sort | xargs sha256sum
+              sha256sum packaging/linux/Dockerfile
+            } | sha256sum | cut -c1-16
+          )"
+          repo="$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+          echo "ref=ghcr.io/${repo}/el8-gtk:${hash}" >> "$GITHUB_OUTPUT"
+
+      - name: Push toolchain image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          file: packaging/linux/Dockerfile
+          target: el8-gtk-build
+          push: true
+          tags: ${{ steps.tag.outputs.ref }}
+          cache-from: type=gha,scope=el8-gtk
+          cache-to: type=gha,mode=max,scope=el8-gtk,ignore-error=true
+
   smoke:
     name: Smoke test (${{ matrix.image }})
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
-        # Quick: the EL9 baseline (rpm), a current deb distribution and Arch
-        # (pacman). Full: oldest baselines (glibc 2.34 / 2.35 / 2.36) and
-        # current releases.
-        image: ${{ fromJSON(inputs.full
-          && '["almalinux:9","ubuntu:22.04","debian:12","ubuntu:24.04","debian:13","fedora:latest","archlinux:latest","opensuse/tumbleweed:latest"]'
-          || '["almalinux:9","ubuntu:24.04","archlinux:latest"]') }}
+        # Pull requests: the EL9 baseline (rpm) plus the glibc 2.28 AppImage
+        # desktops. A manual run without `full` only built the AppImage, so it
+        # only smokes the glibc 2.28 desktops.
+        image: ${{ fromJSON(
+          (github.event_name == 'pull_request')
+            && '["almalinux:9","debian:11","ubuntu:20.04"]'
+          || (github.event_name == 'workflow_dispatch' && inputs.full == false)
+            && '["debian:11","ubuntu:20.04"]'
+          || (inputs.full
+            && '["almalinux:9","ubuntu:22.04","debian:12","ubuntu:24.04","debian:13","fedora:latest","archlinux:latest","opensuse/tumbleweed:latest","debian:11","ubuntu:20.04"]')
+          || '["almalinux:9","ubuntu:24.04","archlinux:latest","debian:11","ubuntu:20.04"]') }}
     container:
       image: ${{ matrix.image }}
     steps:
       - name: Install checkout prerequisites
         run: |
+          # debian:11 still lists bullseye-security, but the deb.debian.org
+          # pool 404s those debs (openssl, ca-certificates) now that Debian 11
+          # LTS is over. Drop that suite before the first update. The image
+          # writes one-line deb stanzas in sources.list; sources.list.d is
+          # empty today and is filtered the same way. The edit stays for every
+          # later apt-get in this container, including smoke.sh. Ubuntu is
+          # unchanged.
+          if [ -r /etc/os-release ]; then
+            # shellcheck disable=SC1091
+            . /etc/os-release
+          fi
+          if [ "${ID:-}" = debian ] && [ "${VERSION_ID:-}" = 11 ]; then
+            drop_bullseye_security() {
+              src=$1
+              [ -f "$src" ] || return 0
+              tmp=$(mktemp)
+              awk '!/^[[:space:]]*#/ && /bullseye-security/ { next } { print }' "$src" > "$tmp"
+              cat "$tmp" > "$src"
+              rm -f "$tmp"
+            }
+            drop_bullseye_security /etc/apt/sources.list
+            for src in /etc/apt/sources.list.d/*; do
+              [ -f "$src" ] || continue
+              drop_bullseye_security "$src"
+            done
+          fi
           if command -v apt-get >/dev/null; then apt-get update -qq && apt-get install -y -qq ca-certificates >/dev/null; fi
           if command -v pacman >/dev/null; then pacman -Sy --noconfirm --needed ca-certificates >/dev/null; fi
 
@@ -145,3 +235,14 @@ jobs:
 
       - name: Install, start, and check child environment
         run: bash packaging/linux/smoke.sh dist
+
+      # debian:11 and ubuntu:20.04 only. wayland-smoke.sh writes PNG screenshots
+      # (when grim or the compositor can grab one) and summary.txt here.
+      - name: Upload Wayland screenshots
+        if: always() && (matrix.image == 'debian:11' || matrix.image == 'ubuntu:20.04')
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ matrix.image == 'debian:11' && 'wayland-smoke-debian-11' || 'wayland-smoke-ubuntu-20.04' }}
+          path: wayland-screenshots/
+          if-no-files-found: error
+          retention-days: 14

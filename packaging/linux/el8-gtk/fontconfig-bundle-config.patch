@@ -1,0 +1,53 @@
+--- a/src/fccfg.c
++++ b/src/fccfg.c
+@@ -25,6 +25,7 @@
+ /* Objects MT-safe for readonly access. */
+ 
+ #include "fcint.h"
++#include <dlfcn.h>
+ #ifdef HAVE_DIRENT_H
+ #include <dirent.h>
+ #endif
+@@ -2653,6 +2654,33 @@
+     return prev;
+ }
+ 
++static FcChar8 *
++FcBundleFontsConf (void)
++{
++    static FcChar8 buf[4096];
++    Dl_info info;
++    const char *lib, *slash;
++    size_t dirlen;
++    const char suffix[] = "/../etc/fonts/fonts.conf";
++
++    if (getenv ("FONTCONFIG_FILE") || getenv ("FONTCONFIG_PATH"))
++	return NULL;
++    if (dladdr ((void *) FcConfigFilename, &info) == 0 || !info.dli_fname)
++	return NULL;
++    lib = info.dli_fname;
++    slash = strrchr (lib, '/');
++    if (!slash)
++	return NULL;
++    dirlen = (size_t) (slash - lib);
++    if (dirlen + sizeof (suffix) > sizeof (buf))
++	return NULL;
++    memcpy (buf, lib, dirlen);
++    memcpy (buf + dirlen, suffix, sizeof (suffix));
++    if (access ((char *) buf, R_OK) == 0)
++	return buf;
++    return NULL;
++}
++
+ FcChar8 *
+ FcConfigGetFilename (FcConfig      *config,
+ 		     const FcChar8 *url)
+@@ -2668,6 +2696,8 @@
+     {
+ 	url = (FcChar8 *) getenv ("FONTCONFIG_FILE");
+ 	if (!url)
++	    url = FcBundleFontsConf ();
++	if (!url)
+ 	    url = (FcChar8 *) FONTCONFIG_FILE;
+     }
+     file = 0;
