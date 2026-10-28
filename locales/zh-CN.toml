@@ -85,6 +85,9 @@ uninstalled = "已卸载"
 uninstall_failed = "卸载失败：{error}"
 uninstall_failed_toast = "卸载失败"
 stop_game_first = "请先停止游戏再卸载"
+confirm_uninstall = "卸载游戏？"
+confirm_uninstall_body = "将删除 {path} 中的游戏文件。"
+confirm_uninstall_cancel = "取消"
 
 [progress]
 unity_resuming = "正在继续下载 Unity"

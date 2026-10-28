@@ -1,6 +1,7 @@
 [package]
 name = "hearthstone-linux-gui-commerce-http-client-stub"
 version.workspace = true
+rust-version.workspace = true
 edition = "2021"
 license = "MIT"
 

@@ -24,7 +24,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
@@ -36,7 +36,9 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
 
       - name: Tag matches Cargo version
         shell: bash
@@ -58,6 +60,13 @@ jobs:
 
   flatpak:
     name: Flatpak
+    # flatpak.yml's publish job declares contents: write. A called workflow
+    # cannot exceed the caller's grant, and GitHub checks that declaration
+    # even though tag builds skip the job (event is push, and release.yml
+    # publishes). The privileged build job inside flatpak.yml sets
+    # contents: read for itself, so this ceiling is not the token it gets.
+    permissions:
+      contents: write
     uses: ./.github/workflows/flatpak.yml
     with:
       release_tag: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
@@ -68,23 +77,26 @@ jobs:
     needs: [validate, packages, flatpak]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     env:
       GH_TOKEN: ${{ github.token }}
       TAG: ${{ github.ref_name }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           ref: ${{ github.sha }}
+          persist-credentials: false
 
       - name: Download AppImage and native packages
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: linux-packages
           path: release-dist
 
       - name: Download Flatpak bundle
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: ${{ needs.flatpak.outputs.artifact }}
           path: release-dist

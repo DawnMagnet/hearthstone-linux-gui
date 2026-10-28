@@ -1,16 +1,19 @@
 name: Login window
 
-# Builds and tests the optional login window (login-helper/), which has its
-# own workspace and needs WebKitGTK 6. Kept separate from ci.yml so that the
-# WebKitGTK install only runs when the login window changes. It does not
-# depend on the launcher crate (the launcher passes it the language and texts
-# in the environment), so launcher changes cannot make its Cargo.lock stale.
+# Formats, lints, and tests the optional login window (login-helper/), which
+# has its own workspace and needs WebKitGTK 6. Kept separate from ci.yml so
+# that the WebKitGTK install only runs when the login window changes. It does
+# not depend on the launcher crate (the launcher passes it the language and
+# texts in the environment), so launcher changes cannot make its Cargo.lock
+# stale. The feature ceiling is the same file ci.yml uses.
 
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - login-helper/**
+      - .github/ui-baseline.env
+      - .github/scripts/**
       - .github/workflows/login-helper.yml
       - .github/actions/**
   workflow_dispatch:
@@ -31,21 +34,29 @@ env:
 
 jobs:
   check:
-    name: Check and unit tests
+    name: Format, lint, and test
     if: github.event.pull_request.draft != true
     # ubuntu-24.04 ships WebKitGTK 6.
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
 
       - uses: ./.github/actions/setup-rust
         with:
           apt-packages: libgtk-4-dev libadwaita-1-dev libwebkitgtk-6.0-dev
           cache-workspaces: login-helper
 
-      - name: Type-check
-        run: cargo check --manifest-path login-helper/Cargo.toml --all-targets --locked
+      - name: Check formatting
+        run: cargo fmt --manifest-path login-helper/Cargo.toml --all --check
+
+      - name: Check UI feature ceiling
+        run: python3 .github/scripts/check-ui-baseline.py --manifest-path login-helper/Cargo.toml --require gtk4,libadwaita
+
+      - name: Clippy
+        run: cargo clippy --manifest-path login-helper/Cargo.toml --all-targets --locked -- -D warnings
 
       - name: Unit tests
         run: cargo test --manifest-path login-helper/Cargo.toml --locked
