@@ -246,6 +246,37 @@ mod tests {
         assert!(encrypt_token_for_user(token, "sgct").is_err());
     }
 
+    /// Golden AES-128 key for username `sgct`.
+    ///
+    /// Captured by running `encryption_key_for_user` on master `ccbcac4`:
+    /// XOR the fixed entropy with the username, then PBKDF2-HMAC-SHA1 with
+    /// salt `someSalt`, 1000 iterations, and a 16-byte output.
+    #[test]
+    fn encryption_key_for_sgct_matches_golden() {
+        assert_eq!(
+            hex::encode(encryption_key_for_user("sgct")),
+            "c34e634a68bca062d14333ed8d455701"
+        );
+    }
+
+    /// Golden ciphertext for a fixed token.
+    ///
+    /// `encrypt_token_for_user` uses a fixed all-zero IV, so AES-128-CBC with
+    /// PKCS7 is deterministic and needs no production change to golden-test.
+    /// Captured on master `ccbcac4` for username `sgct` and token
+    /// `AB-0123456789ABCDEFGHIJKLMNOPQRSTUV-123456789` (48 bytes, `0x30`).
+    #[test]
+    fn encrypt_token_for_user_matches_golden() {
+        let token = "AB-0123456789ABCDEFGHIJKLMNOPQRSTUV-123456789";
+        let encrypted = encrypt_token_for_user(token, "sgct").unwrap();
+        assert_eq!(
+            hex::encode(encrypted),
+            "f88140339952406e40cbebe0078f5141\
+             a0579e011b5c7f9f01df5136a31ae0cf\
+             623a62c76745fe86e0e6083ec3c958b8"
+        );
+    }
+
     /// RFC 6070 PBKDF2-HMAC-SHA1 vectors (P = "password", S = "salt", dkLen = 20).
     /// Uses the same `pbkdf2_hmac::<Sha1>` path as token-key derivation.
     #[test]
