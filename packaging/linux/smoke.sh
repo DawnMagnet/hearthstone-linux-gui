@@ -13,6 +13,8 @@
 #    AppImage and core libraries (glibc, GL, X11) from the host.
 # 3. Runs the hidden `--print-child-env` probe so host children do not inherit
 #    AppImage/bundled LD_LIBRARY_PATH or GTK/GLib module paths (issue #22).
+# 4. On Debian 11 and Ubuntu 20.04, also starts a headless Wayland compositor
+#    and launches the AppImage with GDK_BACKEND=wayland (wayland-smoke.sh).
 #
 # Avoid `cmd | head` / `cmd | grep -q` under `set -o pipefail`: short-circuit
 # readers close the pipe and the writer exits 141 (SIGPIPE) on many distros.
@@ -338,6 +340,13 @@ case "$ID ${ID_LIKE:-}" in
     ;;
   *)
     gui_smoke "$appdir/AppRun"
+    ;;
+esac
+
+case "$ID:${VERSION_ID:-}" in
+  debian:11 | ubuntu:20.04)
+    echo "-- Wayland"
+    bash "$(dirname "$0")/wayland-smoke.sh" "$work/app.AppImage"
     ;;
 esac
 echo "== OK: ${PRETTY_NAME:-$ID}"

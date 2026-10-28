@@ -3,7 +3,8 @@ name: Packaging
 # Native packages stay on the Enterprise Linux 9 baseline. The AppImage is
 # built on AlmaLinux 8 (glibc 2.28) against the from-source GTK 4.12 stack.
 # check-glibc.sh runs inside that build. Smoke runs --print-child-env so
-# children do not inherit bundled library or GTK paths.
+# children do not inherit bundled library or GTK paths. Debian 11 and
+# Ubuntu 20.04 also launch the AppImage on a headless Wayland compositor.
 #
 #   pull request        -> AppImage only, Debian 11 and Ubuntu 20.04 smoke.
 #                          Never pushes the toolchain image.
@@ -228,3 +229,14 @@ jobs:
 
       - name: Install, start, and check child environment
         run: bash packaging/linux/smoke.sh dist
+
+      # debian:11 and ubuntu:20.04 only. wayland-smoke.sh writes PNG screenshots
+      # (when grim or the compositor can grab one) and summary.txt here.
+      - name: Upload Wayland screenshots
+        if: always() && (matrix.image == 'debian:11' || matrix.image == 'ubuntu:20.04')
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ matrix.image == 'debian:11' && 'wayland-smoke-debian-11' || 'wayland-smoke-ubuntu-20.04' }}
+          path: wayland-screenshots/
+          if-no-files-found: error
+          retention-days: 14
