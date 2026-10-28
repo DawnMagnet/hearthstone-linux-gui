@@ -44,7 +44,7 @@ gui = ["dep:relm4", "dep:relm4-components", "dep:gtk4", "dep:libadwaita"]
 [dependencies]
 aes = "0.8"
 anyhow = "1"
-base64 = "0.22"
+base64 = "0.23"
 bitvec = "1"
 cbc = { version = "0.1", features = ["alloc"] }
 clap = { version = "4", features = ["derive"] }
