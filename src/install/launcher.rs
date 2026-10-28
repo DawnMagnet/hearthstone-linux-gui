@@ -91,8 +91,7 @@ pub fn launch_game(
         None => debug!("no runtime runner configured; launching directly"),
     }
 
-    let mut command = game_command(runner.as_deref(), &wrappers, &exe, &library_path);
-    host_env::apply(&mut command);
+    let mut command = game_launch_command(runner.as_deref(), &wrappers, &exe, &library_path);
     command.current_dir(game_dir).envs(graphics_env);
     redirect_output(&mut command, output_log);
     command.spawn().with_context(|| match runner.as_ref() {
@@ -166,14 +165,54 @@ fn wrapper_chain(options: LaunchOptions, find: impl Fn(&str) -> Option<PathBuf>)
     .collect()
 }
 
+/// `[runner] [wrappers...] game`, as one command, with the host environment
+/// restored and then the game library path applied.
+///
+/// `host_env` runs first. AppRun records the host `LD_LIBRARY_PATH` (or that
+/// it was unset) and applying that record overwrites whatever was set
+/// earlier. The game path has to win, or an AppImage launch with nothing in
+/// front of the game — the default, and a runtime runner with GameMode and
+/// MangoHud both off — cannot find Mono or the plugins. `library_path`
+/// already ends with the host value, the same string the wrapper branch
+/// passes through `env`.
+fn game_launch_command(
+    runner: Option<&Path>,
+    wrappers: &[PathBuf],
+    exe: &Path,
+    library_path: &OsStr,
+) -> Command {
+    game_launch_command_with_host(runner, wrappers, exe, library_path, host_env::host_vars())
+}
+
+fn game_launch_command_with_host(
+    runner: Option<&Path>,
+    wrappers: &[PathBuf],
+    exe: &Path,
+    library_path: &OsStr,
+    host_vars: impl IntoIterator<Item = host_env::HostVar>,
+) -> Command {
+    let mut command = game_command(runner, wrappers, exe, library_path);
+    host_env::apply_vars(&mut command, host_vars);
+    // No wrapper in front, so the game inherits this variable. A runtime
+    // runner alone is still this case: it is the program, not a wrapper.
+    // Wrappers keep the host value restored above and receive the game path
+    // through `env` in argv (issue #22).
+    if wrappers.is_empty() {
+        command.env("LD_LIBRARY_PATH", library_path);
+    }
+    command
+}
+
 /// `[runner] [wrappers...] game`, as one command.
 ///
-/// Without wrappers the game's `LD_LIBRARY_PATH` goes on the command itself.
-/// With wrappers it must not: `gamemoderun` and `mangohud` are host scripts,
-/// and the game's library directories (possibly with a bundled glibc) would
-/// break the host shell they run in (issue #22). `env` hands the variable to
-/// the game alone. The wrappers sit behind the runner so they run inside its
-/// environment, where their preloaded libraries can be found.
+/// The library path is not put on the command here. [`game_launch_command`]
+/// does that after restoring the host environment, and only when no wrapper
+/// is in front. With wrappers it must not be on the command: `gamemoderun`
+/// and `mangohud` are host scripts, and the game's library directories
+/// (possibly with a bundled glibc) would break the host shell they run in
+/// (issue #22). `env` hands the variable to the game alone. The wrappers sit
+/// behind the runner so they run inside its environment, where their
+/// preloaded libraries can be found.
 fn game_command(
     runner: Option<&Path>,
     wrappers: &[PathBuf],
@@ -194,9 +233,6 @@ fn game_command(
     let program = argv.next().unwrap_or_else(|| exe.into());
     let mut command = Command::new(program);
     command.args(argv);
-    if wrappers.is_empty() {
-        command.env("LD_LIBRARY_PATH", library_path);
-    }
     command
 }
 
@@ -307,6 +343,18 @@ pub fn unexpected_exit_message(
 /// the host interpreter they must stay out: mixing the host `ld-linux` with a
 /// bundled `libc.so.6` makes the game exit immediately (issue #22).
 fn game_library_path(game_dir: &Path, bundled_interpreter: bool) -> OsString {
+    game_library_path_with(
+        game_dir,
+        bundled_interpreter,
+        host_env::host_var("LD_LIBRARY_PATH"),
+    )
+}
+
+fn game_library_path_with(
+    game_dir: &Path,
+    bundled_interpreter: bool,
+    host_library_path: Option<OsString>,
+) -> OsString {
     let mut paths = Vec::from([
         game_dir.join("Bin"),
         game_dir.join("Bin/Hearthstone_Data/Plugins"),
@@ -326,7 +374,7 @@ fn game_library_path(game_dir: &Path, bundled_interpreter: bool) -> OsString {
     if let Some(existing) = env::var_os("NIX_LD_LIBRARY_PATH") {
         paths.extend(env::split_paths(&existing));
     }
-    if let Some(existing) = host_env::host_var("LD_LIBRARY_PATH") {
+    if let Some(existing) = host_library_path {
         paths.extend(env::split_paths(&existing));
     }
 
@@ -721,7 +769,6 @@ mod tests {
 
     #[test]
     fn game_command_keeps_the_library_path_on_the_game_only() {
-        use super::game_command;
         use std::path::{Path, PathBuf};
 
         let exe = Path::new("/game/Hearthstone.x86_64");
@@ -731,12 +778,15 @@ mod tests {
             PathBuf::from("/usr/bin/mangohud"),
         ];
         let libs = std::ffi::OsStr::new("/game/Bin:/lib");
+        let no_host = Vec::<crate::host_env::HostVar>::new();
 
-        // Without wrappers nothing changes: the variable is on the command.
-        let plain = game_command(None, &[], exe, libs);
+        // Outside an AppImage nothing is restored, so the variable stays on
+        // the command when no wrapper is in front.
+        let plain = game_launch_command_with_host(None, &[], exe, libs, no_host.clone());
         assert_eq!(argv(&plain), ["/game/Hearthstone.x86_64"]);
         assert_eq!(library_path_of(&plain).as_deref(), Some("/game/Bin:/lib"));
-        let runner_only = game_command(Some(runner), &[], exe, libs);
+        let runner_only =
+            game_launch_command_with_host(Some(runner), &[], exe, libs, no_host.clone());
         assert_eq!(
             argv(&runner_only),
             ["/run/runtime", "/game/Hearthstone.x86_64"]
@@ -747,7 +797,7 @@ mod tests {
         );
 
         // With wrappers only the game gets it, through `env`.
-        let direct = game_command(None, &wrappers, exe, libs);
+        let direct = game_launch_command_with_host(None, &wrappers, exe, libs, no_host.clone());
         assert_eq!(
             argv(&direct),
             [
@@ -761,7 +811,8 @@ mod tests {
         assert_eq!(library_path_of(&direct), None);
 
         // Behind a runner the wrappers run inside the runner's environment.
-        let through_runner = game_command(Some(runner), &wrappers, exe, libs);
+        let through_runner =
+            game_launch_command_with_host(Some(runner), &wrappers, exe, libs, no_host);
         assert_eq!(
             argv(&through_runner),
             [
@@ -774,6 +825,142 @@ mod tests {
             ]
         );
         assert_eq!(library_path_of(&through_runner), None);
+    }
+
+    /// Game library directories, in the order `game_library_path` puts them.
+    const GAME_LIB_DIRS: [&str; 4] = [
+        "/game/Bin",
+        "/game/Bin/Hearthstone_Data/Plugins",
+        "/game/Bin/Hearthstone_Data/Plugins/System/Library/Frameworks/CoreFoundation.framework",
+        "/game/Bin/Hearthstone_Data/MonoBleedingEdge/x86_64",
+    ];
+
+    /// Host variables an AppImage `AppRun` would have recorded.
+    ///
+    /// Passed into the command builder instead of `std::env::set_var`, so
+    /// this stays isolated from tests that read the process environment.
+    fn appimage_host(host_ld: Option<&str>) -> Vec<crate::host_env::HostVar> {
+        use crate::host_env::HostVar;
+
+        let mut vars = vec![
+            HostVar::Set("PATH", "/usr/bin:/bin".into()),
+            HostVar::Unset("GIO_MODULE_DIR"),
+        ];
+        vars.push(match host_ld {
+            Some(value) => HostVar::Set("LD_LIBRARY_PATH", value.into()),
+            None => HostVar::Unset("LD_LIBRARY_PATH"),
+        });
+        vars
+    }
+
+    fn appimage_library_path(host_ld: Option<&str>) -> OsString {
+        game_library_path_with(Path::new("/game"), false, host_ld.map(OsString::from))
+    }
+
+    fn assert_game_libs_then_host(path: &str, host_ld: Option<&str>) {
+        let components: Vec<&str> = path
+            .split(':')
+            .filter(|component| !component.is_empty())
+            .collect();
+        assert!(
+            components.len() >= GAME_LIB_DIRS.len(),
+            "LD_LIBRARY_PATH = {path}"
+        );
+        assert_eq!(
+            &components[..GAME_LIB_DIRS.len()],
+            &GAME_LIB_DIRS[..],
+            "game directories should come first: {path}"
+        );
+        match host_ld {
+            Some(host) => {
+                assert_eq!(
+                    components.last().copied(),
+                    Some(host),
+                    "host library path should be last: {path}"
+                );
+                assert_ne!(path, host, "host value must not replace the game path");
+            }
+            None => assert!(
+                !path.split(':').any(|component| component == "/opt/hostlib"),
+                "unset host path leaked into {path}"
+            ),
+        }
+    }
+
+    fn assert_host_was_restored(command: &std::process::Command) {
+        let path = command
+            .get_envs()
+            .find(|(name, _)| *name == "PATH")
+            .and_then(|(_, value)| value)
+            .map(|value| value.to_string_lossy().into_owned());
+        assert_eq!(path.as_deref(), Some("/usr/bin:/bin"));
+        let gio = command
+            .get_envs()
+            .find(|(name, _)| *name == "GIO_MODULE_DIR");
+        assert_eq!(gio, Some((std::ffi::OsStr::new("GIO_MODULE_DIR"), None)));
+    }
+
+    /// Direct launch and a runtime runner with no GameMode/MangoHud wrapper.
+    fn assert_unwrapped_appimage_launch(runner: Option<&Path>, host_ld: Option<&str>) {
+        let exe = Path::new("/game/Hearthstone.x86_64");
+        let library_path = appimage_library_path(host_ld);
+        let command =
+            game_launch_command_with_host(runner, &[], exe, &library_path, appimage_host(host_ld));
+        let mut expected = Vec::new();
+        if let Some(runner) = runner {
+            expected.push(runner.to_string_lossy().into_owned());
+        }
+        expected.push(exe.to_string_lossy().into_owned());
+        assert_eq!(argv(&command), expected);
+        let ld = library_path_of(&command).unwrap_or_else(|| format!("missing, argv={expected:?}"));
+        assert_eq!(ld, library_path.to_string_lossy());
+        assert_game_libs_then_host(&ld, host_ld);
+        assert_host_was_restored(&command);
+    }
+
+    fn assert_wrapped_appimage_launch(host_ld: Option<&str>) {
+        let exe = Path::new("/game/Hearthstone.x86_64");
+        let library_path = appimage_library_path(host_ld);
+        let wrappers = [PathBuf::from("/usr/bin/gamemoderun")];
+        let command = game_launch_command_with_host(
+            None,
+            &wrappers,
+            exe,
+            &library_path,
+            appimage_host(host_ld),
+        );
+        let expected = format!("LD_LIBRARY_PATH={}", library_path.to_string_lossy());
+        assert!(
+            argv(&command).iter().any(|arg| arg == &expected),
+            "argv = {:?}",
+            argv(&command)
+        );
+        assert_game_libs_then_host(expected.strip_prefix("LD_LIBRARY_PATH=").unwrap(), host_ld);
+        assert_eq!(library_path_of(&command).as_deref(), host_ld);
+        assert_host_was_restored(&command);
+    }
+
+    #[test]
+    fn appimage_without_wrapper_keeps_game_libraries_when_host_unset() {
+        assert_unwrapped_appimage_launch(None, None);
+    }
+
+    #[test]
+    fn appimage_without_wrapper_appends_host_library_path() {
+        assert_unwrapped_appimage_launch(None, Some("/opt/hostlib"));
+    }
+
+    #[test]
+    fn appimage_wrapper_keeps_passing_the_library_path_to_the_game_only() {
+        assert_wrapped_appimage_launch(None);
+        assert_wrapped_appimage_launch(Some("/opt/hostlib"));
+    }
+
+    #[test]
+    fn appimage_runner_without_wrapper_keeps_game_libraries() {
+        let runner = Path::new("/run/hearthstone-linux-gui-runtime");
+        assert_unwrapped_appimage_launch(Some(runner), None);
+        assert_unwrapped_appimage_launch(Some(runner), Some("/opt/hostlib"));
     }
 
     #[test]

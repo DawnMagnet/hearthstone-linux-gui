@@ -5,9 +5,9 @@ name: Packaging
 # --print-child-env probe so AppImage children do not inherit bundled
 # LD_LIBRARY_PATH / GTK paths.
 #
-#   pull request   -> not run (ci.yml runs fmt, clippy, and the workspace
-#                     tests, including tests/apprun.rs, and does not build
-#                     packages)
+#   pull request   -> same quick build and smoke as master when packaging,
+#                     dependencies or sources change. Build only: no login,
+#                     no push, no release.
 #   push to master -> one quick build, smoke-tested on three distributions
 #   release.yml    -> called with full=true: the full distribution matrix
 #   manual run     -> quick by default, full with the `full` input
@@ -16,6 +16,18 @@ name: Packaging
 # touches a GitHub release; release.yml publishes.
 
 on:
+  pull_request:
+    paths:
+      - .github/workflows/packaging.yml
+      - packaging/**
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
+      - src/**
+      - crates/**
+      - assets/**
+      - data/**
+      - locales/**
   push:
     branches:
       - master
