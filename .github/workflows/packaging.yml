@@ -94,7 +94,7 @@ jobs:
       # build the EL9 native packages too, so EL9 regressions show up before
       # merge. check-glibc.sh 2.28 runs inside packaging/linux/appimage.sh.
       - name: Build AppImage and native packages
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: packaging/linux/Dockerfile
@@ -157,7 +157,7 @@ jobs:
           echo "ref=ghcr.io/${repo}/el8-gtk:${hash}" >> "$GITHUB_OUTPUT"
 
       - name: Push toolchain image
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: packaging/linux/Dockerfile
