@@ -39,6 +39,8 @@ mod tests {
     use hearthstone_linux::{i18n::LanguageHold, phrase, tr};
     use relm4::adw::prelude::*;
     use relm4::{adw, gtk};
+    use std::cell::RefCell;
+    use std::rc::Rc;
 
     /// The same window object gets new text. Skipped without a display: GTK
     /// will not open a window in the headless CI job.
@@ -47,16 +49,22 @@ mod tests {
         if std::env::var_os("DISPLAY").is_none() && std::env::var_os("WAYLAND_DISPLAY").is_none() {
             return;
         }
-        let hold = LanguageHold::acquire();
-        hold.select(Some("en"));
+        // GTK keeps the application (and this handler) alive after `run`
+        // returns. The hold has to live outside that handler so it is dropped
+        // before the next test translates a string.
+        let hold = Rc::new(RefCell::new(Some(LanguageHold::acquire())));
+        hold.borrow().as_ref().unwrap().select(Some("en"));
 
         gtk::init().expect("gtk");
         let _ = adw::init();
         let app = adw::Application::builder()
             .application_id("io.github.hearthstone_linux_gui.i18n_test")
             .build();
+        let hold_for_window = Rc::clone(&hold);
         app.connect_activate(move |app| {
-            super::super::components::assert_choice_dropdown_follows_language(&hold);
+            let borrowed = hold_for_window.borrow();
+            let hold = borrowed.as_ref().expect("language hold");
+            super::super::components::assert_choice_dropdown_follows_language(hold);
             let window = adw::ApplicationWindow::builder()
                 .application(app)
                 .default_width(320)
@@ -82,5 +90,6 @@ mod tests {
         });
         // Cargo's test arguments must not be parsed as application arguments.
         app.run_with_args::<&str>(&[]);
+        drop(hold.borrow_mut().take());
     }
 }
