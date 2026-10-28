@@ -89,6 +89,9 @@ uninstalled = "Uninstalled"
 uninstall_failed = "Uninstall failed: {error}"
 uninstall_failed_toast = "Uninstall failed"
 stop_game_first = "Stop the game before uninstalling"
+confirm_uninstall = "Uninstall the game?"
+confirm_uninstall_body = "The game files in {path} will be deleted."
+confirm_uninstall_cancel = "Cancel"
 
 [progress]
 unity_resuming = "Resuming Unity download"
