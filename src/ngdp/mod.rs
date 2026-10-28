@@ -11,6 +11,9 @@ pub mod installfile;
 mod local_manifest;
 pub mod psv;
 
+#[cfg(test)]
+mod test_support;
+
 use crate::{i18n::Phrase, phrase, util, Locale, Region};
 use anyhow::{Context, Result};
 use cdn::RemoteCdn;

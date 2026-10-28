@@ -671,3 +671,7 @@ async fn file_len(path: &Path) -> Result<u64> {
 fn check_cancelled(cancel: Option<&CancellationToken>) -> Result<()> {
     util::check_cancelled(cancel, "download cancelled")
 }
+
+#[cfg(test)]
+#[path = "download_tests.rs"]
+mod tests;

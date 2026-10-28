@@ -87,3 +87,206 @@ impl InstallFile {
             .collect())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::bytes::md5_hex;
+    use super::super::test_support::build_install;
+    use super::InstallFile;
+
+    fn basic() -> Vec<u8> {
+        build_install(
+            1,
+            16,
+            &[
+                ("Windows", 1, &[0b1010_0000]),
+                ("enUS", 1, &[0b0110_0000]),
+                ("OSX", 1, &[0b1110_0000]),
+            ],
+            &[
+                ("a.txt", &[1; 16], 10),
+                ("b.dll", &[2; 16], 20),
+                ("c.bin", &[3; 16], 30),
+            ],
+        )
+    }
+
+    fn paths(entries: &[super::InstallEntry]) -> Vec<&str> {
+        entries.iter().map(|entry| entry.path.as_str()).collect()
+    }
+
+    #[test]
+    fn parses_entries() {
+        let file = InstallFile::parse(&basic(), "ignored", false).unwrap();
+        let kept = file.filter_entries(&[]).unwrap();
+        assert_eq!(paths(&kept), ["a.txt", "b.dll", "c.bin"]);
+        assert_eq!(kept[0].content_key, hex::encode([1u8; 16]));
+        assert_eq!(kept[0].size, 10);
+        assert_eq!(kept[1].content_key, hex::encode([2u8; 16]));
+        assert_eq!(kept[1].size, 20);
+        assert_eq!(kept[2].content_key, hex::encode([3u8; 16]));
+        assert_eq!(kept[2].size, 30);
+    }
+
+    #[test]
+    fn filter_single_tag() {
+        let file = InstallFile::parse(&basic(), "ignored", false).unwrap();
+        let kept = file.filter_entries(&["Windows"]).unwrap();
+        assert_eq!(paths(&kept), ["a.txt", "c.bin"]);
+    }
+
+    #[test]
+    fn filter_multiple_tags_is_intersection() {
+        let file = InstallFile::parse(&basic(), "ignored", false).unwrap();
+        let kept = file.filter_entries(&["Windows", "enUS"]).unwrap();
+        assert_eq!(paths(&kept), ["c.bin"]);
+    }
+
+    #[test]
+    fn filter_unknown_tag_is_error() {
+        let file = InstallFile::parse(&basic(), "ignored", false).unwrap();
+        let error = file.filter_entries(&["xxXX"]).unwrap_err();
+        assert!(format!("{error:#}").contains("not present"));
+    }
+
+    #[test]
+    fn filter_empty_tag_list_returns_all() {
+        let file = InstallFile::parse(&basic(), "ignored", false).unwrap();
+        assert_eq!(paths(&file.filter_entries(&[]).unwrap()).len(), 3);
+    }
+
+    #[test]
+    fn bitmask_is_msb_first_across_bytes() {
+        let names: Vec<String> = (0..9).map(|index| format!("f{index}")).collect();
+        let hashes: Vec<Vec<u8>> = (0..9).map(|index| vec![index]).collect();
+        let entries: Vec<(&str, &[u8], u32)> = names
+            .iter()
+            .zip(hashes.iter())
+            .enumerate()
+            .map(|(index, (name, hash))| (name.as_str(), hash.as_slice(), index as u32))
+            .collect();
+        let data = build_install(1, 1, &[("T", 1, &[0x80, 0x80])], &entries);
+        let file = InstallFile::parse(&data, "ignored", false).unwrap();
+        assert_eq!(paths(&file.filter_entries(&["T"]).unwrap()), ["f0", "f8"]);
+    }
+
+    #[test]
+    fn wrong_magic_is_error() {
+        let mut data = basic();
+        data[0] = b'N';
+        data[1] = b'I';
+        let error = InstallFile::parse(&data, "ignored", false).unwrap_err();
+        assert!(format!("{error:#}").contains("magic"));
+    }
+
+    #[test]
+    fn version_zero_rejected_newer_accepted() {
+        let zero = build_install(0, 16, &[], &[]);
+        assert!(InstallFile::parse(&zero, "ignored", false).is_err());
+        let two = build_install(2, 16, &[], &[]);
+        assert!(InstallFile::parse(&two, "ignored", false).is_ok());
+    }
+
+    #[test]
+    fn verify_rejects_md5_mismatch() {
+        let error = InstallFile::parse(&basic(), &"0".repeat(32), true).unwrap_err();
+        assert!(format!("{error:#}").contains("md5"));
+    }
+
+    #[test]
+    fn verify_accepts_matching_md5() {
+        let data = basic();
+        let key = md5_hex(&data);
+        assert!(InstallFile::parse(&data, &key, true).is_ok());
+    }
+
+    #[test]
+    fn truncated_header_is_error() {
+        assert!(InstallFile::parse(b"IN\x01", "ignored", false).is_err());
+        assert!(InstallFile::parse(b"", "ignored", false).is_err());
+    }
+
+    #[test]
+    fn truncated_tag_bitmask_is_error() {
+        // Nine entries need two bitmask bytes. The file stops after one, so
+        // the following entry bytes are not available to satisfy the read.
+        let mut data = build_install(1, 1, &[("T", 1, &[0x80])], &[]);
+        data[6..10].copy_from_slice(&9u32.to_be_bytes());
+        assert!(InstallFile::parse(&data, "ignored", false).is_err());
+    }
+
+    #[test]
+    fn truncated_entry_is_error() {
+        let mut data = basic();
+        data.truncate(data.len() - 2);
+        assert!(InstallFile::parse(&data, "ignored", false).is_err());
+    }
+
+    #[test]
+    fn path_without_nul_at_eof_is_error() {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"IN");
+        data.push(1);
+        data.push(4);
+        data.extend_from_slice(&0u16.to_be_bytes());
+        data.extend_from_slice(&1u32.to_be_bytes());
+        data.extend_from_slice(b"abc");
+        assert!(InstallFile::parse(&data, "ignored", false).is_err());
+    }
+
+    #[test]
+    fn invalid_utf8_path_is_error() {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"IN");
+        data.push(1);
+        data.push(4);
+        data.extend_from_slice(&0u16.to_be_bytes());
+        data.extend_from_slice(&1u32.to_be_bytes());
+        data.push(0xFF);
+        data.push(0);
+        data.extend_from_slice(&[1, 2, 3, 4]);
+        data.extend_from_slice(&9u32.to_be_bytes());
+        let error = InstallFile::parse(&data, "ignored", false).unwrap_err();
+        assert!(format!("{error:#}").contains("utf-8"));
+    }
+
+    #[test]
+    fn zero_tags_zero_entries() {
+        let data = build_install(1, 16, &[], &[]);
+        let file = InstallFile::parse(&data, "ignored", false).unwrap();
+        assert!(file.filter_entries(&[]).unwrap().is_empty());
+    }
+
+    // B3: `Vec::with_capacity(entry_count)` trusts the file's count. u32::MAX
+    // asks for hundreds of gigabytes and aborts. Not executed here.
+    #[test]
+    #[ignore = "B3: entry_count u32::MAX allocates via with_capacity and can abort"]
+    fn huge_entry_count_errors_without_oom() {
+        let mut data = build_install(1, 16, &[], &[]);
+        data[6..10].copy_from_slice(&u32::MAX.to_be_bytes());
+        let error = InstallFile::parse(&data, "ignored", false).unwrap_err();
+        assert!(!format!("{error:#}").is_empty());
+    }
+
+    #[test]
+    fn duplicate_tag_name_last_wins() {
+        let data = build_install(
+            1,
+            16,
+            &[
+                ("Windows", 1, &[0b1000_0000]),
+                ("Windows", 1, &[0b0010_0000]),
+            ],
+            &[
+                ("a.txt", &[1; 16], 10),
+                ("b.dll", &[2; 16], 20),
+                ("c.bin", &[3; 16], 30),
+            ],
+        );
+        let file = InstallFile::parse(&data, "ignored", false).unwrap();
+        assert_eq!(
+            paths(&file.filter_entries(&["Windows"]).unwrap()),
+            ["c.bin"]
+        );
+    }
+}
