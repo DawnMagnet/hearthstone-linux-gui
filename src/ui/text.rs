@@ -55,14 +55,7 @@ mod tests {
         let app = adw::Application::builder()
             .application_id("io.github.hearthstone_linux_gui.i18n_test")
             .build();
-        // GTK can retain the activate closure after `run` returns. The
-        // language lock has to drop with this test, or a parallel test that
-        // translates a string waits on it forever.
-        let hold_ptr: *const LanguageHold = &raw const hold;
         app.connect_activate(move |app| {
-            // Safety: `run_with_args` calls this on the test thread before it
-            // returns, and `hold` stays on that stack until then.
-            let hold = unsafe { &*hold_ptr };
             let window = adw::ApplicationWindow::builder()
                 .application(app)
                 .default_width(320)
