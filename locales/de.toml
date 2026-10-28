@@ -85,6 +85,9 @@ uninstalled = "Deinstalliert"
 uninstall_failed = "Deinstallation fehlgeschlagen: {error}"
 uninstall_failed_toast = "Deinstallation fehlgeschlagen"
 stop_game_first = "Beende das Spiel, bevor du es deinstallierst"
+confirm_uninstall = "Spiel deinstallieren?"
+confirm_uninstall_body = "Die Spieldateien unter {path} werden gelöscht."
+confirm_uninstall_cancel = "Abbrechen"
 
 [progress]
 unity_resuming = "Unity-Download wird fortgesetzt"
