@@ -6,7 +6,8 @@ name: Packaging
 # children do not inherit bundled library or GTK paths. Debian 11 and
 # Ubuntu 20.04 also launch the AppImage on a headless Wayland compositor.
 #
-#   pull request        -> AppImage only, Debian 11 and Ubuntu 20.04 smoke.
+#   pull request        -> deb/rpm/pacman and the AppImage, smoke on
+#                          AlmaLinux 9, Debian 11 and Ubuntu 20.04.
 #                          Never pushes the toolchain image.
 #   workflow_dispatch   -> same AppImage build and smoke, unless `full` is
 #                          set. Pushes the toolchain image only when
@@ -89,14 +90,15 @@ jobs:
 
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
-      # Pull requests and a manual run without `full` only need the AppImage.
-      # check-glibc.sh 2.28 runs inside packaging/linux/appimage.sh.
-      - name: Build AppImage and, on master, native packages
+      # A manual run without `full` only needs the AppImage. Pull requests
+      # build the EL9 native packages too, so EL9 regressions show up before
+      # merge. check-glibc.sh 2.28 runs inside packaging/linux/appimage.sh.
+      - name: Build AppImage and native packages
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           file: packaging/linux/Dockerfile
-          target: ${{ (github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.full == false)) && 'appimage-out' || 'dist' }}
+          target: ${{ (github.event_name == 'workflow_dispatch' && inputs.full == false) && 'appimage-out' || 'dist' }}
           outputs: type=local,dest=dist
           cache-from: |
             type=gha,scope=el9-toolchain
@@ -138,7 +140,8 @@ jobs:
       - name: Log in to GHCR
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: echo "$GITHUB_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          GHCR_USER: ${{ github.actor }}
+        run: echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
 
       - name: Image tag
         id: tag
@@ -174,10 +177,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Pull requests, and a manual run that did not ask for the full
-        # matrix, only prove the AppImage on the glibc 2.28 desktops.
+        # Pull requests: the EL9 baseline (rpm) plus the glibc 2.28 AppImage
+        # desktops. A manual run without `full` only built the AppImage, so it
+        # only smokes the glibc 2.28 desktops.
         image: ${{ fromJSON(
-          (github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.full == false))
+          (github.event_name == 'pull_request')
+            && '["almalinux:9","debian:11","ubuntu:20.04"]'
+          || (github.event_name == 'workflow_dispatch' && inputs.full == false)
             && '["debian:11","ubuntu:20.04"]'
           || (inputs.full
             && '["almalinux:9","ubuntu:22.04","debian:12","ubuntu:24.04","debian:13","fedora:latest","archlinux:latest","opensuse/tumbleweed:latest","debian:11","ubuntu:20.04"]')
