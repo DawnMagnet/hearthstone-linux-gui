@@ -53,6 +53,15 @@ jobs:
 
   packages:
     name: Packages
+    # packaging.yml's push-toolchain job declares packages: write. A called
+    # workflow cannot exceed the caller's grant, and GitHub checks that
+    # declaration even though release runs skip the job (it only runs on a
+    # master push or a master dispatch with push_image). The build and smoke
+    # jobs set contents: read for themselves, so this ceiling is not the
+    # token they get.
+    permissions:
+      contents: read
+      packages: write
     uses: ./.github/workflows/packaging.yml
     with:
       full: true
