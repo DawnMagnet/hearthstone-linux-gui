@@ -33,6 +33,12 @@ pub const OVERRIDDEN_VARS: &[&str] = &[
     "GSETTINGS_SCHEMA_DIR",
     "GTK_EXE_PREFIX",
     "GTK_PATH",
+    // Recorded so a child probe can prove AppRun did not point them at the
+    // bundle. AppRun does not set these; fontconfig finds its config from
+    // the library path, and the pixbuf loader file is GDK_PIXBUF_MODULE_FILE.
+    "FONTCONFIG_FILE",
+    "GDK_PIXBUF_MODULEDIR",
+    "GIO_EXTRA_MODULES",
 ];
 
 const MARKER: &str = "HEARTHSTONE_LINUX_APPIMAGE_ENV";

@@ -1,0 +1,11 @@
+# Symbolic icons installed into the AppImage at
+# usr/share/icons/hicolor/scalable/actions/<name>.svg
+# from adwaita-icon-theme (version and sha256 in el8-gtk/versions.env).
+# Widget icons that GTK 4 and libadwaita paint themselves stay in those
+# libraries' resources and are not listed here.
+view-refresh-symbolic
+software-update-available-symbolic
+preferences-desktop-locale-symbolic
+object-select-symbolic
+emblem-system-symbolic
+edit-copy-symbolic
