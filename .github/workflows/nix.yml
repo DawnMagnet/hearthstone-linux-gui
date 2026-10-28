@@ -1,0 +1,63 @@
+name: Nix
+
+# The Nix flake is what `nix build` / `nix run` use. packaging.yml ignores
+# flake.nix on purpose (it builds deb/rpm/pacman/AppImage, not the Nix
+# package), so this workflow is the one that compiles the flake.
+#
+# `nix flake check` builds checks.x86_64-linux.hearthstonePackage, the same
+# Crane package as `nix build`. Drafts are skipped. A newer push cancels the
+# older run. Path filters keep it off pull requests that cannot change the
+# derivation (docs, packaging, the login window, workflows other than this one).
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - flake.nix
+      - flake.lock
+      - Cargo.toml
+      - Cargo.lock
+      - src/**
+      - crates/**
+      - assets/**
+      - data/**
+      - locales/**
+      - .github/workflows/nix.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nix-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: nix flake check
+    if: github.event.pull_request.draft != true
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    # actions: write is the Actions cache, not repository contents. The
+    # workflow token still cannot push. Fork pull requests are read-only;
+    # a cache save failure must not hide a successful build, so the cache
+    # step does not fail the job.
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - uses: cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # v31.11.3
+
+      - uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7.0.2
+        continue-on-error: true
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'Cargo.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+          gc-max-store-size-linux: 6G
+
+      - name: Check flake
+        run: nix flake check -L

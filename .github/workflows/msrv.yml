@@ -1,0 +1,114 @@
+name: MSRV
+
+# One matrix leg per manifest. The workspace and login-helper publish their
+# own rust-version and those values can differ: relm4-css 0.10.1 and
+# relm4-macros 0.10.1 require Rust 1.92, while the login window does not use
+# them. The toolchain is whatever `rust-version` that manifest writes. A
+# manifest with no rust-version is skipped with a warning; nothing is filled in.
+#
+# rust-toolchain.toml pins 1.92.0, so the check overrides it with
+# RUSTUP_TOOLCHAIN and `cargo +<version>` (see msrv-cargo.sh). The dtolnay
+# action ref below only installs 1.92.0; the manifest's toolchain is installed
+# in the next step.
+#
+# login-helper is not a workspace member. Its leg runs on ubuntu-24.04 because
+# its build scripts need WebKitGTK 6. Drafts are skipped. A newer push cancels
+# the older run.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
+      - src/**
+      - crates/**
+      - tests/**
+      - locales/**
+      - assets/**
+      - data/**
+      - login-helper/**
+      - .github/workflows/msrv.yml
+      - .github/scripts/rust-version.py
+      - .github/scripts/msrv-cargo.sh
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: msrv-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: MSRV (${{ matrix.name }})
+    if: github.event.pull_request.draft != true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: workspace
+            manifest: Cargo.toml
+            workspace: .
+            apt: libgtk-4-dev libadwaita-1-dev
+          - name: login-helper
+            manifest: login-helper/Cargo.toml
+            workspace: login-helper
+            apt: libgtk-4-dev libadwaita-1-dev libwebkitgtk-6.0-dev
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Read rust-version
+        id: msrv
+        run: |
+          set -euo pipefail
+          version=$(python3 .github/scripts/rust-version.py "${{ matrix.manifest }}")
+          if [ -z "$version" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::${{ matrix.manifest }} has no rust-version; skipping MSRV check"
+            echo "${{ matrix.manifest }} has no rust-version; skipping MSRV check"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "version=${version}" >> "$GITHUB_OUTPUT"
+            echo "${{ matrix.manifest }} rust-version=${version}"
+          fi
+
+      # Skipped manifests stop here. This ref installs Rust 1.92.0 only, which
+      # matches rust-toolchain.toml and gives us rustup. The next step installs
+      # the manifest's own toolchain when that is not 1.92.0.
+      - uses: dtolnay/rust-toolchain@3da603d4464771f1a8c3dd4acb41f03bc8107551 # 1.92.0
+        if: steps.msrv.outputs.skip != 'true'
+
+      - name: Install the manifest toolchain
+        if: steps.msrv.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          rustup toolchain install "${{ steps.msrv.outputs.version }}" --profile minimal --no-self-update
+          echo "RUSTUP_TOOLCHAIN=${{ steps.msrv.outputs.version }}" >> "$GITHUB_ENV"
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        if: steps.msrv.outputs.skip != 'true'
+        with:
+          cache-on-failure: true
+          workspaces: ${{ matrix.workspace }}
+
+      - name: Install system libraries
+        if: steps.msrv.outputs.skip != 'true'
+        run: |
+          echo 'force-unsafe-io' | sudo tee /etc/dpkg/dpkg.cfg.d/unsafe-io >/dev/null
+          sudo rm -f /var/lib/man-db/auto-update
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            pkg-config ${{ matrix.apt }}
+
+      - name: Check at the manifest rust-version
+        if: steps.msrv.outputs.skip != 'true'
+        run: >
+          bash .github/scripts/msrv-cargo.sh "${{ matrix.manifest }}"
+          check --manifest-path "${{ matrix.manifest }}" --locked --all-targets
