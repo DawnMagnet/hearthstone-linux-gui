@@ -34,7 +34,8 @@ exclude = ["login-helper"]
 
 [workspace.package]
 version = "0.3.2"
-rust-version = "1.88"
+# MSRV is set by relm4-css / relm4-macros 0.10.1. Recheck when upgrading relm4.
+rust-version = "1.92"
 
 [features]
 default = ["gui"]
