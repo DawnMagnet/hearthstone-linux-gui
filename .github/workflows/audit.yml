@@ -1,0 +1,80 @@
+name: Security audit
+
+# Checks both lock files against the RustSec advisory database with
+# cargo-audit: the launcher workspace (Cargo.lock) and the login window
+# (login-helper/Cargo.lock, a separate workspace).
+#
+# Only vulnerabilities fail the job. cargo-audit's default policy reports
+# unmaintained, unsound and yanked crates as warnings without failing, so no
+# --deny flag is passed. Do not add --ignore here either: if an advisory ever
+# has to be ignored, list it in .cargo/audit.toml ([advisories] ignore), with
+# a reason for each entry, and only with the security reviewer's approval.
+# cargo-audit reads that file for both lock files because both steps run from
+# the repository root.
+#
+#   pull request to master -> every pull request, no path filter, so this can
+#                             become a required check without blocking pull
+#                             requests that do not touch Cargo files.
+#   push to master         -> only when a manifest, a lock file, this workflow
+#                             or the audit config changes.
+#   schedule               -> weekly, because new advisories appear without
+#                             any change in this repository.
+#   workflow_dispatch      -> manual run.
+#
+# A newer push to the same pull request cancels the older run. Runs on master
+# are never cancelled.
+
+on:
+  pull_request:
+    branches:
+      - master
+  push:
+    branches:
+      - master
+    paths:
+      - "**/Cargo.toml"
+      - "**/Cargo.lock"
+      - .cargo/audit.toml
+      - .github/workflows/audit.yml
+  schedule:
+    # Mondays 02:23 UTC (10:23 UTC+8).
+    - cron: "23 2 * * 1"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: audit-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_NET_RETRY: 10
+  # Keep in sync with the latest cargo-audit release on crates.io.
+  CARGO_AUDIT_VERSION: 0.22.2
+
+jobs:
+  audit:
+    name: cargo audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Same toolchain as rust-toolchain.toml. cargo-audit 0.22.2 needs 1.88.
+      - uses: dtolnay/rust-toolchain@3da603d4464771f1a8c3dd4acb41f03bc8107551 # 1.92.0
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked --version "$CARGO_AUDIT_VERSION"
+
+      - name: Audit Cargo.lock
+        run: cargo audit --file Cargo.lock
+
+      # Runs even if the launcher audit failed, so both results are reported.
+      - name: Audit login-helper/Cargo.lock
+        if: ${{ !cancelled() }}
+        run: cargo audit --file login-helper/Cargo.lock
