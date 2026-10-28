@@ -9,6 +9,12 @@ name: Flatpak
 # attaches the bundle to that existing GitHub release instead, updates
 # SHA256SUMS.txt and adds a Flatpak entry to the release notes. Version numbers
 # are never changed here.
+#
+# The token is read-only, including inside the privileged build container.
+# Only the manual publish job below asks for contents: write. A workflow_call
+# caller has to grant that write or GitHub rejects the file: the publish job's
+# permission is checked even when its `if` skips it. release.yml does that on
+# the flatpak job and still publishes the release itself.
 
 on:
   workflow_dispatch:
@@ -38,7 +44,7 @@ on:
         value: ${{ jobs.build.outputs.artifact }}
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: flatpak-${{ github.ref }}-${{ inputs.release_tag || 'build' }}
@@ -47,6 +53,8 @@ concurrency:
 jobs:
   build:
     name: Build Flatpak bundle
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     timeout-minutes: 90
     container:
@@ -57,10 +65,11 @@ jobs:
       artifact: ${{ steps.names.outputs.artifact }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           ref: ${{ inputs.ref || github.sha }}
           submodules: recursive
+          persist-credentials: false
 
       - name: Prepare names
         id: names
@@ -79,7 +88,7 @@ jobs:
           echo "artifact=hearthstone-linux-gui-${version}-flatpak" >> "$GITHUB_OUTPUT"
 
       - name: Build bundle
-        uses: flatpak/flatpak-github-actions/flatpak-builder@v6.8
+        uses: flatpak/flatpak-github-actions/flatpak-builder@79327416609af08178ad73b352877e51450790b3 # v6.8
         with:
           manifest-path: packaging/flatpak/io.github.hearthstone_linux_gui.yml
           bundle: ${{ steps.names.outputs.bundle }}
@@ -99,6 +108,10 @@ jobs:
 
   publish:
     name: Attach to release
+    # Manual flatpak.yml runs only. Tag pushes leave publishing to release.yml,
+    # but this permission still has to be within the caller's grant.
+    permissions:
+      contents: write
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag }}
     needs: build
     runs-on: ubuntu-latest
@@ -109,7 +122,7 @@ jobs:
       BUNDLE: ${{ needs.build.outputs.bundle }}
     steps:
       - name: Download bundle
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: ${{ needs.build.outputs.artifact }}
           path: flatpak
