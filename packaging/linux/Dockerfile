@@ -94,7 +94,11 @@ FROM build AS packages
 RUN packaging/linux/packages.sh /pkgroot /dist
 
 # GTK stack for the AppImage. Versions and checksums live in el8-gtk/versions.env.
-FROM docker.io/library/almalinux:8 AS el8-gtk-build
+# The base is pinned to the almalinux:8 multi-arch index digest so the AppImage
+# and the GHCR toolchain tag (a hash of this file) cannot drift with the tag.
+# Bump it on purpose: update the digest and the date below together.
+# almalinux:8 index digest as of 2026-10-28.
+FROM docker.io/library/almalinux:8@sha256:2d0f2eb2a83cc09dbc2eb92fade4dbe8f709628149e81aa00aec70630406603b AS el8-gtk-build
 
 ARG RUST_VERSION=1.92.0
 ARG ALMALINUX_MIRROR=
