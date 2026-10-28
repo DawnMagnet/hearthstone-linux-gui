@@ -1,17 +1,23 @@
 name: CI
 
-# The only check that runs on pull requests: type-check everything (GUI
-# included) and run the unit tests. No packages are built here. packaging.yml
-# builds one quick set on every push to master, and release.yml builds
-# everything for v* tags.
+# Pull-request checks for the launcher workspace. No packages are built here.
+# packaging.yml builds deb/rpm/pacman/AppImage on master, and release.yml
+# builds a release. The Nix package is .github/workflows/nix.yml.
 #
-# Kept cheap on purpose:
-#   - only Rust-relevant paths trigger it (docs, packaging, Nix and other
-#     workflows do not),
-#   - draft pull requests are skipped until they are marked ready,
-#   - a newer push to the same pull request cancels the older run,
-#   - no debug info and no incremental artifacts, which are useless in CI and
-#     only make the cache bigger and slower to restore.
+# On a non-draft pull request this job:
+#   - checks rustfmt,
+#   - checks the GTK 4.6 / libadwaita 1.1 / relm4 gnome_42 feature ceiling
+#     (.github/ui-baseline.env),
+#   - runs clippy -D warnings, which also type-checks the workspace,
+#   - runs every workspace test: library, binaries, tests/apprun.rs, doctests,
+#     and the stub crates under crates/.
+#
+# tests/apprun.rs executes packaging/appimage/AppRun, so that path is a trigger.
+# MSRV is a separate matrix workflow (.github/workflows/msrv.yml): each manifest
+# supplies its own rust-version. Docs-only changes are not. Drafts are skipped
+# until marked ready, and a newer push to the same pull request cancels the
+# older run. Debug info and
+# incremental artifacts are off: they only make the cache slower to restore.
 
 on:
   pull_request:
@@ -23,9 +29,12 @@ on:
       - locales/**
       - assets/**
       - data/icons/**
+      - packaging/appimage/**
       - Cargo.toml
       - Cargo.lock
       - rust-toolchain.toml
+      - .github/ui-baseline.env
+      - .github/scripts/**
       - .github/workflows/ci.yml
       - .github/actions/**
   workflow_dispatch:
@@ -46,23 +55,32 @@ env:
 
 jobs:
   check:
-    name: Check and unit tests
+    name: Format, lint, and test
     if: github.event.pull_request.draft != true
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
 
       - uses: ./.github/actions/setup-rust
 
-      # `check` stops before code generation and linking, which is enough to
-      # catch GUI compile errors without a full build. Running it first fails
-      # fast on compile errors before the test build starts.
-      - name: Type-check workspace, GUI and tests
-        run: cargo check --workspace --all-targets --locked
+      - name: Check formatting
+        run: cargo fmt --all --check
 
-      # The binary's unit tests cover the login window's process handling and
-      # the browser openers; the GTK headers installed above are enough for
-      # them. Integration tests are covered by the packaging jobs.
-      - name: Unit tests
-        run: cargo test -p hearthstone-linux-gui --lib --bins --locked
+      - name: Check UI feature ceiling
+        run: python3 .github/scripts/check-ui-baseline.py --require gtk4,libadwaita,relm4
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      # Headless. ui/text.rs skips language_switch_updates_the_open_window
+      # unless DISPLAY or WAYLAND_DISPLAY is set. With a display that test
+      # holds i18n::LANG_LOCK (via LanguageHold) for the whole GTK run, and
+      # the default parallel harness can deadlock against other tests that
+      # take the same lock. Hosted runners have no display; strip it if an
+      # image starts exporting one. If this step still hangs, switch it to
+      # `cargo test --workspace --locked -- --test-threads=1`.
+      - name: Test workspace
+        run: env -u DISPLAY -u WAYLAND_DISPLAY cargo test --workspace --locked
