@@ -42,23 +42,23 @@ default = ["gui"]
 gui = ["dep:relm4", "dep:relm4-components", "dep:gtk4", "dep:libadwaita"]
 
 [dependencies]
-aes = "0.8"
+aes = "0.9"
 anyhow = "1"
 base64 = "0.23"
 bitvec = "1"
-cbc = { version = "0.1", features = ["alloc"] }
+cbc = { version = "0.2", features = ["alloc"] }
 clap = { version = "4", features = ["derive"] }
 directories = "6"
 flate2 = "1"
 hex = "0.4"
-md5 = "0.7"
+md5 = "0.8"
 pbkdf2 = "0.13"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha1 = "0.11"
 sha2 = "0.11"
-strum = { version = "0.27", features = ["derive"] }
+strum = { version = "0.28", features = ["derive"] }
 tar = "0.4"
 tokio = { version = "1", features = ["fs", "io-util", "macros", "process", "rt-multi-thread", "sync", "time"] }
 tokio-util = "0.7"
@@ -70,8 +70,8 @@ url = "2"
 walkdir = "2"
 xz2 = "0.1"
 
-relm4 = { version = "=0.10.0", default-features = false, features = ["css", "macros", "libadwaita"], optional = true }
-relm4-components = { version = "=0.10.0", features = ["libadwaita"], optional = true }
+relm4 = { version = "=0.10.1", default-features = false, features = ["css", "macros", "libadwaita"], optional = true }
+relm4-components = { version = "=0.10.1", features = ["libadwaita"], optional = true }
 # Runtime baseline is still GTK 4.6 + libadwaita 1.1 (adw 1.1 needs GTK >= 4.5),
 # but we compile against the 4.4 API surface so EL9's pango 1.48 works.
 # gtk4-rs 0.10's v4_6 feature enables pango/v1_50, and pango-sys then requires
