@@ -398,10 +398,18 @@ async fn download_file_single(
     mut progress: impl FnMut(DownloadProgress) + Send,
 ) -> Result<()> {
     let partial = partial_download_path(destination);
-    let mut offset = file_len(&partial).await?;
+    // A missing partial is not an empty file. Treating both as length 0 made a
+    // zero-length download rename a `.part` that was never created.
+    let (mut offset, partial_exists) = match tokio::fs::metadata(&partial).await {
+        Ok(metadata) => (metadata.len(), true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => (0, false),
+        Err(error) => {
+            return Err(error).with_context(|| format!("failed to stat {}", partial.display()));
+        }
+    };
     if let Some(total) = expected_total {
-        if offset == total {
-            tokio::fs::rename(&partial, destination).await?;
+        if partial_exists && offset == total {
+            publish_partial(&partial, destination).await?;
             progress(DownloadProgress {
                 downloaded: total,
                 total: Some(total),
@@ -455,7 +463,8 @@ async fn download_file_single(
             .append(append)
             .truncate(!append)
             .open(&partial)
-            .await?;
+            .await
+            .with_context(|| format!("failed to write {}", partial.display()))?;
         let mut response = response;
         let mut window_start = Instant::now();
         let mut window_bytes = 0u64;
@@ -470,7 +479,9 @@ async fn download_file_single(
             check_cancelled(cancel.as_ref())?;
             match tokio::time::timeout(IDLE_TIMEOUT, response.chunk()).await {
                 Ok(Ok(Some(chunk))) => {
-                    file.write_all(&chunk).await?;
+                    file.write_all(&chunk)
+                        .await
+                        .with_context(|| format!("failed to write {}", partial.display()))?;
                     let chunk_len = chunk.len() as u64;
                     downloaded += chunk_len;
                     window_bytes += chunk_len;
@@ -494,7 +505,10 @@ async fn download_file_single(
                 ),
             }
         }
-        file.flush().await?;
+        file.flush()
+            .await
+            .with_context(|| format!("failed to write {}", partial.display()))?;
+        drop(file);
 
         if let Some(total) = total {
             anyhow::ensure!(
@@ -502,7 +516,7 @@ async fn download_file_single(
                 "download was incomplete: got {downloaded} of {total} bytes"
             );
         }
-        tokio::fs::rename(&partial, destination).await?;
+        publish_partial(&partial, destination).await?;
         progress(DownloadProgress {
             downloaded,
             total: total.or(Some(downloaded)),
@@ -551,10 +565,7 @@ async fn download_chunk_to_file(
         progress,
     )
     .await?;
-    if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent).await?;
-    }
-    tokio::fs::write(path, &data).await?;
+    util::write_file_atomic_async(path, &data).await?;
     Ok(data.len() as u64)
 }
 
@@ -563,8 +574,17 @@ async fn assemble_chunks(
     chunks: &[DownloadChunk],
     destination: &Path,
 ) -> Result<()> {
-    if let Some(parent) = destination.parent() {
-        tokio::fs::create_dir_all(parent).await?;
+    if let Some(parent) = destination
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        tokio::fs::create_dir_all(parent).await.with_context(|| {
+            format!(
+                "failed to create {} for {}",
+                parent.display(),
+                destination.display()
+            )
+        })?;
     }
     let partial = partial_download_path(destination);
     let mut output = tokio::fs::OpenOptions::new()
@@ -572,22 +592,70 @@ async fn assemble_chunks(
         .write(true)
         .truncate(true)
         .open(&partial)
-        .await?;
+        .await
+        .with_context(|| format!("failed to write {}", partial.display()))?;
 
     for chunk in chunks {
         let path = chunk_path(chunk_dir, chunk.index);
-        let mut input = tokio::fs::File::open(&path).await?;
+        let mut input = tokio::fs::File::open(&path)
+            .await
+            .with_context(|| format!("failed to read {}", path.display()))?;
         let mut buffer = vec![0u8; 1024 * 1024];
         loop {
-            let read = input.read(&mut buffer).await?;
+            let read = input
+                .read(&mut buffer)
+                .await
+                .with_context(|| format!("failed to read {}", path.display()))?;
             if read == 0 {
                 break;
             }
-            output.write_all(&buffer[..read]).await?;
+            output
+                .write_all(&buffer[..read])
+                .await
+                .with_context(|| format!("failed to write {}", partial.display()))?;
         }
     }
-    output.flush().await?;
-    tokio::fs::rename(partial, destination).await?;
+    output
+        .flush()
+        .await
+        .with_context(|| format!("failed to write {}", partial.display()))?;
+    drop(output);
+    publish_partial(&partial, destination).await?;
+    Ok(())
+}
+
+async fn publish_partial(partial: &Path, destination: &Path) -> Result<()> {
+    {
+        let file = tokio::fs::OpenOptions::new()
+            .write(true)
+            .open(partial)
+            .await
+            .with_context(|| format!("failed to open {}", partial.display()))?;
+        file.sync_all()
+            .await
+            .with_context(|| format!("failed to sync {}", partial.display()))?;
+    }
+    if let Some(parent) = destination
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        tokio::fs::create_dir_all(parent).await.with_context(|| {
+            format!(
+                "failed to create {} for {}",
+                parent.display(),
+                destination.display()
+            )
+        })?;
+    }
+    tokio::fs::rename(partial, destination)
+        .await
+        .with_context(|| format!("failed to replace {}", destination.display()))?;
+    if let Some(parent) = destination
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        util::sync_dir(parent)?;
+    }
     Ok(())
 }
 
@@ -602,7 +670,9 @@ async fn completed_chunk_bytes(chunk_dir: &Path, chunks: &[DownloadChunk]) -> Re
                 let _ = tokio::fs::remove_file(path).await;
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
+            Err(error) => {
+                return Err(error).with_context(|| format!("failed to stat {}", path.display()));
+            }
         }
     }
     Ok(total)
@@ -660,11 +730,12 @@ fn chunk_path(chunk_dir: &Path, index: usize) -> PathBuf {
     chunk_dir.join(format!("{index:06}.part"))
 }
 
+#[cfg(test)]
 async fn file_len(path: &Path) -> Result<u64> {
     match tokio::fs::metadata(path).await {
         Ok(metadata) => Ok(metadata.len()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(0),
-        Err(error) => Err(error.into()),
+        Err(error) => Err(error).with_context(|| format!("failed to stat {}", path.display())),
     }
 }
 

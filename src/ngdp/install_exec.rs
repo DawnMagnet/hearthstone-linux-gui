@@ -180,10 +180,7 @@ async fn install_one_entry(
     )
     .await?;
     let target = checked_install_path(&out_dir, &item.target_path)?;
-    if let Some(parent) = target.parent() {
-        tokio::fs::create_dir_all(parent).await?;
-    }
-    tokio::fs::write(&target, decoded).await?;
+    crate::util::write_file_atomic_async(&target, &decoded).await?;
     let metadata = tokio::fs::metadata(&target)
         .await
         .with_context(|| format!("failed to stat installed file {}", target.display()))?;

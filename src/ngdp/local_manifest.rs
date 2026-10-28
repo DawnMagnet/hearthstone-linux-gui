@@ -91,16 +91,14 @@ impl InstalledManifest {
     }
 
     pub(super) async fn save(&self, out_dir: &Path) -> Result<()> {
-        tokio::fs::create_dir_all(out_dir).await?;
+        tokio::fs::create_dir_all(out_dir)
+            .await
+            .with_context(|| format!("failed to create {}", out_dir.display()))?;
         let path = installed_manifest_path(out_dir);
-        let temp = path.with_extension("json.tmp");
         let data = serde_json::to_vec_pretty(self)?;
-        tokio::fs::write(&temp, data)
+        crate::util::write_file_atomic_async(&path, &data)
             .await
-            .with_context(|| format!("failed to write installed manifest {}", temp.display()))?;
-        tokio::fs::rename(&temp, &path)
-            .await
-            .with_context(|| format!("failed to update installed manifest {}", path.display()))?;
+            .with_context(|| format!("failed to write installed manifest {}", path.display()))?;
         Ok(())
     }
 

@@ -3,7 +3,7 @@ use crate::{download, i18n::Phrase, phrase, util};
 use anyhow::{Context, Result};
 use std::{
     io::{ErrorKind, SeekFrom},
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -443,16 +443,7 @@ impl RemoteCdn {
         let Ok(Some(path)) = self.cache_path(namespace, key) else {
             return;
         };
-        let Some(parent) = path.parent() else {
-            return;
-        };
-        if tokio::fs::create_dir_all(parent).await.is_err() {
-            return;
-        }
-
-        let temp = temp_cache_path(&path);
-        if tokio::fs::write(&temp, data).await.is_ok() {
-            let _ = tokio::fs::rename(temp, path).await;
+        if util::write_file_atomic_async(&path, data).await.is_ok() {
             trace!(namespace = %namespace, key = %key, bytes = data.len(), "wrote cache item");
         }
     }
@@ -498,13 +489,6 @@ fn verify_index_footer(data: &[u8], key: &str, verify: bool) -> Result<()> {
         key,
         verify,
     )
-}
-
-fn temp_cache_path(path: &Path) -> PathBuf {
-    let mut temp = path.to_path_buf();
-    let extension = format!("tmp-{}", std::process::id());
-    temp.set_extension(extension);
-    temp
 }
 
 #[cfg(test)]

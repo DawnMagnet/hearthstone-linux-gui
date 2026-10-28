@@ -60,9 +60,9 @@ pub fn write_client_config(
     let config = include_str!("../../assets/client.config.in")
         .replace("{{aurora_env}}", region.aurora_env())
         .replace("{{locale}}", locale.as_str());
-    std::fs::write(
-        game_dir.join("client.config"),
-        game_options::apply_overrides(&config, overrides),
+    util::write_file_atomic(
+        &game_dir.join("client.config"),
+        game_options::apply_overrides(&config, overrides).as_bytes(),
     )?;
     Ok(())
 }
@@ -124,7 +124,7 @@ pub fn install_window_icon(game_dir: &Path) {
         );
         return;
     };
-    match std::fs::write(&icon, png) {
+    match util::write_file_atomic(&icon, png) {
         Ok(()) => info!(path = %icon.display(), "installed game window icon"),
         Err(error) => debug!(
             path = %icon.display(),
@@ -202,7 +202,7 @@ pub fn patch_corefoundation_imports(game_dir: &Path) -> Result<usize> {
             continue;
         }
         util::make_user_writable(&path)?;
-        std::fs::write(&path, data)?;
+        util::write_file_atomic(&path, &data)?;
         patched += count;
         debug!(path = %path.display(), count, "patched macOS CoreFoundation imports");
     }

@@ -30,8 +30,9 @@ pub fn transform_macos_installation(game_dir: &Path) -> Result<()> {
 
 fn rename_or_copy(from: &Path, to: &Path) -> Result<()> {
     debug!(from = %from.display(), to = %to.display(), "moving install path");
-    if let Some(parent) = to.parent() {
-        std::fs::create_dir_all(parent)?;
+    if let Some(parent) = to.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
     }
     match std::fs::rename(from, to) {
         Ok(()) => Ok(()),
@@ -45,9 +46,7 @@ fn rename_or_copy(from: &Path, to: &Path) -> Result<()> {
             Ok(())
         }
         Err(_) => {
-            std::fs::copy(from, to).with_context(|| {
-                format!("failed to copy {} to {}", from.display(), to.display())
-            })?;
+            util::copy_file_atomic(from, to)?;
             let _ = std::fs::remove_file(from);
             Ok(())
         }

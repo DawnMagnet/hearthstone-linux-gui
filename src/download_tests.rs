@@ -737,10 +737,7 @@ async fn stalled_connection_times_out() {
     assert!(message.contains("connection stalled"), "{message}");
 }
 
-// B5: expected length 0 and a missing partial compare equal, so the code
-// renames a file that was never created.
 #[tokio::test]
-#[ignore = "B5: a zero-length remote with no .part tries to rename a missing partial"]
 async fn file_zero_length() {
     let behavior = Behavior {
         accept_ranges: false,
@@ -753,6 +750,25 @@ async fn file_zero_length() {
         .await
         .expect("empty file should be created");
     assert_eq!(std::fs::read(&destination).unwrap(), b"");
+    assert!(!partial_download_path(&destination).exists());
+}
+
+#[tokio::test]
+async fn file_write_error_includes_path() {
+    let behavior = Behavior {
+        accept_ranges: false,
+        ..Behavior::default()
+    };
+    let server = FakeServer::start(pattern(32), behavior);
+    let temp = tempfile::tempdir().unwrap();
+    let blocker = temp.path().join("not-a-directory");
+    std::fs::write(&blocker, b"x").unwrap();
+    let destination = blocker.join("file.bin");
+    let message = expect_err(
+        download_file(&client(), server.url().as_str(), &destination, None, |_| {}).await,
+    )
+    .await;
+    assert!(message.contains("file.bin"), "{message}");
 }
 
 #[tokio::test]
