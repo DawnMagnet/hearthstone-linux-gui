@@ -1,6 +1,7 @@
 [package]
 name = "hearthstone-linux-gui-blz-commerce-sdk-plugin-stub"
 version.workspace = true
+rust-version.workspace = true
 edition = "2021"
 license = "MIT"
 
