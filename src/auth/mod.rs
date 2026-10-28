@@ -245,4 +245,31 @@ mod tests {
         let token = "AB-0123456789ABCDEFGHIJKLMNOPQRSTUV-123456789012";
         assert!(encrypt_token_for_user(token, "sgct").is_err());
     }
+
+    /// RFC 6070 PBKDF2-HMAC-SHA1 vectors (P = "password", S = "salt", dkLen = 20).
+    /// Uses the same `pbkdf2_hmac::<Sha1>` path as token-key derivation.
+    #[test]
+    fn pbkdf2_hmac_sha1_matches_rfc6070() {
+        let vectors = [
+            (1_u32, "0c60c80f961f0e71f3a9b524af6012062fe037a6"),
+            (2, "ea6c014dc72d6f8ccd1ed92ace1d41f0d8de8957"),
+            (4096, "4b007901b765489abead49d926f721d065a429c1"),
+        ];
+        for (iterations, expected) in vectors {
+            let mut dk = [0u8; 20];
+            pbkdf2_hmac::<Sha1>(b"password", b"salt", iterations, &mut dk);
+            assert_eq!(hex::encode(dk), expected, "c={iterations}");
+        }
+    }
+
+    /// FIPS 180-4 SHA-256("abc"), covering the sha2 0.11 digest path.
+    #[test]
+    fn sha256_abc_matches_known_answer() {
+        use sha2::{Digest, Sha256};
+
+        assert_eq!(
+            hex::encode(Sha256::digest(b"abc")),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
 }
