@@ -102,7 +102,19 @@ pub fn host_var(name: &str) -> Option<OsString> {
 
 /// Makes `command` run with the host environment instead of the AppImage one.
 pub fn apply(command: &mut Command) -> &mut Command {
-    for var in host_vars() {
+    apply_vars(command, host_vars())
+}
+
+/// Writes an already-resolved host environment onto `command`.
+///
+/// [`apply`] resolves the variables from the process environment. Launch
+/// tests pass a fixed list instead, so they do not have to mutate the
+/// process environment while other tests run.
+pub(crate) fn apply_vars(
+    command: &mut Command,
+    vars: impl IntoIterator<Item = HostVar>,
+) -> &mut Command {
+    for var in vars {
         match var {
             HostVar::Set(name, value) => {
                 command.env(name, value);
