@@ -205,6 +205,20 @@ export GDK_BACKEND=wayland
 export GSK_RENDERER=cairo
 timeout 8 "$appimage" --appimage-extract-and-run > "$runtime/app.log" 2>&1 &
 app=$!
+# Only look at processes started by this session: $app and its descendants.
+# Scanning all of /proc by name can pick a GUI left over from an earlier test
+# or owned by another user, whose environ this user cannot read.
+is_descendant() {
+  local pid=$1 ppid
+  while [ -n "$pid" ] && [ "$pid" -gt 1 ]; do
+    [ "$pid" = "$app" ] && return 0
+    ppid=$(awk '{print $4}' "/proc/$pid/stat" 2>/dev/null || true)
+    [ -n "$ppid" ] || return 1
+    pid=$ppid
+  done
+  return 1
+}
+me=$(id -u)
 gui=""
 for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24; do
   for d in /proc/[0-9]*; do
@@ -212,8 +226,12 @@ for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24; do
     comm=$(cat "$d/comm" 2>/dev/null || true)
     case "$comm" in
       hearthstone-lin*)
-        gui=${d#/proc/}
-        break
+        pid=${d#/proc/}
+        owner=$(stat -c %u "$d" 2>/dev/null || true)
+        if [ "$owner" = "$me" ] && is_descendant "$pid"; then
+          gui=$pid
+          break
+        fi
         ;;
     esac
   done
@@ -221,9 +239,27 @@ for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24; do
   sleep 0.25
 done
 if [ -z "$gui" ]; then
-  echo "error: ${label} GUI process did not appear" >&2
+  echo "error: ${label} GUI process did not appear under pid ${app}" >&2
   cat "$runtime/app.log" >&2 || true
   kill "$comp" 2>/dev/null || true
+  exit 1
+fi
+env_dump=""
+env_ok=0
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  if env_dump=$(tr '\0' '\n' < "/proc/$gui/environ" 2>"$runtime/environ.err") && [ -n "$env_dump" ]; then
+    env_ok=1
+    break
+  fi
+  sleep 0.2
+done
+if [ "$env_ok" != 1 ]; then
+  # Unreadable is not the same as "wayland-compat missing": say which.
+  echo "error: ${label} cannot read /proc/${gui}/environ: $(cat "$runtime/environ.err" 2>/dev/null)" >&2
+  echo "diag: smoke uid=${me} app=${app} gui=${gui} comm=$(cat "/proc/$gui/comm" 2>/dev/null)" >&2
+  grep -E '^(PPid|Uid|Gid|CapEff|NoNewPrivs|State):' "/proc/$gui/status" >&2 2>/dev/null || true
+  ls -l "/proc/$gui/environ" >&2 2>/dev/null || true
+  kill "$app" "$comp" 2>/dev/null || true
   exit 1
 fi
 ldp=""
@@ -231,7 +267,7 @@ while IFS= read -r line; do
   case "$line" in
     LD_LIBRARY_PATH=*) ldp=${line#LD_LIBRARY_PATH=} ;;
   esac
-done < <(tr '\0' '\n' < "/proc/$gui/environ")
+done <<< "$env_dump"
 printf 'GUI LD_LIBRARY_PATH=%s\n' "$ldp"
 case "$ldp" in
   *wayland-compat*) ;;
