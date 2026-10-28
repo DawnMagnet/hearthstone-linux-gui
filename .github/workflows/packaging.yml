@@ -186,6 +186,32 @@ jobs:
     steps:
       - name: Install checkout prerequisites
         run: |
+          # debian:11 still lists bullseye-security, but the deb.debian.org
+          # pool 404s those debs (openssl, ca-certificates) now that Debian 11
+          # LTS is over. Drop that suite before the first update. The image
+          # writes one-line deb stanzas in sources.list; sources.list.d is
+          # empty today and is filtered the same way. The edit stays for every
+          # later apt-get in this container, including smoke.sh. Ubuntu is
+          # unchanged.
+          if [ -r /etc/os-release ]; then
+            # shellcheck disable=SC1091
+            . /etc/os-release
+          fi
+          if [ "${ID:-}" = debian ] && [ "${VERSION_ID:-}" = 11 ]; then
+            drop_bullseye_security() {
+              src=$1
+              [ -f "$src" ] || return 0
+              tmp=$(mktemp)
+              awk '!/^[[:space:]]*#/ && /bullseye-security/ { next } { print }' "$src" > "$tmp"
+              cat "$tmp" > "$src"
+              rm -f "$tmp"
+            }
+            drop_bullseye_security /etc/apt/sources.list
+            for src in /etc/apt/sources.list.d/*; do
+              [ -f "$src" ] || continue
+              drop_bullseye_security "$src"
+            done
+          fi
           if command -v apt-get >/dev/null; then apt-get update -qq && apt-get install -y -qq ca-certificates >/dev/null; fi
           if command -v pacman >/dev/null; then pacman -Sy --noconfirm --needed ca-certificates >/dev/null; fi
 
