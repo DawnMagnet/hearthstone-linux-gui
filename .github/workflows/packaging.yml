@@ -1,23 +1,37 @@
 name: Packaging
 
-# Builds native packages on the Enterprise Linux 9 baseline (glibc 2.34) and
-# the AppImage on AlmaLinux 8 (glibc 2.28, GTK 4.12 from source). Smoke also
-# runs the hidden --print-child-env probe so AppImage children do not inherit
-# bundled LD_LIBRARY_PATH / GTK paths.
+# Native packages stay on the Enterprise Linux 9 baseline. The AppImage is
+# built on AlmaLinux 8 (glibc 2.28) against the from-source GTK 4.12 stack.
+# check-glibc.sh runs inside that build. Smoke runs --print-child-env so
+# children do not inherit bundled library or GTK paths.
 #
-# The EL8 GTK toolchain is published to GHCR, tagged by a hash of its sources,
-# and reused so CI does not recompile GTK on every run. Pull requests build
-# the image when it is missing and do not push it.
+#   pull request        -> AppImage only, Debian 11 and Ubuntu 20.04 smoke.
+#                          Never pushes the toolchain image.
+#   workflow_dispatch   -> same AppImage build and smoke, unless `full` is
+#                          set. Pushes the toolchain image only when
+#                          `push_image` is set and the ref is master.
+#   push to master      -> deb/rpm/pacman and the AppImage, quick smoke
+#                          matrix, then a separate job pushes the toolchain
+#                          image to GHCR.
+#   release.yml         -> workflow_call with full=true.
 #
-#   pull request   -> not run (ci.yml does the cheap type-check and tests)
-#   push to master -> one quick build, smoke-tested on three distributions
-#   release.yml    -> called with full=true: the full distribution matrix
-#   manual run     -> quick by default, full with the `full` input
-#
-# This workflow only builds and uploads the `linux-packages` artifact. It never
-# touches a GitHub release; release.yml publishes.
+# The toolchain image tag is a hash of packaging/linux/el8-gtk and the
+# Dockerfile. Builds use the GitHub Actions cache. Only the push job has
+# packages: write, and it never runs for a pull request.
 
 on:
+  pull_request:
+    paths:
+      - .github/workflows/packaging.yml
+      - packaging/**
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
+      - src/**
+      - crates/**
+      - assets/**
+      - data/**
+      - locales/**
   push:
     branches:
       - master
@@ -33,7 +47,11 @@ on:
   workflow_dispatch:
     inputs:
       full:
-        description: Smoke test the full distribution matrix instead of three images.
+        description: Also build native packages and smoke the full distribution matrix.
+        type: boolean
+        default: false
+      push_image:
+        description: Push the EL8 GTK toolchain image to GHCR. Only honored on master.
         type: boolean
         default: false
   workflow_call:
@@ -57,29 +75,72 @@ concurrency:
 
 jobs:
   build:
-    name: Build packages (EL9 native, EL8 AppImage)
+    name: Build packages
     runs-on: ubuntu-latest
     timeout-minutes: 240
     permissions:
       contents: read
-      # Push the EL8 GTK toolchain image. Pull requests do not push.
-      packages: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
-      # Log in before the inspect. The published image is private to this
-      # repository, so an anonymous inspect would miss it and rebuild GTK.
+      # Pull requests and a manual run without `full` only need the AppImage.
+      # check-glibc.sh 2.28 runs inside packaging/linux/appimage.sh.
+      - name: Build AppImage and, on master, native packages
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          file: packaging/linux/Dockerfile
+          target: ${{ (github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.full == false)) && 'appimage-out' || 'dist' }}
+          outputs: type=local,dest=dist
+          cache-from: |
+            type=gha,scope=el9-toolchain
+            type=gha,scope=el8-gtk
+          cache-to: |
+            type=gha,mode=max,scope=el9-toolchain,ignore-error=true
+            type=gha,mode=max,scope=el8-gtk,ignore-error=true
+
+      - name: List packages
+        run: ls -l dist
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: linux-packages
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 3
+
+  # Separate from the build on purpose: a pull request never reaches this job.
+  push-toolchain:
+    name: Push EL8 GTK toolchain image
+    needs: build
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/master') ||
+      (github.event_name == 'workflow_dispatch' && inputs.push_image && github.ref == 'refs/heads/master')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
       - name: Log in to GHCR
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: echo "$GITHUB_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
-      - name: EL8 GTK toolchain image ref
-        id: el8gtk
+      - name: Image tag
+        id: tag
         run: |
           set -euo pipefail
           hash="$(
@@ -89,81 +150,36 @@ jobs:
             } | sha256sum | cut -c1-16
           )"
           repo="$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
-          ref="ghcr.io/${repo}/el8-gtk:${hash}"
-          echo "ref=${ref}" >> "$GITHUB_OUTPUT"
-          echo "EL8 GTK toolchain ref: ${ref}"
-          if docker buildx imagetools inspect "$ref" >/dev/null 2>&1; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-            echo "build_arg=EL8_GTK_IMAGE=${ref}" >> "$GITHUB_OUTPUT"
-          else
-            echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "build_arg=EL8_GTK_IMAGE=el8-gtk-build" >> "$GITHUB_OUTPUT"
-          fi
+          echo "ref=ghcr.io/${repo}/el8-gtk:${hash}" >> "$GITHUB_OUTPUT"
 
-      # dnf, rustup and nfpm rarely change; cache that layer on its own so a
-      # source-only commit does not reinstall the whole toolchain. A failed
-      # cache export (for example on fork pull requests) must not fail the run.
-      # el8-gtk is the from-source GTK stack. When the GHCR tag above exists,
-      # the dist build pulls it and does not recompile GTK.
-      - name: Cache EL9 toolchain layer
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: packaging/linux/Dockerfile
-          target: toolchain
-          outputs: type=cacheonly
-          cache-from: type=gha,scope=el9-toolchain
-          cache-to: type=gha,mode=max,scope=el9-toolchain,ignore-error=true
-
-      - name: Build deb, rpm, pacman and AppImage
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: packaging/linux/Dockerfile
-          target: dist
-          build-args: ${{ steps.el8gtk.outputs.build_arg }}
-          outputs: type=local,dest=dist
-          cache-from: |
-            type=gha,scope=el9-toolchain
-            type=gha,scope=el8-gtk
-          cache-to: type=gha,mode=max,scope=el8-gtk,ignore-error=true
-
-      # Same layers as the dist build when the image was missing, so this
-      # push does not compile GTK again. Pull requests never push.
-      - name: Push EL8 GTK toolchain image
-        if: steps.el8gtk.outputs.present != 'true' && github.event_name != 'pull_request'
-        uses: docker/build-push-action@v6
+      - name: Push toolchain image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           file: packaging/linux/Dockerfile
           target: el8-gtk-build
           push: true
-          tags: ${{ steps.el8gtk.outputs.ref }}
+          tags: ${{ steps.tag.outputs.ref }}
           cache-from: type=gha,scope=el8-gtk
-
-      - name: List packages
-        run: ls -l dist
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: linux-packages
-          path: dist/*
-          if-no-files-found: error
-          retention-days: 3
+          cache-to: type=gha,mode=max,scope=el8-gtk,ignore-error=true
 
   smoke:
     name: Smoke test (${{ matrix.image }})
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
-        # Quick: EL9 (rpm), a current deb, Arch, and the two glibc>=2.28
-        # desktops that have no GTK 4 packages (AppImage only). Full adds the
-        # rest of the native-package matrix.
-        image: ${{ fromJSON(inputs.full
-          && '["almalinux:9","ubuntu:22.04","debian:12","ubuntu:24.04","debian:13","fedora:latest","archlinux:latest","opensuse/tumbleweed:latest","debian:11","ubuntu:20.04"]'
+        # Pull requests, and a manual run that did not ask for the full
+        # matrix, only prove the AppImage on the glibc 2.28 desktops.
+        image: ${{ fromJSON(
+          (github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.full == false))
+            && '["debian:11","ubuntu:20.04"]'
+          || (inputs.full
+            && '["almalinux:9","ubuntu:22.04","debian:12","ubuntu:24.04","debian:13","fedora:latest","archlinux:latest","opensuse/tumbleweed:latest","debian:11","ubuntu:20.04"]')
           || '["almalinux:9","ubuntu:24.04","archlinux:latest","debian:11","ubuntu:20.04"]') }}
     container:
       image: ${{ matrix.image }}
@@ -173,12 +189,13 @@ jobs:
           if command -v apt-get >/dev/null; then apt-get update -qq && apt-get install -y -qq ca-certificates >/dev/null; fi
           if command -v pacman >/dev/null; then pacman -Sy --noconfirm --needed ca-certificates >/dev/null; fi
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           ref: ${{ inputs.ref || github.sha }}
           sparse-checkout: packaging/linux
+          persist-credentials: false
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: linux-packages
           path: dist

@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
 # Fails when any ELF file under the given paths needs a glibc symbol version
-# newer than <max>, or when a core host library that must never be bundled
-# (glibc, ld-linux, libstdc++, libgcc_s, GL/EGL, libdrm, libgbm, X11/xcb,
-# Wayland server) is present in the tree.
+# newer than <max>, or when a host library that must never be bundled is
+# present. That list is glibc and the dynamic loader, libstdc++, libgcc_s,
+# OpenSSL, GL/EGL/GLX/GLdispatch, libgbm, libdrm, Vulkan, Mesa drivers,
+# libX11, libxcb, the Wayland server library, and libwayland-egl (it has to
+# match host Mesa).
 #
-# Wayland client/cursor/egl are bundled on purpose: GTK 4.12 needs Wayland
-# >= 1.21 and Ubuntu 20.04 ships 1.18. fontconfig, FreeType and HarfBuzz are
-# bundled for the same reason and are not in this list.
+# libwayland-client and libwayland-cursor may exist only under a
+# wayland-compat directory. AppRun puts that directory on LD_LIBRARY_PATH
+# when the host client is older than Wayland 1.21, and host_env takes it
+# off again before spawning children. Anywhere else they are an error:
+# RUNPATH would make the GUI load them even on a new host.
 #
-#   check-glibc.sh 2.34 /pkgroot AppDir
+#   check-glibc.sh 2.28 /pkgroot AppDir
 set -euo pipefail
 
 max="${1:?usage: check-glibc.sh <max-glibc> <path>...}"
@@ -26,15 +30,33 @@ is_forbidden_basename() {
     libpthread.so.0 | libdl.so.2 | librt.so.1 | libresolv.so.2 | \
     libutil.so.1 | libanl.so.1 | libthread_db.so.1 | \
     libstdc++.so.6 | libgcc_s.so.1 | \
+    libssl.so.* | libcrypto.so.* | \
     libGL.so.* | libEGL.so.* | libGLESv*.so.* | libOpenGL.so.* | \
-    libGLdispatch.so.* | libGLX.so.* | libglapi.so.* | libgbm.so.* | \
+    libGLdispatch.so.* | libGLX.so.* | libGLX_mesa.so.* | libEGL_mesa.so.* | \
+    libglapi.so.* | libgbm.so.* | libgallium*.so* | *_dri.so | \
     libdrm.so.* | libdrm_*.so.* | \
-    libX11.so.* | libX11-xcb.so.* | libxcb.so.* | \
-    libwayland-server.so.*)
+    libvulkan.so.* | libvulkan_*.so.* | \
+    libX11.so.* | libX11-xcb.so.* | libxcb.so.* | libxcb-*.so.* | \
+    libwayland-server.so.* | libwayland-egl.so.*)
       return 0
       ;;
   esac
   return 1
+}
+
+# 0 when this file must not be in the tree.
+is_forbidden_path() {
+  local path="$1" base
+  base="$(basename "$path")"
+  case "$base" in
+    libwayland-client.so.* | libwayland-cursor.so.*)
+      case "$path" in
+        */wayland-compat/*) return 1 ;;
+        *) return 0 ;;
+      esac
+      ;;
+  esac
+  is_forbidden_basename "$base"
 }
 
 status=0
@@ -42,7 +64,7 @@ highest=0
 while IFS= read -r -d '' file; do
   head -c 4 "$file" 2>/dev/null | grep -q $'^\x7fELF' || continue
   base="$(basename "$file")"
-  if is_forbidden_basename "$base"; then
+  if is_forbidden_path "$file"; then
     echo "error: bundled host-only library: $file" >&2
     status=1
     continue

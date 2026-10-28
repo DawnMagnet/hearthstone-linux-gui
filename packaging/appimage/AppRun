@@ -1,13 +1,19 @@
 #!/bin/sh
 # AppRun for the AppImage built by packaging/linux/appimage.sh.
 #
-# The AppImage bundles GTK 4.12, libadwaita 1.4 and their dependencies
-# (including Wayland client libraries and fontconfig/FreeType/HarfBuzz) built
-# on AlmaLinux 8. It never bundles glibc, the dynamic loader, libstdc++,
-# libgcc_s or GL/EGL/drm/gbm/X11 libraries: those always come from the host.
-# Bundled libraries are found through RUNPATH ($ORIGIN/../lib), so
-# LD_LIBRARY_PATH is never touched. fontconfig locates its private config
-# from the library path, not from an environment variable.
+# The AppImage bundles GTK 4.12, libadwaita 1.4 and their dependencies built
+# on AlmaLinux 8, including fontconfig/FreeType/HarfBuzz. It never bundles
+# glibc, the dynamic loader, libstdc++, libgcc_s, OpenSSL, or GL/EGL/drm/gbm/X11
+# libraries: those always come from the host. libwayland-egl also stays on the
+# host so it matches host Mesa. libwayland-client and libwayland-cursor are
+# optional compatibility copies under usr/lib/wayland-compat; they are added
+# to LD_LIBRARY_PATH only when the host client is older than Wayland 1.21
+# (Debian 11 and Ubuntu 20.04 are 1.18 and lack wl_proxy_marshal_flags).
+# That assignment happens after the host value is recorded, and host_env
+# restores it before any child (including the game) is spawned.
+# Bundled libraries are otherwise found through RUNPATH ($ORIGIN/../lib).
+# fontconfig locates its private config from the library path, not from
+# FONTCONFIG_FILE.
 #
 # The variables below point GTK at its bundled modules and data. Their host
 # values are recorded as HEARTHSTONE_LINUX_HOST_<NAME> (or
@@ -21,8 +27,9 @@ APPDIR="${APPDIR:-$(dirname "$(readlink -f "$0")")}"
 export APPDIR
 
 for var in PATH LD_LIBRARY_PATH XDG_DATA_DIRS XKB_CONFIG_ROOT LIBGL_DRIVERS_PATH \
-  __EGL_VENDOR_LIBRARY_DIRS GI_TYPELIB_PATH GIO_MODULE_DIR GDK_PIXBUF_MODULE_FILE \
-  GSETTINGS_SCHEMA_DIR GTK_EXE_PREFIX GTK_PATH; do
+  __EGL_VENDOR_LIBRARY_DIRS GI_TYPELIB_PATH GIO_MODULE_DIR GIO_EXTRA_MODULES \
+  GDK_PIXBUF_MODULE_FILE GDK_PIXBUF_MODULEDIR GSETTINGS_SCHEMA_DIR \
+  GTK_EXE_PREFIX GTK_PATH FONTCONFIG_FILE; do
   if eval "[ -n \"\${$var+x}\" ]"; then
     eval "export HEARTHSTONE_LINUX_HOST_$var=\"\${$var}\""
   else
@@ -67,5 +74,28 @@ fi
 
 export HEARTHSTONE_LINUX_RESOURCES="$APPDIR/usr/share/hearthstone-linux-gui"
 export HEARTHSTONE_LINUX_STUBS="$APPDIR/usr/share/hearthstone-linux-gui/stubs"
+
+# Wayland 1.21+ ships libwayland-client.so.0.<minor>.<micro> with minor >= 21.
+# Debian 11 and Ubuntu 20.04 are 1.18 and still use the libtool filename
+# libwayland-client.so.0.3.0, which does not export wl_proxy_marshal_flags.
+# Only the GUI process gets the compat copies; the host value was recorded
+# above and host_env puts it back for every child.
+host_wayland_is_old() {
+  host=$(ldconfig -p 2>/dev/null | awk '$1 == "libwayland-client.so.0" { print $NF; exit }')
+  [ -n "$host" ] || return 0
+  real=$(readlink -f "$host" 2>/dev/null || printf '%s\n' "$host")
+  base=$(basename "$real")
+  ver=${base#libwayland-client.so.}
+  minor=$(printf '%s\n' "$ver" | cut -d. -f2)
+  case "$minor" in
+    ''|*[!0-9]*) return 0 ;;
+  esac
+  [ "$minor" -lt 21 ]
+}
+
+compat="$APPDIR/usr/lib/wayland-compat"
+if [ -e "$compat/libwayland-client.so.0" ] && host_wayland_is_old; then
+  export LD_LIBRARY_PATH="$compat${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
 
 exec "$APPDIR/usr/bin/hearthstone-linux-gui" "$@"

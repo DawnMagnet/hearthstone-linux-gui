@@ -41,9 +41,25 @@ mkdir -p "$tools" "$out"
 # The tools are AppImages themselves; there is no FUSE in a container.
 export APPIMAGE_EXTRACT_AND_RUN=1
 
+# The toolchain curl has no TLS, and it is the libcurl.so.4 on the default
+# linker path, so the distro curl binary cannot do https either. Python's
+# ssl module uses OpenSSL directly.
+download() {
+  local url="$1" dest="$2" attempt
+  for attempt in 1 2 3; do
+    if python3.11 -c 'import sys, urllib.request; urllib.request.urlretrieve(sys.argv[1], sys.argv[2])' "$url" "$dest"; then
+      return 0
+    fi
+    echo "download attempt ${attempt} failed: $url" >&2
+    sleep 2
+  done
+  echo "error: download failed: $url" >&2
+  return 1
+}
+
 fetch() {
   local url="$1" sha="$2" dest="$3"
-  curl -fsSL --retry 3 -o "$dest" "$url"
+  download "$url" "$dest"
   echo "$sha  $dest" | sha256sum -c -
   chmod 755 "$dest"
 }
@@ -129,8 +145,14 @@ excludes=(
   --exclude-library 'libgbm.so*'
   --exclude-library 'libX11.so*'
   --exclude-library 'libX11-xcb.so*'
-  --exclude-library 'libxcb.so.1'
+  --exclude-library 'libxcb.so*'
+  --exclude-library 'libssl.so*'
+  --exclude-library 'libcrypto.so*'
+  --exclude-library 'libvulkan.so*'
   --exclude-library 'libwayland-server.so*'
+  --exclude-library 'libwayland-client.so*'
+  --exclude-library 'libwayland-cursor.so*'
+  --exclude-library 'libwayland-egl.so*'
 )
 
 # These are on linuxdeploy's built-in excludelist (or are too old on the
@@ -164,9 +186,6 @@ link_sonames() {
 }
 forced=()
 for name in \
-  libwayland-client.so.0 \
-  libwayland-cursor.so.0 \
-  libwayland-egl.so.1 \
   libharfbuzz.so.0 \
   libfreetype.so.6 \
   libfontconfig.so.1 \
@@ -221,20 +240,120 @@ if grep -R -a -q -F 'libgpg-error.so.0' "$appdir/usr" 2>/dev/null; then
 fi
 
 for bundled in \
-  libwayland-client.so.0 \
-  libwayland-cursor.so.0 \
-  libwayland-egl.so.1 \
   libharfbuzz.so.0 \
   libfreetype.so.6 \
   libfontconfig.so.1 \
   libfribidi.so.0
 do
-  found="$(find "$appdir/usr" -name "$bundled" -print -quit)"
+  found="$(find "$appdir/usr/lib" -maxdepth 1 -name "$bundled" -print -quit)"
   if [ -z "$found" ]; then
     echo "error: $bundled was not bundled into the AppImage" >&2
     exit 1
   fi
 done
+
+# Wayland client/cursor are NOT on the default library path. GTK 4.12 imports
+# wl_proxy_marshal_flags (Wayland 1.21); Debian 11 and Ubuntu 20.04 export
+# everything else we use but not that symbol. AppRun prepends this directory
+# to LD_LIBRARY_PATH only when the host library's filename says it is older
+# than 1.21. libwayland-egl is intentionally absent: it must be the host's,
+# paired with host Mesa.
+compat="$appdir/usr/lib/wayland-compat"
+mkdir -p "$compat"
+wayland_ver="$(pkg-config --modversion wayland-client)"
+printf '%s\n' "$wayland_ver" > "$compat/VERSION"
+for name in libwayland-client.so.0 libwayland-cursor.so.0; do
+  src="$(resolve_lib "$name")"
+  real="$(readlink -f "$src")"
+  cp -a "$real" "$compat/"
+  ln -sfn "$(basename "$real")" "$compat/$name"
+done
+# Built on EL8 against libffi.so.6. Debian 11 and Ubuntu 20.04 ship
+# libffi.so.7, so the compat copies need the EL8 libffi beside them.
+ffi_real="$(readlink -f "$(resolve_lib libffi.so.6)")"
+cp -a "$ffi_real" "$compat/"
+ln -sfn "$(basename "$ffi_real")" "$compat/libffi.so.6"
+PATCHELF_VERSION=0.18.0
+PATCHELF_URL=https://github.com/NixOS/patchelf/releases/download/${PATCHELF_VERSION}/patchelf-${PATCHELF_VERSION}-x86_64.tar.gz
+PATCHELF_SHA256=ce84f2447fb7a8679e58bc54a20dc2b01b37b5802e12c57eece772a6f14bf3f0
+patchelf_tar="$work/patchelf.tar.gz"
+download "$PATCHELF_URL" "$patchelf_tar"
+echo "$PATCHELF_SHA256  $patchelf_tar" | sha256sum -c -
+tar -xzf "$patchelf_tar" -C "$work" ./bin/patchelf
+for so in "$compat"/libwayland-*.so.*; do
+  [ -L "$so" ] && continue
+  # $ORIGIN is a literal dynamic-loader token, not a shell variable.
+  # shellcheck disable=SC2016
+  "$work/bin/patchelf" --set-rpath '$ORIGIN' "$so"
+done
+if [ -e "$appdir/usr/lib/libwayland-egl.so.1" ] || [ -e "$compat/libwayland-egl.so.1" ]; then
+  echo "error: libwayland-egl must stay on the host" >&2
+  exit 1
+fi
+
+# Exactly the names in appimage-icons.txt, as SVGs from adwaita-icon-theme
+# (pinned in el8-gtk/versions.env). They go in hicolor, the fallback theme,
+# not a bundled Adwaita theme. GTK and libadwaita paint their own widget
+# icons from resources. AppRun prepends $APPDIR/usr/share to XDG_DATA_DIRS
+# and host_env restores the original value for children.
+# shellcheck disable=SC1091
+. packaging/linux/el8-gtk/versions.env
+icons_tar="$work/adwaita-icon-theme-${ADWAITA_ICON_THEME_VERSION}.tar.xz"
+download "$ADWAITA_ICON_THEME_URL" "$icons_tar"
+echo "$ADWAITA_ICON_THEME_SHA256  $icons_tar" | sha256sum -c -
+icons_src="$work/adwaita-icon-theme"
+mkdir -p "$icons_src"
+tar -xJf "$icons_tar" -C "$icons_src" --strip-components=1
+icon_dir="$appdir/usr/share/icons/hicolor/scalable/actions"
+mkdir -p "$icon_dir" "$appdir/usr/share/licenses/adwaita-icon-theme"
+install -m 644 "$icons_src/COPYING_CCBYSA3" "$icons_src/COPYING_LGPL" \
+  "$appdir/usr/share/licenses/adwaita-icon-theme/"
+while IFS= read -r icon_name || [ -n "$icon_name" ]; do
+  case "$icon_name" in
+    ''|\#*) continue ;;
+  esac
+  icon_name="${icon_name%%.svg}"
+  found="$(find "$icons_src/Adwaita/symbolic" -name "${icon_name}.svg" -print -quit)"
+  if [ -z "$found" ]; then
+    echo "error: ${icon_name}.svg not in adwaita-icon-theme ${ADWAITA_ICON_THEME_VERSION}" >&2
+    exit 1
+  fi
+  install -m 644 "$found" "$icon_dir/${icon_name}.svg"
+done < packaging/linux/appimage-icons.txt
+cat > "$appdir/usr/share/icons/hicolor/index.theme" <<'EOF'
+[Icon Theme]
+Name=Hicolor
+Comment=Fallback icon theme
+Directories=scalable/actions
+
+[scalable/actions]
+Context=Actions
+Size=128
+MinSize=1
+MaxSize=256
+Type=Scalable
+EOF
+while IFS= read -r icon_name || [ -n "$icon_name" ]; do
+  case "$icon_name" in
+    ''|\#*) continue ;;
+  esac
+  icon_name="${icon_name%%.svg}"
+  if [ ! -f "$icon_dir/${icon_name}.svg" ]; then
+    echo "error: AppDir is missing usr/share/icons/hicolor/scalable/actions/${icon_name}.svg" >&2
+    exit 1
+  fi
+done < packaging/linux/appimage-icons.txt
+
+# Runtime pieces GTK finds without guessing. Paths are inside the AppDir;
+# AppRun rewrites the pixbuf template and points the module variables here,
+# then host_env clears those variables for children.
+loaders_in="$appdir/usr/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache.in"
+grep -q '@APPDIR@/' "$loaders_in"
+grep -q 'libpixbufloader-svg.so' "$loaders_in"
+[ -f "$appdir/usr/lib/gdk-pixbuf-2.0/2.10.0/loaders/libpixbufloader-svg.so" ]
+[ -f "$appdir/usr/lib/gio/modules/libdconfsettings.so" ]
+[ -f "$appdir/usr/share/glib-2.0/schemas/gschemas.compiled" ]
+[ -f "$appdir/usr/etc/fonts/fonts.conf" ]
 
 # Belt and braces: nothing from the excludelist may have slipped in, and no
 # bundled file may need a newer glibc than the baseline.
@@ -244,7 +363,7 @@ packaging/linux/check-glibc.sh "$max_glibc" "$appdir"
 # GLIBCXX through 3.4.28, CXXABI through 1.3.12 and libgcc_s through GCC_7.0.0
 # (gcc-toolset-10's ceiling). A newer symbol would load and then fail there.
 host_cxx_ok() {
-  local kind="$1" need="$2" max="$3"
+  local need="$1" max="$2"
   [ "$need" = "$max" ] && return 0
   [ "$(printf '%s\n%s\n' "$need" "$max" | sort -V | tail -n1)" = "$max" ]
 }
@@ -255,15 +374,15 @@ while IFS= read -r -d '' file; do
     case "$sym" in
       GLIBCXX_*)
         ver="${sym#GLIBCXX_}"
-        host_cxx_ok GLIBCXX "$ver" 3.4.28 || { echo "error: $file needs $sym" >&2; cxx_bad=1; }
+        host_cxx_ok "$ver" 3.4.28 || { echo "error: $file needs $sym" >&2; cxx_bad=1; }
         ;;
       CXXABI_*)
         ver="${sym#CXXABI_}"
-        host_cxx_ok CXXABI "$ver" 1.3.12 || { echo "error: $file needs $sym" >&2; cxx_bad=1; }
+        host_cxx_ok "$ver" 1.3.12 || { echo "error: $file needs $sym" >&2; cxx_bad=1; }
         ;;
       GCC_*)
         ver="${sym#GCC_}"
-        host_cxx_ok GCC "$ver" 7.0.0 || { echo "error: $file needs $sym" >&2; cxx_bad=1; }
+        host_cxx_ok "$ver" 7.0.0 || { echo "error: $file needs $sym" >&2; cxx_bad=1; }
         ;;
     esac
   done < <(objdump -T "$file" 2>/dev/null | grep -oE '(GLIBCXX|CXXABI|GCC)_[0-9.]+' | sort -u || true)

@@ -42,7 +42,10 @@ fetch() {
   local sha="$2"
   local name="$3"
   local dest="$src/$name"
-  curl -fsSL --retry 5 --retry-delay 2 -o "$dest.partial" "$url"
+  # The curl we install has no TLS, and it replaces libcurl.so.4 on the
+  # default search path, so the EL8 curl binary cannot use it either.
+  # Downloads stay on the distro curl and the distro libcurl.
+  LD_LIBRARY_PATH=/usr/lib64:/lib64 /usr/bin/curl -fsSL --retry 5 --retry-delay 2 -o "$dest.partial" "$url"
   mv "$dest.partial" "$dest"
   echo "$sha  $dest" | sha256sum -c - >&2
   printf '%s\n' "$dest"
@@ -99,7 +102,7 @@ meson --version
 ninja --version
 
 echo "== rust ${RUST_VERSION:-1.92.0}"
-curl -fsSL https://sh.rustup.rs \
+/usr/bin/curl -fsSL https://sh.rustup.rs \
   | sh -s -- -y --profile minimal --default-toolchain "${RUST_VERSION:-1.92.0}" \
       --default-host x86_64-unknown-linux-gnu
 rustc --version
@@ -133,8 +136,12 @@ meson_install "$src/libxmlb" \
 
 echo "== curl ${CURL_VERSION}"
 extract "$(fetch "$CURL_URL" "$CURL_SHA256" "curl-${CURL_VERSION}.tar.xz")" "$src/curl"
+# No TLS backend. libadwaita needs AppStream, AppStream needs libcurl, and a
+# curl built against EL8 OpenSSL would put libssl.so.1.1 in the AppImage.
+# The launcher does not download metadata through AppStream.
 autotools_install "$src/curl" \
-  --with-openssl \
+  --without-ssl \
+  --disable-manual \
   --with-zlib \
   --without-libpsl \
   --without-libidn2 \

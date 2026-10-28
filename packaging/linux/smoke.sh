@@ -19,8 +19,19 @@
 set -euo pipefail
 
 dist="$(readlink -f "${1:?usage: smoke.sh <dist-dir>}")"
+# shellcheck disable=SC1091
 . /etc/os-release
 echo "== ${PRETTY_NAME:-$ID}"
+
+# Captured before AppRun prepends the bundle. The child must see this exact
+# value again (or <unset> when it was unset), not the GUI's longer path.
+if [ -n "${XDG_DATA_DIRS+x}" ]; then
+  host_xdg_set=1
+  host_xdg="$XDG_DATA_DIRS"
+else
+  host_xdg_set=0
+  host_xdg=""
+fi
 
 # Debian 11 and Ubuntu 20.04 have left the main mirrors. Fall back to the
 # archive when the primary update fails so the smoke job can still install
@@ -61,6 +72,7 @@ install_appimage_host_deps() {
         xvfb libgl1 libegl1 libx11-6 libx11-xcb1 libxcb1 libxext6 libxrender1 \
         libxrandr2 libxi6 libxcursor1 libxfixes3 libxinerama1 libxdamage1 \
         libdrm2 libgbm1 libstdc++6 libexpat1 zlib1g libuuid1 \
+        libwayland-client0 libwayland-cursor0 libwayland-egl1 \
         fonts-dejavu-core >/dev/null
       ;;
     *)
@@ -203,13 +215,32 @@ check_child_env() {
       return 1
     fi
 
-    # AppRun points these at the bundle; host children must get the host values.
-    for var in GIO_MODULE_DIR GTK_PATH GTK_EXE_PREFIX GI_TYPELIB_PATH \
-               GDK_PIXBUF_MODULE_FILE GSETTINGS_SCHEMA_DIR XDG_DATA_DIRS; do
+    # XDG_DATA_DIRS is prepended for the GUI (icons, schemas data) and must
+    # come back as the host left it. Unset stays unset; it must not become
+    # the AppRun default /usr/local/share:/usr/share.
+    value="$(child_var XDG_DATA_DIRS)"
+    if [ "$host_xdg_set" = 1 ]; then
+      if [ "$value" != "$host_xdg" ]; then
+        echo "error: child XDG_DATA_DIRS='$value', expected host '$host_xdg'" >&2
+        return 1
+      fi
+    elif [ "$value" != "<unset>" ]; then
+      echo "error: child XDG_DATA_DIRS='$value', expected <unset>" >&2
+      return 1
+    fi
+
+    # AppRun may point these at the bundle for the GUI process. host_env
+    # restores the host value before a child starts, including the game.
+    # FONTCONFIG_FILE, GDK_PIXBUF_MODULEDIR and GIO_EXTRA_MODULES are not
+    # set at all; they are recorded so this probe can see that.
+    for var in LD_LIBRARY_PATH GI_TYPELIB_PATH GDK_PIXBUF_MODULE_FILE \
+               GDK_PIXBUF_MODULEDIR GIO_MODULE_DIR GIO_EXTRA_MODULES \
+               GSETTINGS_SCHEMA_DIR GTK_PATH GTK_EXE_PREFIX FONTCONFIG_FILE \
+               XDG_DATA_DIRS; do
       value="$(child_var "$var")"
       [ -z "$value" ] || [ "$value" = "<unset>" ] && continue
       case "$value" in
-        "$appdir"|"$appdir"/*|*"$appdir"/*)
+        *wayland-compat*|"$appdir"|"$appdir"/*|*"$appdir"/*)
           echo "error: child $var still points into AppDir ($appdir): $value" >&2
           return 1
           ;;
