@@ -34,6 +34,14 @@ impl InstallFile {
         let tag_count = read_be_u16(&mut cursor)? as usize;
         let entry_count = read_be_u32(&mut cursor)? as usize;
         let tag_bytes = entry_count.div_ceil(8);
+        let position = usize::try_from(cursor.position()).context("install header is too large")?;
+        validate_install_counts(
+            tag_count,
+            entry_count,
+            hash_size,
+            tag_bytes,
+            data.len().saturating_sub(position),
+        )?;
 
         let mut tags = HashMap::new();
         for _ in 0..tag_count {
@@ -44,7 +52,8 @@ impl InstallFile {
             tags.insert(name, bytes);
         }
 
-        let mut entries = Vec::with_capacity(entry_count);
+        // The declared count is untrusted. Grow from what we actually read.
+        let mut entries = Vec::new();
         for _ in 0..entry_count {
             let path = read_cstr(&mut cursor)?;
             let mut digest = vec![0u8; hash_size];
@@ -86,6 +95,41 @@ impl InstallFile {
             .map(|(_, entry)| entry.clone())
             .collect())
     }
+}
+
+/// `entry_count` and `tag_count` come from the file. Reject a count whose
+/// minimum encoding cannot fit in `remaining` before allocating bitmasks or
+/// entry slots from it.
+fn validate_install_counts(
+    tag_count: usize,
+    entry_count: usize,
+    hash_size: usize,
+    tag_bytes: usize,
+    remaining: usize,
+) -> Result<()> {
+    let tags_needed = if tag_count == 0 {
+        0
+    } else {
+        // Shortest tag: one NUL name byte, a u16 type, then the bitmask.
+        let per_tag = tag_bytes
+            .checked_add(3)
+            .context("install tag size overflow")?;
+        tag_count
+            .checked_mul(per_tag)
+            .context("install tag count exceeds file")?
+    };
+    // Shortest entry: one NUL path byte, the hash, and a u32 size.
+    let per_entry = hash_size
+        .checked_add(5)
+        .context("install entry size overflow")?;
+    let entries_needed = entry_count
+        .checked_mul(per_entry)
+        .context("install entry count exceeds file")?;
+    let needed = tags_needed
+        .checked_add(entries_needed)
+        .context("install entry count exceeds file")?;
+    anyhow::ensure!(needed <= remaining, "install entry count exceeds file");
+    Ok(())
 }
 
 #[cfg(test)]
@@ -257,10 +301,9 @@ mod tests {
         assert!(file.filter_entries(&[]).unwrap().is_empty());
     }
 
-    // B3: `Vec::with_capacity(entry_count)` trusts the file's count. u32::MAX
-    // asks for hundreds of gigabytes and aborts. Not executed here.
+    // A declared entry_count of u32::MAX must fail from the bytes on hand.
+    // It used to `Vec::with_capacity` that count and abort.
     #[test]
-    #[ignore = "B3: entry_count u32::MAX allocates via with_capacity and can abort"]
     fn huge_entry_count_errors_without_oom() {
         let mut data = build_install(1, 16, &[], &[]);
         data[6..10].copy_from_slice(&u32::MAX.to_be_bytes());

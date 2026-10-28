@@ -33,13 +33,14 @@ struct TransferStats {
 
 impl RemoteCdn {
     pub fn from_forced_url(http: reqwest::Client, forced_url: &str) -> Result<Self> {
-        let url = Url::parse(forced_url)?;
-        let server = Url::parse(&format!(
-            "{}://{}",
-            url.scheme(),
-            url.host_str().context("CDN URL has no host")?
-        ))?;
-        let data_base = url.path().trim_end_matches('/').to_string();
+        let mut server = Url::parse(forced_url)?;
+        anyhow::ensure!(server.host_str().is_some(), "CDN URL has no host");
+        let data_base = server.path().trim_end_matches('/').to_string();
+        // Keep the parsed authority, including a non-default port. Rebuilding
+        // `scheme://host` dropped `:port` and made a local CDN unreachable.
+        server.set_path("/");
+        server.set_query(None);
+        server.set_fragment(None);
         debug!(cdn = forced_url, "created remote CDN");
         Ok(Self {
             http,
@@ -515,6 +516,26 @@ mod tests {
         RemoteCdn::from_forced_url(reqwest::Client::new(), "https://example.com/tpr/hs")
             .unwrap()
             .with_cache_dir(cache_dir)
+    }
+
+    #[test]
+    fn forced_url_keeps_explicit_port() {
+        let cdn = RemoteCdn::from_forced_url(reqwest::Client::new(), "http://127.0.0.1:9/tpr/hs/")
+            .unwrap();
+        assert_eq!(cdn.server.scheme(), "http");
+        assert_eq!(cdn.server.host_str(), Some("127.0.0.1"));
+        assert_eq!(cdn.server.port(), Some(9));
+        assert_eq!(cdn.data_base, "/tpr/hs");
+    }
+
+    #[test]
+    fn forced_url_without_port_keeps_host_and_path() {
+        let cdn = RemoteCdn::from_forced_url(reqwest::Client::new(), "https://example.com/tpr/hs")
+            .unwrap();
+        assert_eq!(cdn.server.host_str(), Some("example.com"));
+        assert_eq!(cdn.server.port(), None);
+        assert_eq!(cdn.server.scheme(), "https");
+        assert_eq!(cdn.data_base, "/tpr/hs");
     }
 
     #[tokio::test]

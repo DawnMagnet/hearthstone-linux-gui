@@ -719,10 +719,8 @@ mod tests {
         assert_eq!(std::fs::read(target).unwrap(), b"new");
     }
 
-    // B4: RemoteCdn::from_forced_url rebuilds `scheme://host` and drops the
-    // port, so this cannot target the fake server on 127.0.0.1:<port>.
+    // The forced CDN URL has to keep the fake server's port.
     #[tokio::test]
-    #[ignore = "B4: from_forced_url drops the URL port, so a local fake CDN is unreachable"]
     async fn loose_fetch_from_fake_cdn() {
         let server = crate::test_http::FakeServer::start(blte_plain(b"hello"), Default::default());
         let temp = tempfile::tempdir().unwrap();

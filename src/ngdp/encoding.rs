@@ -1,6 +1,6 @@
 use super::bytes;
 use super::verify_md5;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::collections::HashMap;
 
 #[derive(Clone, Debug)]
@@ -18,6 +18,13 @@ impl EncodingFile {
 
         let content_hash_size = data[3] as usize;
         let encoding_hash_size = data[4] as usize;
+        // A zero hash width is not a key: every entry would share the empty
+        // string, and a page walk whose step is only those key bytes would
+        // never advance.
+        anyhow::ensure!(
+            content_hash_size > 0 && encoding_hash_size > 0,
+            "invalid encoding hash size"
+        );
         let content_page_table_page_size = bytes::be_u16(data, 5)? as usize;
         let encoding_page_table_page_size = bytes::be_u16(data, 7)? as usize;
         let content_page_table_page_count = bytes::be_u32(data, 9)? as usize;
@@ -32,60 +39,51 @@ impl EncodingFile {
             .map(|chunk| String::from_utf8_lossy(chunk).into_owned())
             .collect();
 
-        let content_index_size = content_page_table_page_count * (content_hash_size * 2);
+        let content_index_stride = content_hash_size
+            .checked_mul(2)
+            .context("encoding section size overflow")?;
+        let content_index_size = scaled_len(content_page_table_page_count, content_index_stride)?;
         bytes::take(data, &mut offset, content_index_size)?;
         let content_table_size =
-            content_page_table_page_count * 1024 * content_page_table_page_size;
+            table_byte_len(content_page_table_page_count, content_page_table_page_size)?;
         let content_table = bytes::take(data, &mut offset, content_table_size)?;
 
-        let encoding_index_size = encoding_page_table_page_count * (encoding_hash_size * 2);
+        let encoding_index_stride = encoding_hash_size
+            .checked_mul(2)
+            .context("encoding section size overflow")?;
+        let encoding_index_size =
+            scaled_len(encoding_page_table_page_count, encoding_index_stride)?;
         bytes::take(data, &mut offset, encoding_index_size)?;
-        let encoding_table_size =
-            encoding_page_table_page_count * 1024 * encoding_page_table_page_size;
+        let encoding_table_size = table_byte_len(
+            encoding_page_table_page_count,
+            encoding_page_table_page_size,
+        )?;
         let encoding_table = bytes::take(data, &mut offset, encoding_table_size)?;
 
         let mut content_to_encoding = HashMap::new();
-        let page_size = 1024 * content_page_table_page_size;
-        for page in content_table
-            .chunks(page_size)
-            .take(content_page_table_page_count)
-        {
-            let mut ofs = 0;
-            while ofs + 6 + content_hash_size + encoding_hash_size <= page.len() {
-                let key_count = page[ofs] as usize;
-                let file_size_hi = page[ofs + 1] as u64;
-                let file_size = bytes::be_u32(page, ofs + 2)? as u64;
-                let _full_size = file_size | (file_size_hi << 32);
-                ofs += 6;
-                if key_count == 0 {
-                    break;
-                }
-                let content_key = hex::encode(&page[ofs..ofs + content_hash_size]);
-                ofs += content_hash_size;
-                if key_count > 0 {
-                    let encoding_key = hex::encode(&page[ofs..ofs + encoding_hash_size]);
-                    content_to_encoding.insert(content_key, encoding_key);
-                }
-                ofs += key_count * encoding_hash_size;
+        if content_page_table_page_count > 0 {
+            let page_size = checked_page_size(content_page_table_page_size)?;
+            for page in content_table
+                .chunks(page_size)
+                .take(content_page_table_page_count)
+            {
+                parse_content_page(
+                    page,
+                    content_hash_size,
+                    encoding_hash_size,
+                    &mut content_to_encoding,
+                )?;
             }
         }
 
         let mut encoding_specs = HashMap::new();
-        let page_size = 1024 * encoding_page_table_page_size;
-        for page in encoding_table
-            .chunks(page_size)
-            .take(encoding_page_table_page_count)
-        {
-            let mut ofs = 0;
-            while ofs + encoding_hash_size + 9 < page.len() {
-                let spec_index = bytes::be_i32(page, ofs + encoding_hash_size)?;
-                if spec_index == -1 {
-                    break;
-                }
-                let encoding_key = hex::encode(&page[ofs..ofs + encoding_hash_size]);
-                let spec = specs.get(spec_index as usize).cloned().unwrap_or_default();
-                encoding_specs.insert(encoding_key, spec);
-                ofs += encoding_hash_size + 9;
+        if encoding_page_table_page_count > 0 {
+            let page_size = checked_page_size(encoding_page_table_page_size)?;
+            for page in encoding_table
+                .chunks(page_size)
+                .take(encoding_page_table_page_count)
+            {
+                parse_encoding_page(page, encoding_hash_size, &specs, &mut encoding_specs)?;
             }
         }
 
@@ -102,6 +100,98 @@ impl EncodingFile {
     pub fn encoding_spec(&self, key: &str) -> Option<&str> {
         self.encoding_specs.get(key).map(String::as_str)
     }
+}
+
+fn scaled_len(count: usize, stride: usize) -> Result<usize> {
+    count
+        .checked_mul(stride)
+        .context("encoding section size overflow")
+}
+
+/// Page size is in KiB. Zero reaches `slice::chunks(0)`, which panics.
+fn checked_page_size(page_size_kb: usize) -> Result<usize> {
+    anyhow::ensure!(page_size_kb > 0, "invalid encoding page size");
+    page_size_kb
+        .checked_mul(1024)
+        .context("invalid encoding page size")
+}
+
+fn table_byte_len(count: usize, page_size_kb: usize) -> Result<usize> {
+    if count == 0 {
+        return Ok(0);
+    }
+    let page_size = checked_page_size(page_size_kb)?;
+    count
+        .checked_mul(page_size)
+        .context("encoding table size overflow")
+}
+
+fn parse_content_page(
+    page: &[u8],
+    content_hash_size: usize,
+    encoding_hash_size: usize,
+    content_to_encoding: &mut HashMap<String, String>,
+) -> Result<()> {
+    let mut ofs = 0usize;
+    // Header is key count (1) plus the 40-bit size (5), then one content key
+    // and the first encoding key. Further encoding keys follow that.
+    let header = 6 + content_hash_size + encoding_hash_size;
+    while ofs < page.len() {
+        let Some(header_end) = ofs.checked_add(header).filter(|end| *end <= page.len()) else {
+            break;
+        };
+        let key_count = page[ofs] as usize;
+        if key_count == 0 {
+            break;
+        }
+        let content_off = ofs + 6;
+        let content_key = hex::encode(&page[content_off..content_off + content_hash_size]);
+        let ekey_off = content_off + content_hash_size;
+        let encoding_key = hex::encode(&page[ekey_off..ekey_off + encoding_hash_size]);
+        let extra_keys = key_count.saturating_sub(1);
+        let tail = extra_keys
+            .checked_mul(encoding_hash_size)
+            .context("encoding content entry size overflow")?;
+        let next = header_end
+            .checked_add(tail)
+            .context("encoding content entry size overflow")?;
+        anyhow::ensure!(next > ofs, "encoding content entry has zero length");
+        anyhow::ensure!(next <= page.len(), "encoding content entry is truncated");
+        content_to_encoding.insert(content_key, encoding_key);
+        ofs = next;
+    }
+    Ok(())
+}
+
+fn parse_encoding_page(
+    page: &[u8],
+    encoding_hash_size: usize,
+    specs: &[String],
+    encoding_specs: &mut HashMap<String, String>,
+) -> Result<()> {
+    // 4-byte spec index plus 5-byte size. `<=` keeps an entry that ends on
+    // the last byte; `<` dropped that entry.
+    let stride = encoding_hash_size
+        .checked_add(9)
+        .context("encoding spec entry size overflow")?;
+    anyhow::ensure!(stride > 0, "encoding spec entry has zero length");
+    let mut ofs = 0usize;
+    while let Some(end) = ofs.checked_add(stride).filter(|end| *end <= page.len()) {
+        let spec_index = bytes::be_i32(page, ofs + encoding_hash_size)?;
+        if spec_index == -1 {
+            break;
+        }
+        let encoding_key = hex::encode(&page[ofs..ofs + encoding_hash_size]);
+        let spec = usize::try_from(spec_index)
+            .ok()
+            .and_then(|index| specs.get(index))
+            .cloned()
+            .unwrap_or_default();
+        encoding_specs.insert(encoding_key, spec);
+        // `end` is strictly past `ofs` because `stride > 0`.
+        ofs = end;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -404,11 +494,9 @@ mod tests {
         assert_eq!(parsed.encoding_spec(&"22".repeat(16)), Some("b"));
     }
 
-    // B1: `while ofs + encoding_hash_size + 9 < page.len()` drops an entry
-    // that ends on the last byte of the page. ehs = 23 makes each record 32
-    // bytes, so 32 records fill a 1 KiB page exactly and the last one is lost.
+    // An encoding entry that ends on the last byte of the page is still an
+    // entry. ehs = 23 makes each record 32 bytes, so 32 records fill 1 KiB.
     #[test]
-    #[ignore = "B1: encoding page loop uses < and drops the entry that fills the page"]
     fn entry_exactly_filling_encoding_page_is_parsed() {
         let ehs = 23;
         let entries: Vec<EEntry> = (0..32)
@@ -428,10 +516,8 @@ mod tests {
         assert_eq!(parsed.encoding_spec(&last), Some("z"));
     }
 
-    // B2: a page size of 0 reaches `chunks(0)`, which panics. Release builds
-    // abort on panic.
+    // A page size of 0 used to reach `chunks(0)`, which panics.
     #[test]
-    #[ignore = "B2: zero encoding page size panics in slice::chunks instead of returning an error"]
     fn zero_page_size_is_error_not_panic() {
         let data = build_encoding(16, 16, 0, 1, &["z"], vec![vec![]], vec![]);
         let error = EncodingFile::parse(&data, "ignored", false).unwrap_err();
@@ -440,6 +526,43 @@ mod tests {
             message.contains("page")
                 || message.contains("truncated")
                 || message.contains("invalid"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn zero_encoding_page_size_is_error_not_panic() {
+        let data = build_encoding(16, 16, 1, 0, &["z"], vec![], vec![vec![]]);
+        let error = EncodingFile::parse(&data, "ignored", false).unwrap_err();
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("page") || message.contains("invalid"),
+            "{message}"
+        );
+    }
+
+    // Hash width 0 collapses every key to "" and must not be walked.
+    #[test]
+    fn zero_hash_sizes_are_error_not_a_spin() {
+        let data = build_encoding(
+            0,
+            0,
+            1,
+            1,
+            &["z"],
+            vec![vec![CEntry {
+                key_count: 1,
+                size_hi: 0,
+                size: 1,
+                ckey: vec![],
+                ekeys: vec![vec![]],
+            }]],
+            vec![],
+        );
+        let error = EncodingFile::parse(&data, "ignored", false).unwrap_err();
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("hash") || message.contains("zero") || message.contains("invalid"),
             "{message}"
         );
     }

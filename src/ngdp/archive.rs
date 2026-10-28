@@ -30,6 +30,41 @@ mod tests {
         let index = ArchiveIndex::parse(&data, key, true).expect("archive index should parse");
         assert_eq!(index.items.len(), 1402);
     }
+
+    fn index_with(block_size_kb: u8, num_items: u32) -> Vec<u8> {
+        let mut data = vec![0u8; 64];
+        let footer = data.len() - 28;
+        data[footer + 11] = block_size_kb;
+        data[footer + 12] = 4;
+        data[footer + 13] = 4;
+        data[footer + 14] = 16;
+        data[footer + 16..footer + 20].copy_from_slice(&num_items.to_le_bytes());
+        data
+    }
+
+    #[test]
+    fn zero_block_size_is_error_not_panic() {
+        let error = ArchiveIndex::parse(&index_with(0, 1), "ignored", false).unwrap_err();
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("block")
+                || message.contains("invalid")
+                || message.contains("underflow"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn huge_item_count_is_error_not_oom() {
+        let error = ArchiveIndex::parse(&index_with(4, u32::MAX), "ignored", false).unwrap_err();
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("exceeds")
+                || message.contains("overflow")
+                || message.contains("truncated"),
+            "{message}"
+        );
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -169,30 +204,52 @@ impl ArchiveIndex {
             key_size == 16 && size_size == 4 && offset_size == 4,
             "unsupported archive index layout"
         );
-
-        let mut items = Vec::with_capacity(num_items);
-        let block_size = block_size_kb * 1024;
+        // `block_size_kb == 0` used to underflow `bytes_left_in_block -= record`.
+        anyhow::ensure!(block_size_kb > 0, "invalid archive index block size");
+        let block_size = block_size_kb
+            .checked_mul(1024)
+            .context("archive index block size overflow")?;
         let record_size = key_size + size_size + offset_size;
+        anyhow::ensure!(
+            block_size >= record_size,
+            "archive index block is smaller than a record"
+        );
+        let bytes_needed = num_items
+            .checked_mul(record_size)
+            .context("archive index item count overflows")?;
+        anyhow::ensure!(
+            bytes_needed <= footer_offset,
+            "archive index item count exceeds file"
+        );
+
+        let mut items = Vec::new();
         let mut position = 0usize;
         let mut bytes_left_in_block = block_size;
 
         for _ in 0..num_items {
             if record_size > bytes_left_in_block {
-                position += bytes_left_in_block;
+                position = position
+                    .checked_add(bytes_left_in_block)
+                    .context("archive index offset overflow")?;
                 bytes_left_in_block = block_size;
             }
+            let record_end = position
+                .checked_add(record_size)
+                .context("archive index offset overflow")?;
             anyhow::ensure!(
-                position + record_size <= footer_offset,
+                record_end <= footer_offset,
                 "archive index item is truncated"
             );
-            let record = &data[position..position + record_size];
+            let record = &data[position..record_end];
             items.push(ArchiveIndexItem {
                 key: hex::encode(&record[0..16]),
                 size: bytes::be_u32(record, 16)? as usize,
                 offset: bytes::be_u32(record, 20)? as usize,
             });
-            position += record_size;
-            bytes_left_in_block -= record_size;
+            position = record_end;
+            bytes_left_in_block = bytes_left_in_block
+                .checked_sub(record_size)
+                .context("archive index block size underflow")?;
         }
 
         Ok(Self { items })
