@@ -34,7 +34,8 @@ exclude = ["login-helper"]
 
 [workspace.package]
 version = "0.3.2"
-# MSRV is set by relm4-css / relm4-macros 0.10.1. Recheck when upgrading relm4.
+# MSRV matches relm4 0.10.1 (relm4-css / relm4-macros). relm4 0.11 needs
+# Rust 1.93 and gtk4 0.11, which would raise this floor and the GTK baseline.
 rust-version = "1.92"
 
 [features]
@@ -42,36 +43,41 @@ default = ["gui"]
 gui = ["dep:relm4", "dep:relm4-components", "dep:gtk4", "dep:libadwaita"]
 
 [dependencies]
-aes = "0.8"
-anyhow = "1"
-base64 = "0.23"
-bitvec = "1"
-cbc = { version = "0.1", features = ["alloc"] }
-clap = { version = "4", features = ["derive"] }
-directories = "6"
-flate2 = "1"
-hex = "0.4"
-md5 = "0.7"
-pbkdf2 = "0.13"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-sha1 = "0.11"
-sha2 = "0.11"
-strum = { version = "0.27", features = ["derive"] }
-tar = "0.4"
-tokio = { version = "1", features = ["fs", "io-util", "macros", "process", "rt-multi-thread", "sync", "time"] }
-tokio-util = "0.7"
-toml = "1.1"
-tracing = "0.1"
-tracing-appender = "0.2"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
-url = "2"
-walkdir = "2"
-xz2 = "0.1"
+aes = "0.9.3"
+anyhow = "1.0.104"
+base64 = "0.23.1"
+bitvec = "1.1.1"
+cbc = { version = "0.2.1", features = ["alloc"] }
+clap = { version = "4.6.7", features = ["derive"] }
+directories = "6.0.0"
+flate2 = "1.1.10"
+hex = "0.4.3"
+md5 = "0.8.1"
+pbkdf2 = "0.13.0"
+# Stay on 0.12. 0.13 switches rustls to the aws-lc-rs backend (cmake and a C
+# toolchain, a risk for the EL8 AppImage and Nix) and to system certificate
+# roots instead of webpki-roots, which changes certificate behavior in Flatpak
+# and AppImage.
+reqwest = { version = "0.12.28", default-features = false, features = ["json", "rustls-tls", "stream"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha1 = "0.11.0"
+sha2 = "0.11.1"
+strum = { version = "0.28.0", features = ["derive"] }
+tar = "0.4.46"
+tokio = { version = "1.54.1", features = ["fs", "io-util", "macros", "process", "rt-multi-thread", "sync", "time"] }
+tokio-util = "0.7.20"
+toml = "1.1.8"
+tracing = "0.1.44"
+tracing-appender = "0.2.5"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
+url = "2.5.8"
+walkdir = "2.5.0"
+xz2 = "0.1.7"
 
-relm4 = { version = "=0.10.0", default-features = false, features = ["css", "macros", "libadwaita"], optional = true }
-relm4-components = { version = "=0.10.0", features = ["libadwaita"], optional = true }
+# Pinned. 0.11 needs Rust 1.93 and gtk4 0.11.
+relm4 = { version = "=0.10.1", default-features = false, features = ["css", "macros", "libadwaita"], optional = true }
+relm4-components = { version = "=0.10.1", features = ["libadwaita"], optional = true }
 # Runtime baseline is still GTK 4.6 + libadwaita 1.1 (adw 1.1 needs GTK >= 4.5),
 # but we compile against the 4.4 API surface so EL9's pango 1.48 works.
 # gtk4-rs 0.10's v4_6 feature enables pango/v1_50, and pango-sys then requires
@@ -84,7 +90,7 @@ gtk4 = { version = "0.10", features = ["v4_4"], optional = true }
 libadwaita = { version = "0.8", features = ["v1_1"], optional = true }
 
 [dev-dependencies]
-tempfile = "3"
+tempfile = "3.27.0"
 
 [profile.release]
 lto = false

@@ -260,7 +260,7 @@ async fn file_md5_hex(path: &Path) -> Result<String> {
         }
         context.consume(&buffer[..read]);
     }
-    Ok(format!("{:x}", context.compute()))
+    Ok(format!("{:x}", context.finalize()))
 }
 
 fn installed_file_record(

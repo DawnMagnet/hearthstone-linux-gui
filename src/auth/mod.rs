@@ -1,7 +1,7 @@
 use crate::{paths::AppPaths, AppConfig};
 use aes::Aes128;
 use anyhow::{Context, Result};
-use cbc::cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyIvInit};
+use cbc::cipher::{block_padding::Pkcs7, BlockModeEncrypt, KeyIvInit};
 use pbkdf2::pbkdf2_hmac;
 use sha1::Sha1;
 use std::path::Path;
@@ -118,8 +118,8 @@ pub fn encrypt_token_for_user(token: &str, username: &str) -> Result<Vec<u8>> {
 
     let key = encryption_key_for_user(username);
     let iv = [0u8; 16];
-    let ciphertext = Aes128CbcEnc::new(&key.into(), &iv.into())
-        .encrypt_padded_vec_mut::<Pkcs7>(token.as_bytes());
+    let ciphertext =
+        Aes128CbcEnc::new(&key.into(), &iv.into()).encrypt_padded_vec::<Pkcs7>(token.as_bytes());
 
     anyhow::ensure!(
         ciphertext.len() == TOKEN_CIPHERTEXT_LEN,
@@ -239,7 +239,7 @@ mod tests {
     /// a cipher upgrade must keep every value byte-identical.
     #[test]
     fn aes128_cbc_pkcs7_matches_golden_ciphertext() {
-        use cbc::cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyIvInit};
+        use cbc::cipher::{block_padding::Pkcs7, BlockModeEncrypt, KeyIvInit};
 
         let key: [u8; 16] = [
             0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,
@@ -251,7 +251,7 @@ mod tests {
         ];
         let plaintext = b"hearthstone-golden";
         let ciphertext = super::Aes128CbcEnc::new(&key.into(), &iv.into())
-            .encrypt_padded_vec_mut::<Pkcs7>(plaintext);
+            .encrypt_padded_vec::<Pkcs7>(plaintext);
         assert_eq!(
             hex::encode(ciphertext),
             "49c0692005510b6167e364a3af348ed26273bfe61494c6eb86c624bdac6d7e6c"
