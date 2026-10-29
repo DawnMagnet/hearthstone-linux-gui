@@ -115,7 +115,13 @@ impl ArchiveMap {
         let encoded = cdn
             .fetch_data_range(&item.archive_key, item.offset, item.size)
             .await?;
-        let decoded = blte::decode(&encoded, key, verify)?;
+        let key_owned = key.to_string();
+        // BLTE inflate is CPU work. Running it on the async worker stalls
+        // every other install task scheduled on that thread.
+        let decoded =
+            tokio::task::spawn_blocking(move || blte::decode(&encoded, &key_owned, verify))
+                .await
+                .map_err(|err| anyhow::anyhow!(err))??;
         trace!(
             key = %key,
             archive_key = %item.archive_key,

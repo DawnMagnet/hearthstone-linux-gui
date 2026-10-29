@@ -180,13 +180,16 @@ async fn install_one_entry(
     )
     .await?;
     let target = checked_install_path(&out_dir, &item.target_path)?;
-    if let Some(parent) = target.parent() {
-        tokio::fs::create_dir_all(parent).await?;
-    }
-    tokio::fs::write(&target, decoded).await?;
-    let metadata = tokio::fs::metadata(&target)
-        .await
-        .with_context(|| format!("failed to stat installed file {}", target.display()))?;
+    let metadata = tokio::task::spawn_blocking(move || -> Result<std::fs::Metadata> {
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&target, &decoded)?;
+        std::fs::metadata(&target)
+            .with_context(|| format!("failed to stat installed file {}", target.display()))
+    })
+    .await
+    .map_err(|err| anyhow::anyhow!(err))??;
     Ok(InstalledEntryResult {
         bytes: u64::from(item.entry.size),
         target_path: item.target_path,
@@ -217,8 +220,22 @@ async fn fetch_install_entry(
     };
 
     if let Some(encoded) = loose_data {
-        if let Ok(decoded) = decode_install_entry(&encoded, encoding_key, content_key, path, verify)
-        {
+        let path_owned = path.to_string();
+        let encoding_key_owned = encoding_key.to_string();
+        let content_key_owned = content_key.to_string();
+        let decoded = tokio::task::spawn_blocking(move || {
+            decode_install_entry(
+                &encoded,
+                &encoding_key_owned,
+                &content_key_owned,
+                &path_owned,
+                verify,
+            )
+            .map(|decoded| (decoded, encoded))
+        })
+        .await
+        .map_err(|err| anyhow::anyhow!(err))?;
+        if let Ok((decoded, encoded)) = decoded {
             trace!(
                 path = %path,
                 encoding_key = %encoding_key,
@@ -251,8 +268,13 @@ async fn fetch_install_entry(
         bytes = decoded.len(),
         "decoded archive data"
     );
-    verify_md5("installed file", &decoded, content_key, verify)?;
-    Ok(decoded)
+    let content_key = content_key.to_string();
+    tokio::task::spawn_blocking(move || {
+        verify_md5("installed file", &decoded, &content_key, verify)?;
+        Ok(decoded)
+    })
+    .await
+    .map_err(|err| anyhow::anyhow!(err))?
 }
 
 fn decode_install_entry(
