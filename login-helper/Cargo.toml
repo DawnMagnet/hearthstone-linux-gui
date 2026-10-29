@@ -22,6 +22,8 @@ description = "Optional Battle.net login window for hearthstone-linux-gui"
 # No dependency on the launcher crate: the launcher passes the language and
 # the translated texts, so this lock file never goes stale when the
 # launcher's dependencies change.
+# webkit6 0.6 needs gtk4 0.11, which would raise this crate's MSRV above 1.88
+# and the GTK 4.6 baseline. Keep gtk4 0.10, libadwaita 0.8 and webkit6 0.5.
 gtk = { package = "gtk4", version = "0.10" }
 adw = { package = "libadwaita", version = "0.8" }
 webkit6 = "0.5"
