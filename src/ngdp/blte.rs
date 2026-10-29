@@ -123,7 +123,6 @@ fn append_unknown(out: &mut Vec<u8>, data: &[u8]) -> Result<()> {
 }
 
 fn inflate_growing(out: &mut Vec<u8>, payload: &[u8]) -> Result<()> {
-    let start = out.len();
     let hint = payload
         .len()
         .saturating_mul(6)
@@ -151,19 +150,31 @@ fn inflate_growing(out: &mut Vec<u8>, payload: &[u8]) -> Result<()> {
                     usize::try_from(zlib.total_in().saturating_sub(before_in)).unwrap_or(0);
                 offset = offset.saturating_add(consumed).min(payload.len());
                 if out.len() == before_len && consumed == 0 {
-                    break;
+                    return Err(incomplete_deflate());
                 }
             }
-            Err(_) => break,
+            Err(_) => return Err(corrupt_deflate()),
         }
     }
+}
 
-    // Same reader master uses, so the message and source chain match.
-    out.truncate(start);
-    let mut full = Vec::new();
-    ZlibDecoder::new(payload).read_to_end(&mut full)?;
-    out.extend_from_slice(&full);
-    Ok(())
+enum Inflated {
+    Wrote(usize),
+    Mismatch,
+    Truncated,
+    Corrupt,
+}
+
+fn corrupt_deflate() -> anyhow::Error {
+    std::io::Error::new(std::io::ErrorKind::InvalidInput, "corrupt deflate stream").into()
+}
+
+fn incomplete_deflate() -> anyhow::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::UnexpectedEof,
+        "incomplete deflate stream",
+    )
+    .into()
 }
 
 /// Master’s per-block decode: a fresh buffer that grows with the real output,
@@ -219,27 +230,37 @@ fn append_trusted(
                         let written = usize::try_from(zlib.total_out().saturating_sub(before))
                             .unwrap_or(expected.saturating_add(1));
                         if written > expected {
-                            None
+                            Inflated::Mismatch
                         } else {
-                            Some(written)
+                            Inflated::Wrote(written)
                         }
                     }
-                    // Corrupt input and a short buffer both miss StreamEnd.
-                    // Master's reader turns backend failures into
-                    // "corrupt deflate stream" / "incomplete deflate stream"
-                    // with no further source. Re-decode so the error matches.
-                    Ok(_) | Err(_) => None,
+                    // A full output window means the stream is longer than the
+                    // declared size. Anything shorter, with no error, is a
+                    // truncated input. Backend errors are corrupt input.
+                    // These are the same io::Errors flate2's reader builds, so
+                    // there is no second inflate allocation.
+                    Ok(_) => {
+                        let written =
+                            usize::try_from(zlib.total_out().saturating_sub(before)).unwrap_or(0);
+                        if written >= expected {
+                            Inflated::Mismatch
+                        } else {
+                            Inflated::Truncated
+                        }
+                    }
+                    Err(_) => Inflated::Corrupt,
                 }
             };
-            if let Some(written) = written {
-                // Safety: StreamEnd wrote `written` initialized bytes into this
-                // block's tail, and `written <= expected <= spare.len()`.
-                unsafe { out.set_len(start + written) };
-            } else {
-                let mut full = Vec::new();
-                ZlibDecoder::new(payload).read_to_end(&mut full)?;
-                anyhow::ensure!(full.len() == expected, "BLTE decoded block size mismatch");
-                out.extend_from_slice(&full);
+            match written {
+                Inflated::Wrote(written) => {
+                    // Safety: StreamEnd wrote `written` initialized bytes into
+                    // this block's tail, and `written <= expected <= spare.len()`.
+                    unsafe { out.set_len(start + written) };
+                }
+                Inflated::Mismatch => anyhow::bail!("BLTE decoded block size mismatch"),
+                Inflated::Truncated => return Err(incomplete_deflate()),
+                Inflated::Corrupt => return Err(corrupt_deflate()),
             }
         }
         other => anyhow::bail!("unsupported BLTE block type `{}`", other as char),
@@ -467,6 +488,74 @@ mod tests {
         let sizes = vec![u32::MAX; 4096];
         let encoded = multi_block(&chunks, &sizes);
         assert_mismatch(&encoded);
+    }
+
+    fn bad_adler_zeros(len: usize) -> Vec<u8> {
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+        let zeros = [0u8; 64 * 1024];
+        let mut left = len;
+        while left > 0 {
+            let n = zeros.len().min(left);
+            encoder.write_all(&zeros[..n]).unwrap();
+            left -= n;
+        }
+        let mut compressed = encoder.finish().unwrap();
+        let last = compressed.len() - 1;
+        compressed[last] ^= 0xff;
+        let mut body = Vec::with_capacity(1 + compressed.len());
+        body.push(b'Z');
+        body.extend_from_slice(&compressed);
+        body
+    }
+
+    /// 256 MiB of zeros, Adler corrupted. One process per variant so VmHWM
+    /// starts clean. Master peaks near 258 MiB; 2× is 516 MiB.
+    #[test]
+    fn bad_adler_bomb_stays_within_twice_master_rss() {
+        if std::env::var_os("BLTE_RSS_CHILD").is_none() {
+            for variant in ["dec0", "declared"] {
+                let output = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "ngdp::blte::tests::bad_adler_bomb_stays_within_twice_master_rss",
+                        "--test-threads=1",
+                    ])
+                    .env("BLTE_RSS_CHILD", variant)
+                    .output()
+                    .unwrap();
+                assert!(
+                    output.status.success(),
+                    "{variant}\nstdout:\n{}\nstderr:\n{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            return;
+        }
+        let variant = std::env::var("BLTE_RSS_CHILD").unwrap();
+        let total = 256 * 1024 * 1024;
+        let body = bad_adler_zeros(total);
+        let encoded = if variant == "dec0" {
+            let mut data = Vec::new();
+            data.extend_from_slice(b"BLTE");
+            data.extend_from_slice(&0u32.to_be_bytes());
+            data.extend_from_slice(&body);
+            data
+        } else {
+            multi_block(&[body], &[u32::try_from(total).unwrap()])
+        };
+        let before = vm_hwm_kb();
+        let err = decode(&encoded, "ignored", false).unwrap_err();
+        let grew = vm_hwm_kb().saturating_sub(before);
+        let _ = std::fs::write(
+            format!("/tmp/bomb-{variant}.txt"),
+            format!("grew_kib={grew}\nerr={err}\n"),
+        );
+        assert_eq!(err.to_string(), "corrupt deflate stream");
+        assert!(
+            grew <= 516 * 1024,
+            "{variant} VmHWM grew by {grew} KiB, above 2× master's 258 MiB"
+        );
     }
 
     #[test]
