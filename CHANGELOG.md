@@ -1,13 +1,63 @@
 # Changelog
 
-## Unreleased
+## v0.4.0 - 2026-10-29
+
+### Added
+
+- Uninstall asks for confirmation before deleting installed game files.
+  Cancel, Escape, and closing the dialog leave the install in place (#61).
+- Region and game-language dropdowns show the catalog names. Config files
+  and the game still receive the original codes, and the labels refresh
+  when the interface language changes (#62).
 
 ### Changed
 
+- The support target is every distribution that ships GTK 4. Native deb,
+  rpm and pacman packages target GTK 4.6 and libadwaita 1.1 (Ubuntu 22.04,
+  Debian 12, Enterprise Linux 9, Fedora 36 and newer). They still compile
+  against the GTK 4.4 API so Enterprise Linux 9's Pango 1.48 can link them
+  (#57, #64).
+- The AppImage is built on AlmaLinux 8 (glibc 2.28), with GTK 4.12 and
+  libadwaita 1.4 compiled from source, and runs on Debian 11, Ubuntu 20.04
+  and newer. Native packages stay on the AlmaLinux 9 build (#63).
 - The interface language switches in the open window. Headers, menus,
   dialogs and status text update in place; the window is not rebuilt, and
   an install, login or running game no longer defers the change until the
-  next start.
+  next start (#56).
+- BLTE decoding, the content MD5 check and the file write run off the async
+  runtime. Decompression uses zlib-rs (flate2 1.1.10): about 1.5× faster
+  decompression, and installs about 1.1–1.8× faster (#82).
+- Rust dependencies are upgraded within that GTK 4.6 baseline. aes 0.9 and
+  cbc 0.2, pbkdf2 0.13 (sha1 and sha2 on digest 0.11), and the rustls stack
+  (rustls, rustls-webpki, webpki-roots, quinn-proto) are in. `cargo audit`
+  is clean on both lock files. relm4 stays at 0.10.1, reqwest at 0.12, gtk4
+  at 0.10 and libadwaita at 0.8. The workspace MSRV is 1.92; the login
+  helper stays on 1.88 (#76, #78, #81).
+
+### Fixed
+
+- With no GameMode or MangoHud wrapper, the AppImage no longer drops the
+  game's own `LD_LIBRARY_PATH` when it restores the host environment. Mono
+  and the plugin directories stay on the path (#58).
+
+### Maintenance
+
+- CI runs `cargo audit` on `Cargo.lock` and `login-helper/Cargo.lock` (#77).
+- Dependabot opens at most one grouped version-update pull request per
+  ecosystem each month. Security updates stay ungrouped and open
+  immediately (#75).
+- Pull requests run rustfmt, clippy `-D warnings` and the workspace tests.
+  The GTK 4.6 / libadwaita 1.1 feature ceiling is checked in one place, and
+  the MSRV matrix reads each manifest's `rust-version` (#59).
+- NGDP parser, offline install and download-resume paths have synthetic
+  fixture tests (#60).
+- BLTE, encoding and archive-index parsers return an error instead of
+  panicking when a declared size runs past the buffer (#56).
+- The Nix flake and `rust-toolchain.toml` pin Rust 1.92.0, the same
+  compiler CI installs (#56).
+- GitHub Actions are updated: checkout 7, upload-artifact 7,
+  download-artifact 8, docker/setup-buildx-action 4 and
+  docker/build-push-action 7 (#65, #66, #69, #70, #72).
 
 ## v0.3.2 - 2026-10-26
 
