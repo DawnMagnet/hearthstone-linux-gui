@@ -233,6 +233,41 @@ mod tests {
         assert_eq!(encrypted.len(), TOKEN_CIPHERTEXT_LEN);
     }
 
+    /// AES-128-CBC with PKCS7. Key, IV and plaintext are fixed, and so are
+    /// `encryption_key_for_user("sgct")` and `encrypt_token_for_user` for the
+    /// same account token the other tests use. Captured on aes 0.8.4 / cbc 0.1.2;
+    /// a cipher upgrade must keep every value byte-identical.
+    #[test]
+    fn aes128_cbc_pkcs7_matches_golden_ciphertext() {
+        use cbc::cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyIvInit};
+
+        let key: [u8; 16] = [
+            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,
+            0x0e, 0x0f,
+        ];
+        let iv: [u8; 16] = [
+            0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d,
+            0x1e, 0x1f,
+        ];
+        let plaintext = b"hearthstone-golden";
+        let ciphertext = super::Aes128CbcEnc::new(&key.into(), &iv.into())
+            .encrypt_padded_vec_mut::<Pkcs7>(plaintext);
+        assert_eq!(
+            hex::encode(ciphertext),
+            "49c0692005510b6167e364a3af348ed26273bfe61494c6eb86c624bdac6d7e6c"
+        );
+
+        assert_eq!(
+            hex::encode(encryption_key_for_user("sgct")),
+            "c34e634a68bca062d14333ed8d455701"
+        );
+        let token = "AB-0123456789ABCDEFGHIJKLMNOPQRSTUV-123456789";
+        assert_eq!(
+            hex::encode(encrypt_token_for_user(token, "sgct").unwrap()),
+            "f88140339952406e40cbebe0078f5141a0579e011b5c7f9f01df5136a31ae0cf623a62c76745fe86e0e6083ec3c958b8"
+        );
+    }
+
     #[test]
     fn encrypts_short_account_id_tokens_to_game_expected_length() {
         let token = "AB-0123456789ABCDEFGHIJKLMNOPQRSTUV-12345678";
