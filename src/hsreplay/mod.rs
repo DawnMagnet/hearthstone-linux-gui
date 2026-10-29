@@ -315,13 +315,12 @@ async fn upload(client: &reqwest::Client, token: &Token, state: &mono::GameState
         .unwrap_or("application/json");
 
     // Gzipped like HDT does; the presigned URL may sign these headers.
-    let mut body = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-    body.write_all(&serde_json::to_vec(&collection_json(state))?)?;
+    let body = gzip_payload(&serde_json::to_vec(&collection_json(state))?)?;
     client
         .request(method.parse()?, url)
         .header("Content-Type", content_type)
         .header("Content-Encoding", "gzip")
-        .body(body.finish()?)
+        .body(body)
         .send()
         .await?
         .error_for_status()
@@ -344,6 +343,12 @@ struct Token {
 
 fn bearer() -> String {
     "Bearer".into()
+}
+
+fn gzip_payload(payload: &[u8]) -> Result<Vec<u8>> {
+    let mut body = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    body.write_all(payload)?;
+    Ok(body.finish()?)
 }
 
 fn now() -> u64 {
@@ -669,6 +674,16 @@ fn random_bytes<const N: usize>() -> Result<[u8; N]> {
 mod tests {
     use super::*;
     use mono::{Card, GameState};
+
+    #[test]
+    fn gzip_payload_decodes_to_the_original_bytes() {
+        let original = br#"{"cards":[{"dbf_id":42,"count":2}]}"#;
+        let compressed = gzip_payload(original).unwrap();
+        let mut decoder = flate2::read::GzDecoder::new(compressed.as_slice());
+        let mut out = Vec::new();
+        decoder.read_to_end(&mut out).unwrap();
+        assert_eq!(out, original);
+    }
 
     #[test]
     fn accepts_plausible_reads_and_rejects_corrupt_ones() {

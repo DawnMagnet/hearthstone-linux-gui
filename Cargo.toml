@@ -50,7 +50,7 @@ bitvec = "1.1.1"
 cbc = { version = "0.2.1", features = ["alloc"] }
 clap = { version = "4.6.7", features = ["derive"] }
 directories = "6.0.0"
-flate2 = "1.1.10"
+flate2 = { version = "1.1.10", default-features = false, features = ["zlib-rs", "runtime_detection"] }
 hex = "0.4.3"
 md5 = "0.8.1"
 pbkdf2 = "0.13.0"
@@ -91,6 +91,11 @@ libadwaita = { version = "0.8", features = ["v1_1"], optional = true }
 
 [dev-dependencies]
 tempfile = "3.27.0"
+# examples/blte_bench.rs reuses crates already depended on by the library.
+flate2 = { version = "1.1.10", default-features = false }
+md5 = "0.8.1"
+sha2 = "0.11.1"
+tokio = { version = "1.54.1", features = ["fs", "rt-multi-thread", "time"] }
 
 [profile.release]
 lto = false
