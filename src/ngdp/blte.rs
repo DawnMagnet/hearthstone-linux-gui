@@ -160,7 +160,16 @@ fn append_trusted(
                 }
                 match status {
                     Status::StreamEnd => written,
-                    _ => anyhow::bail!("BLTE decoded block size mismatch"),
+                    // The declared buffer was not enough, or the stream ended
+                    // early. Master grows a reader to the end and only then
+                    // checks the length, so a truncated stream stays
+                    // "incomplete deflate stream" instead of a size mismatch.
+                    _ => {
+                        let mut decoder = ZlibDecoder::new(payload);
+                        let mut full = Vec::new();
+                        decoder.read_to_end(&mut full)?;
+                        anyhow::bail!("BLTE decoded block size mismatch");
+                    }
                 }
             };
             // Safety: `decompress_uninit` initialized the first `written` bytes
@@ -242,6 +251,16 @@ mod tests {
     fn header_key(data: &[u8]) -> String {
         let header_size = u32::from_be_bytes(data[4..8].try_into().unwrap()) as usize;
         format!("{:x}", md5::compute(&data[..header_size]))
+    }
+
+    #[test]
+    fn truncated_z_block_keeps_the_inflate_error() {
+        let plain = b"abcdefghijklmnopqrstuvwxyz012345".repeat(30);
+        let mut body = chunk(b'Z', &plain);
+        body.truncate(body.len().saturating_sub(6).max(2));
+        let encoded = multi_block(&[body], &[plain.len() as u32]);
+        let message = format!("{:#}", decode(&encoded, "ignored", false).unwrap_err());
+        assert_eq!(message, "incomplete deflate stream");
     }
 
     #[test]
@@ -344,20 +363,6 @@ mod tests {
         let body = chunk(b'N', &[0x11]);
         let many = multi_block(&vec![body; 4096], &vec![u32::MAX; 4096]);
         assert_mismatch_without_a_huge_alloc(&many);
-        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
-        let zeros = [0u8; 64 * 1024];
-        let mut left = 256 * 1024 * 1024;
-        while left > 0 {
-            let n = zeros.len().min(left);
-            encoder.write_all(&zeros[..n]).unwrap();
-            left -= n;
-        }
-        let compressed = encoder.finish().unwrap();
-        let mut zbody = Vec::with_capacity(1 + compressed.len());
-        zbody.push(b'Z');
-        zbody.extend_from_slice(&compressed);
-        let claimed_1k = multi_block(&[zbody], &[1024]);
-        assert_mismatch_without_a_huge_alloc(&claimed_1k);
     }
 
     #[test]

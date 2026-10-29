@@ -1322,6 +1322,27 @@ fn qa_main() {
         zeros.plain_len as u64,
     ));
 
+    let record_path = PathBuf::from("/dev/shm/blte-bench-samples/A.blte");
+    if record_path.is_file() {
+        let encoded = fs::read(&record_path).unwrap();
+        let key = encoding_key_of(&encoded);
+        let decoded = hearthstone_linux::ngdp::blte::decode(&encoded, &key, false).unwrap();
+        println!(
+            "HASH sample=record32 decoded_sha256={} decoded_bytes={} encoded_bytes={}",
+            sha256(&decoded),
+            decoded.len(),
+            encoded.len()
+        );
+        let record_bytes = decoded.len() as u64;
+        let rtimes = time_runs(|| {
+            let out = hearthstone_linux::ngdp::blte::decode(&encoded, &key, false).unwrap();
+            black_box(out);
+        });
+        print_timed(&summarize("qa_decode", "record32", rtimes, record_bytes));
+    } else {
+        eprintln!("qa record32 skipped; {} missing", record_path.display());
+    }
+
     let mut small_hash = Sha256::new();
     for index in 0..256u64 {
         let file = make_qa_file(
