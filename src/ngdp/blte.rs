@@ -70,23 +70,23 @@ pub fn decode(data: &[u8], key: &str, verify: bool) -> Result<Vec<u8>> {
         if !block.digest.is_empty() {
             verify_md5("BLTE block", encoded_block, &block.digest, verify)?;
         }
-        if prealloc > 0 {
+        if block.decoded_size == 0 {
+            // No declared size: inflate straight into the output. This is the
+            // single-frame path, which does not get the trusted reserve.
+            append_unknown(&mut decoded, encoded_block)?;
+        } else if prealloc > 0 {
             let start = decoded.len();
             append_trusted(&mut decoded, &mut zlib, encoded_block, block.decoded_size)?;
-            if block.decoded_size != 0 {
-                anyhow::ensure!(
-                    decoded.len() - start == block.decoded_size,
-                    "BLTE decoded block size mismatch"
-                );
-            }
+            anyhow::ensure!(
+                decoded.len() - start == block.decoded_size,
+                "BLTE decoded block size mismatch"
+            );
         } else {
             let block_decoded = decode_block_incremental(encoded_block)?;
-            if block.decoded_size != 0 {
-                anyhow::ensure!(
-                    block_decoded.len() == block.decoded_size,
-                    "BLTE decoded block size mismatch"
-                );
-            }
+            anyhow::ensure!(
+                block_decoded.len() == block.decoded_size,
+                "BLTE decoded block size mismatch"
+            );
             decoded.extend_from_slice(&block_decoded);
         }
         offset = end;
@@ -105,6 +105,65 @@ fn preallocated_len(blocks: &[BlockInfo]) -> usize {
         Some(total) if total > 0 && total <= MAX_PREALLOC => total,
         _ => 0,
     }
+}
+
+/// Single-frame and other `decoded_size == 0` blocks. The output size is not
+/// in the header, so this grows the real buffer. The first reserve is a
+/// capped multiple of the compressed length; after that, growth is geometric
+/// until 512 MiB and then fixed steps, so a zlib bomb cannot jump to a
+/// multi-gigabyte allocation in one reserve.
+fn append_unknown(out: &mut Vec<u8>, data: &[u8]) -> Result<()> {
+    let (&kind, payload) = data.split_first().context("empty BLTE block")?;
+    match kind {
+        b'N' => out.extend_from_slice(payload),
+        b'Z' => inflate_growing(out, payload)?,
+        other => anyhow::bail!("unsupported BLTE block type `{}`", other as char),
+    }
+    Ok(())
+}
+
+fn inflate_growing(out: &mut Vec<u8>, payload: &[u8]) -> Result<()> {
+    let start = out.len();
+    let hint = payload
+        .len()
+        .saturating_mul(6)
+        .clamp(64 * 1024, MAX_PREALLOC);
+    out.reserve(hint);
+
+    let mut zlib = Decompress::new(true);
+    let mut offset = 0usize;
+    loop {
+        if out.len() == out.capacity() {
+            let cap = out.capacity();
+            let add = if cap >= MAX_PREALLOC {
+                32 * 1024 * 1024
+            } else {
+                cap.max(64 * 1024)
+            };
+            out.reserve(add);
+        }
+        let before_in = zlib.total_in();
+        let before_len = out.len();
+        match zlib.decompress_vec(&payload[offset..], out, FlushDecompress::Finish) {
+            Ok(Status::StreamEnd) => return Ok(()),
+            Ok(_) => {
+                let consumed =
+                    usize::try_from(zlib.total_in().saturating_sub(before_in)).unwrap_or(0);
+                offset = offset.saturating_add(consumed).min(payload.len());
+                if out.len() == before_len && consumed == 0 {
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+
+    // Same reader master uses, so the message and source chain match.
+    out.truncate(start);
+    let mut full = Vec::new();
+    ZlibDecoder::new(payload).read_to_end(&mut full)?;
+    out.extend_from_slice(&full);
+    Ok(())
 }
 
 /// Master’s per-block decode: a fresh buffer that grows with the real output,
@@ -138,10 +197,10 @@ fn append_trusted(
             decoder.read_to_end(out)?;
         }
         b'Z' => {
-            // `decompress_vec` would hand miniz the entire spare tail. Once the
-            // output is reserved for every block, that tail is the rest of the
-            // file, and inflate time grows with it. Limit the window to this
-            // block.
+            // `decompress_vec` would hand the inflater the entire spare tail.
+            // Once the output is reserved for every block, that tail is the
+            // rest of the file, and inflate time grows with it. Limit the
+            // window to this block.
             out.reserve_exact(expected);
             let start = out.len();
             let written = {
@@ -150,31 +209,38 @@ fn append_trusted(
                 let zlib = zlib.get_or_insert_with(|| Decompress::new(true));
                 zlib.reset(true);
                 let before = zlib.total_out();
-                let status = zlib
-                    .decompress_uninit(payload, &mut spare[..expected], FlushDecompress::Finish)
-                    .map_err(std::io::Error::from)?;
-                let written = usize::try_from(zlib.total_out().saturating_sub(before))
-                    .unwrap_or(expected.saturating_add(1));
-                if written > expected {
-                    anyhow::bail!("BLTE decoded block size mismatch");
-                }
-                match status {
-                    Status::StreamEnd => written,
-                    // The declared buffer was not enough, or the stream ended
-                    // early. Master grows a reader to the end and only then
-                    // checks the length, so a truncated stream stays
-                    // "incomplete deflate stream" instead of a size mismatch.
-                    _ => {
-                        let mut decoder = ZlibDecoder::new(payload);
-                        let mut full = Vec::new();
-                        decoder.read_to_end(&mut full)?;
-                        anyhow::bail!("BLTE decoded block size mismatch");
+                let direct = zlib.decompress_uninit(
+                    payload,
+                    &mut spare[..expected],
+                    FlushDecompress::Finish,
+                );
+                match direct {
+                    Ok(Status::StreamEnd) => {
+                        let written = usize::try_from(zlib.total_out().saturating_sub(before))
+                            .unwrap_or(expected.saturating_add(1));
+                        if written > expected {
+                            None
+                        } else {
+                            Some(written)
+                        }
                     }
+                    // Corrupt input and a short buffer both miss StreamEnd.
+                    // Master's reader turns backend failures into
+                    // "corrupt deflate stream" / "incomplete deflate stream"
+                    // with no further source. Re-decode so the error matches.
+                    Ok(_) | Err(_) => None,
                 }
             };
-            // Safety: `decompress_uninit` initialized the first `written` bytes
-            // of this block's tail, and `written <= expected <= spare.len()`.
-            unsafe { out.set_len(start + written) };
+            if let Some(written) = written {
+                // Safety: StreamEnd wrote `written` initialized bytes into this
+                // block's tail, and `written <= expected <= spare.len()`.
+                unsafe { out.set_len(start + written) };
+            } else {
+                let mut full = Vec::new();
+                ZlibDecoder::new(payload).read_to_end(&mut full)?;
+                anyhow::ensure!(full.len() == expected, "BLTE decoded block size mismatch");
+                out.extend_from_slice(&full);
+            }
         }
         other => anyhow::bail!("unsupported BLTE block type `{}`", other as char),
     }
@@ -254,13 +320,73 @@ mod tests {
     }
 
     #[test]
+    fn single_frame_zlib_roundtrips() {
+        let plain = b"the card minion spell ".repeat(4000);
+        let body = chunk(b'Z', &plain);
+        let mut encoded = Vec::new();
+        encoded.extend_from_slice(b"BLTE");
+        encoded.extend_from_slice(&0u32.to_be_bytes());
+        encoded.extend_from_slice(&body);
+        assert_eq!(decode(&encoded, "ignored", false).unwrap(), plain);
+    }
+
+    #[test]
     fn truncated_z_block_keeps_the_inflate_error() {
         let plain = b"abcdefghijklmnopqrstuvwxyz012345".repeat(30);
         let mut body = chunk(b'Z', &plain);
         body.truncate(body.len().saturating_sub(6).max(2));
         let encoded = multi_block(&[body], &[plain.len() as u32]);
-        let message = format!("{:#}", decode(&encoded, "ignored", false).unwrap_err());
-        assert_eq!(message, "incomplete deflate stream");
+        assert_master_inflate_error(
+            &encoded,
+            std::io::ErrorKind::UnexpectedEof,
+            "incomplete deflate stream",
+        );
+    }
+
+    fn assert_master_inflate_error(encoded: &[u8], kind: std::io::ErrorKind, message: &str) {
+        let err = decode(encoded, "ignored", false).unwrap_err();
+        assert_eq!(err.to_string(), message);
+        assert_eq!(format!("{err:#}"), message);
+        assert!(err.source().is_none(), "unexpected source: {err:#}");
+        let io = err
+            .downcast_ref::<std::io::Error>()
+            .expect("inflate error should be an io::Error");
+        assert_eq!(io.kind(), kind);
+        assert_eq!(io.to_string(), message);
+    }
+
+    fn corrupt_cases() -> Vec<(&'static str, Vec<u8>)> {
+        let plain = b"abcdefghijklmnopqrstuvwxyz012345".repeat(40);
+        let body = chunk(b'Z', &plain);
+        let mut bad_adler = body.clone();
+        let last = bad_adler.len() - 1;
+        bad_adler[last] ^= 0xff;
+        let mut bad_header = body.clone();
+        bad_header[1] = 0x00;
+        bad_header[2] = 0x00;
+        let mut bad_middle = body.clone();
+        let mid = 1 + (bad_middle.len() - 1) / 2;
+        bad_middle[mid] ^= 0xff;
+        let declared = plain.len() as u32;
+        vec![
+            ("adler", multi_block(&[bad_adler], &[declared])),
+            ("header", multi_block(&[bad_header], &[declared])),
+            ("middle", multi_block(&[bad_middle], &[declared])),
+        ]
+    }
+
+    #[test]
+    fn corrupt_zlib_matches_master_message() {
+        for (name, encoded) in corrupt_cases() {
+            let err = decode(&encoded, "ignored", false).unwrap_err();
+            assert_eq!(err.to_string(), "corrupt deflate stream", "{name}: {err:#}");
+            assert_eq!(format!("{err:#}"), "corrupt deflate stream", "{name}");
+            assert!(err.source().is_none(), "{name} source: {err:#}");
+            let io = err
+                .downcast_ref::<std::io::Error>()
+                .unwrap_or_else(|| panic!("{name} was not an io::Error: {err:#}"));
+            assert_eq!(io.kind(), std::io::ErrorKind::InvalidInput, "{name}");
+        }
     }
 
     #[test]

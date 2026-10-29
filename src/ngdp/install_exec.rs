@@ -780,4 +780,134 @@ mod tests {
         .unwrap_err();
         assert!(format!("{missing:#}").contains("loose data missing"));
     }
+
+    /// Real `install_entries_parallel` timing. Ignored so `cargo test` stays
+    /// small. One 64 MiB single-frame level-6 text file plus 13 multi-block
+    /// files. Prints `E2E_MEDIAN_MS`.
+    #[tokio::test]
+    #[ignore = "manual timing of install_entries_parallel"]
+    async fn e2e_install_group() {
+        use flate2::write::ZlibEncoder;
+        use flate2::Compression;
+        use std::io::Write;
+
+        fn fill(len: usize, seed: u64) -> Vec<u8> {
+            let words = [
+                b"the ".as_slice(),
+                b"card ",
+                b"minion ",
+                b"spell ",
+                b"damage ",
+            ];
+            let mut out = vec![0u8; len];
+            let mut state = seed | 1;
+            let mut i = 0;
+            while i < len {
+                state = state.wrapping_mul(0x5851_F42D_4C95_7F2D).wrapping_add(1);
+                let word = words[((state >> 33) as usize) % words.len()];
+                let n = word.len().min(len - i);
+                out[i..i + n].copy_from_slice(&word[..n]);
+                i += n;
+            }
+            out
+        }
+        fn zlib_block(plain: &[u8]) -> Vec<u8> {
+            let mut enc = ZlibEncoder::new(Vec::new(), Compression::new(6));
+            enc.write_all(plain).unwrap();
+            let compressed = enc.finish().unwrap();
+            let mut body = Vec::with_capacity(1 + compressed.len());
+            body.push(b'Z');
+            body.extend_from_slice(&compressed);
+            body
+        }
+        fn single_frame(plain: &[u8]) -> Vec<u8> {
+            let body = zlib_block(plain);
+            let mut data = Vec::with_capacity(8 + body.len());
+            data.extend_from_slice(b"BLTE");
+            data.extend_from_slice(&0u32.to_be_bytes());
+            data.extend_from_slice(&body);
+            data
+        }
+        fn multi_frame(plain: &[u8]) -> Vec<u8> {
+            let chunks: Vec<Vec<u8>> = plain.chunks(256 * 1024).map(zlib_block).collect();
+            let header_size = 12 + 24 * chunks.len();
+            let mut data = Vec::new();
+            data.extend_from_slice(b"BLTE");
+            data.extend_from_slice(&(header_size as u32).to_be_bytes());
+            data.push(0x0f);
+            let count = chunks.len() as u32;
+            data.extend_from_slice(&[(count >> 16) as u8, (count >> 8) as u8, count as u8]);
+            for (chunk, part) in chunks.iter().zip(plain.chunks(256 * 1024)) {
+                data.extend_from_slice(&(chunk.len() as u32).to_be_bytes());
+                data.extend_from_slice(&(part.len() as u32).to_be_bytes());
+                data.extend_from_slice(&md5::compute(chunk).0);
+            }
+            assert_eq!(data.len(), header_size);
+            for chunk in &chunks {
+                data.extend_from_slice(chunk);
+            }
+            data
+        }
+
+        let temp = tempfile::tempdir().unwrap();
+        let cdn = offline_cdn(temp.path());
+        let mut items = Vec::new();
+        let big = fill(64 * 1024 * 1024, 1);
+        let key = ek(1);
+        cdn.cache_data(&key, &single_frame(&big)).await;
+        items.push(item("big", "big.bin", &key, &big, true));
+        for index in 0..13u8 {
+            let len = if index < 5 {
+                8 * 1024 * 1024
+            } else {
+                1024 * 1024
+            };
+            let plain = fill(len, 0x100 + u64::from(index));
+            let key = ek(2 + index);
+            cdn.cache_data(&key, &multi_frame(&plain)).await;
+            items.push(item(
+                &format!("p{index}"),
+                &format!("f{index}.bin"),
+                &key,
+                &plain,
+                true,
+            ));
+        }
+
+        let mut times = Vec::new();
+        for run in 0..=9 {
+            let out = temp.path().join(format!("out{run}"));
+            std::fs::create_dir_all(&out).unwrap();
+            let start = std::time::Instant::now();
+            let installed = install_entries_parallel(
+                cdn.clone(),
+                ArchiveMap::default(),
+                items.clone(),
+                &out,
+                true,
+                &mut |_| {},
+                None,
+            )
+            .await
+            .unwrap();
+            let elapsed = start.elapsed();
+            assert_eq!(installed.len(), items.len());
+            if run == 0 {
+                assert_eq!(std::fs::read(out.join("big.bin")).unwrap(), big);
+            }
+            if run > 0 {
+                times.push(elapsed.as_secs_f64() * 1000.0);
+            }
+        }
+        times.sort_by(|left, right| left.partial_cmp(right).unwrap());
+        println!("E2E_MEDIAN_MS {:.3}", times[times.len() / 2]);
+        println!(
+            "E2E_TIMES {}",
+            times
+                .iter()
+                .map(|time| format!("{time:.3}"))
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+    }
 }
