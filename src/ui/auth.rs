@@ -85,21 +85,27 @@ fn install_auth_callback_helper(paths: &AppPaths, exe: &Path) -> std::io::Result
     std::fs::create_dir_all(&paths.state_dir)?;
     std::fs::create_dir_all(&paths.log_dir)?;
     let helper = paths.state_dir.join("auth-callback-handler");
-    let log = paths.log_dir.join("auth-callback.log");
-    std::fs::write(
+    // Earlier helpers logged the full callback URI, including its login token.
+    match std::fs::remove_file(paths.log_dir.join("auth-callback.log")) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    hearthstone_linux::auth::write_private_file(
         &helper,
         format!(
-            "#!/usr/bin/env sh\nset -u\nlog={}\nprintf '%s callback %s\\n' \"$(date -Is 2>/dev/null || date)\" \"$*\" >> \"$log\"\n{} --auth-callback \"${{1:-}}\" >> \"$log\" 2>&1\nstatus=$?\nprintf '%s exit %s\\n' \"$(date -Is 2>/dev/null || date)\" \"$status\" >> \"$log\"\nexit \"$status\"\n",
-            shell_quote_path(&log),
+            "#!/usr/bin/env sh\nset -eu\numask 077\nexec {} --auth-callback \"${{1:-}}\"\n",
             shell_quote_path(exe),
-        ),
-    )?;
+        )
+        .as_bytes(),
+    )
+    .map_err(std::io::Error::other)?;
 
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let mut permissions = std::fs::metadata(&helper)?.permissions();
-        permissions.set_mode(0o755);
+        permissions.set_mode(0o700);
         std::fs::set_permissions(&helper, permissions)?;
     }
 
@@ -214,6 +220,80 @@ fn make_executable(_path: &Path) -> std::io::Result<()> {
 
 fn shell_quote_path(path: &Path) -> String {
     let value = path.to_string_lossy();
-    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
-    format!("\"{escaped}\"")
+    let escaped = value.replace('\'', "'\\''");
+    format!("'{escaped}'")
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn paths_in(root: &Path) -> AppPaths {
+        AppPaths {
+            config_dir: root.join("config"),
+            data_dir: root.join("data"),
+            cache_dir: root.join("cache"),
+            state_dir: root.join("state"),
+            config_file: root.join("config/config.toml"),
+            game_dir: root.join("game"),
+            ngdp_dir: root.join("cache/ngdp"),
+            unity_cache_dir: root.join("cache/unity"),
+            log_dir: root.join("state/logs"),
+        }
+    }
+
+    #[test]
+    fn helper_passes_the_callback_without_logging_or_evaluating_its_executable_path() {
+        let root = tempfile::tempdir().unwrap();
+        let paths = paths_in(root.path());
+        paths.ensure().unwrap();
+        let log = paths.log_dir.join("auth-callback.log");
+        std::fs::write(&log, "old callback credential").unwrap();
+        let exe = root
+            .path()
+            .join("launcher ' $(touch injected) `touch injected`");
+        std::fs::write(&exe, "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$0.args\"\n").unwrap();
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let helper = install_auth_callback_helper(&paths, &exe).unwrap();
+        let uri =
+            "blizzard-hearthstone://localhost:0/?ST=US-0123456789ABCDEFGHIJKLMNOPQRSTUV-1234567";
+        let output = std::process::Command::new("/bin/sh")
+            .arg(&helper)
+            .arg(uri)
+            .current_dir(root.path())
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let mut args_file = exe.as_os_str().to_owned();
+        args_file.push(".args");
+        assert_eq!(
+            std::fs::read_to_string(PathBuf::from(args_file)).unwrap(),
+            format!("--auth-callback\n{uri}\n")
+        );
+        assert!(output.stdout.is_empty());
+        assert!(output.stderr.is_empty());
+        assert!(!log.exists());
+        assert!(!root.path().join("injected").exists());
+        assert_eq!(
+            std::fs::metadata(helper).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+    }
+
+    #[test]
+    fn helper_preserves_the_launcher_exit_status() {
+        let root = tempfile::tempdir().unwrap();
+        let paths = paths_in(root.path());
+        let exe = root.path().join("launcher");
+        std::fs::write(&exe, "#!/bin/sh\nexit 23\n").unwrap();
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let helper = install_auth_callback_helper(&paths, &exe).unwrap();
+        let status = std::process::Command::new("/bin/sh")
+            .arg(helper)
+            .arg("callback")
+            .status()
+            .unwrap();
+        assert_eq!(status.code(), Some(23));
+    }
 }
