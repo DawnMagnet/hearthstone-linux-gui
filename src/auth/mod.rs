@@ -7,6 +7,9 @@ use sha1::Sha1;
 use std::path::Path;
 use url::Url;
 
+mod private_file;
+pub use private_file::write_private_file;
+
 type Aes128CbcEnc = cbc::Encryptor<Aes128>;
 
 const ENTROPY: [u8; 16] = [
@@ -77,10 +80,8 @@ fn find_token_candidate(input: &str) -> Option<String> {
 pub fn write_encrypted_token_for_current_user(path: &Path, token: &str) -> Result<()> {
     let username = current_username();
     let encrypted = encrypt_token_for_user(token, &username)?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(path, encrypted).with_context(|| format!("failed to write {}", path.display()))
+    write_private_file(path, &encrypted)
+        .with_context(|| format!("failed to write {}", path.display()))
 }
 
 pub fn handle_callback_uri(paths: &AppPaths, uri: &str) -> Result<()> {
@@ -149,6 +150,20 @@ fn current_username() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn written_token_keeps_the_game_expected_encrypted_layout() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("game/token");
+        let token = "US-0123456789ABCDEFGHIJKLMNOPQRSTUV-1234567";
+        write_encrypted_token_for_current_user(&path, token).unwrap();
+        let actual = std::fs::read(&path).unwrap();
+        assert_eq!(actual.len(), TOKEN_CIPHERTEXT_LEN);
+        assert_eq!(
+            actual,
+            encrypt_token_for_user(token, &current_username()).unwrap()
+        );
+    }
 
     #[test]
     fn extracts_token_from_query_or_text() {
