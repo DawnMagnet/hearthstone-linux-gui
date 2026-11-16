@@ -193,6 +193,15 @@ fn prepare_startup_logs(
     legacy_token_tmp: Option<&Path>,
     scrub_logs: bool,
 ) -> StartupNotes {
+    prepare_startup_logs_at(log_dir, legacy_token_tmp, scrub_logs, unix_day_number())
+}
+
+fn prepare_startup_logs_at(
+    log_dir: &Path,
+    legacy_token_tmp: Option<&Path>,
+    scrub_logs: bool,
+    today: i64,
+) -> StartupNotes {
     let mut notes = StartupNotes::default();
     if is_symlink(log_dir) {
         // A symlink is an intentional redirect. Chmod would follow it, and
@@ -208,13 +217,17 @@ fn prepare_startup_logs(
         ));
     }
     if scrub_logs {
-        notes
-            .warnings
-            .extend(scrub_legacy_logs_with_token_tmp(log_dir, legacy_token_tmp));
+        notes.warnings.extend(scrub_legacy_logs_with_token_tmp_at(
+            log_dir,
+            legacy_token_tmp,
+            today,
+        ));
     } else {
         // Short-lived commands skip the token rewrite but still enforce the
         // filename retention window. They must not leave that to creation time.
-        notes.warnings.extend(delete_expired_rotated_logs(log_dir));
+        notes
+            .warnings
+            .extend(delete_expired_rotated_logs_at(log_dir, today));
     }
     notes
 }
@@ -253,6 +266,10 @@ fn tighten_dir_mode(path: &Path) -> io::Result<()> {
 }
 
 fn open_log_writer(log_dir: &Path) -> Result<(NonBlocking, WorkerGuard), String> {
+    open_log_writer_at(log_dir, unix_day_number())
+}
+
+fn open_log_writer_at(log_dir: &Path, today: i64) -> Result<(NonBlocking, WorkerGuard), String> {
     if !log_dir.is_dir() {
         return Err(format!(
             "could not open log files in {}: directory is not available",
@@ -261,14 +278,13 @@ fn open_log_writer(log_dir: &Path) -> Result<(NonBlocking, WorkerGuard), String>
     }
     // Filename retention again, including launches that never scrub. Expired
     // files are already gone before any rewrite can refresh their timestamps.
-    let _ = delete_expired_rotated_logs(log_dir);
+    let _ = delete_expired_rotated_logs_at(log_dir, today);
     // Retention is by filename date (see `delete_expired_rotated_logs`), not
     // tracing-appender's creation-time prune. That prune also matches every
     // name that merely starts with the log prefix.
     //
     // Create today's file as `0600` before the appender opens it. The appender
     // has no creation mode; a file that already exists is opened, not recreated.
-    let today = unix_day_number();
     precreate_private_log(log_dir, today);
     let file = match tracing_appender::rolling::RollingFileAppender::builder()
         .rotation(tracing_appender::rolling::Rotation::DAILY)
@@ -394,8 +410,11 @@ fn filename_date_outside_retention(file_day: i64, today: i64) -> bool {
 /// window. A clock set far ahead still cannot drop the whole history: today's
 /// pre-created file does not make every older log eligible.
 fn delete_expired_rotated_logs(log_dir: &Path) -> Vec<String> {
+    delete_expired_rotated_logs_at(log_dir, unix_day_number())
+}
+
+fn delete_expired_rotated_logs_at(log_dir: &Path, today: i64) -> Vec<String> {
     let mut warnings = Vec::new();
-    let today = unix_day_number();
     let entries = match fs::read_dir(log_dir) {
         Ok(entries) => entries,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return warnings,
@@ -619,18 +638,24 @@ fn restrict_log_fd(file: &fs::File) -> io::Result<()> {
 /// subscriber is installed, because this runs before any subscriber exists.
 #[cfg(test)]
 fn scrub_legacy_logs(log_dir: &Path) {
-    for warning in scrub_legacy_logs_with_token_tmp(log_dir, None) {
+    scrub_legacy_logs_at(log_dir, unix_day_number());
+}
+
+#[cfg(test)]
+fn scrub_legacy_logs_at(log_dir: &Path, today: i64) {
+    for warning in scrub_legacy_logs_with_token_tmp_at(log_dir, None, today) {
         tracing::warn!("{warning}");
     }
 }
 
-fn scrub_legacy_logs_with_token_tmp(
+fn scrub_legacy_logs_with_token_tmp_at(
     log_dir: &Path,
     legacy_token_tmp: Option<&Path>,
+    today: i64,
 ) -> Vec<String> {
     // Delete by filename date before any rewrite. A rewrite replaces the file,
     // so the old log would otherwise look newer than logs that were left alone.
-    let mut warnings = delete_expired_rotated_logs(log_dir);
+    let mut warnings = delete_expired_rotated_logs_at(log_dir, today);
     // The marker is written only after a clean pass, so a failure retries.
     if marker_is_present(log_dir) {
         warnings.extend(remove_legacy_auth_callback_log(log_dir));
@@ -1411,7 +1436,8 @@ mod tests {
         let token = root.path().join("hsreplay-token.json");
         let temporary = legacy_hsreplay_token_tmp(&token);
         fs::write(&temporary, b"partial").unwrap();
-        let warnings = scrub_legacy_logs_with_token_tmp(root.path(), Some(&temporary));
+        let warnings =
+            scrub_legacy_logs_with_token_tmp_at(root.path(), Some(&temporary), unix_day_number());
         assert!(warnings.is_empty(), "{warnings:?}");
         assert!(!temporary.exists());
 
@@ -1480,7 +1506,8 @@ mod tests {
             )
             .unwrap();
         }
-        let recent = log_dir.join(dated_log_name(unix_day_number() - 1));
+        let today = fixed_today();
+        let recent = log_dir.join(dated_log_name(today - 1));
         fs::write(&recent, b"recent\n").unwrap();
         fs::File::options()
             .write(true)
@@ -1488,7 +1515,7 @@ mod tests {
             .unwrap()
             .set_modified(UNIX_EPOCH)
             .unwrap();
-        let (writer, guard) = open_log_writer(&log_dir).expect("log writer");
+        let (writer, guard) = open_log_writer_at(&log_dir, today).expect("log writer");
         drop(writer);
         drop(guard);
         assert_eq!(fs::read(&recent).unwrap(), b"recent\n");
@@ -1716,6 +1743,13 @@ mod tests {
         assert_eq!(mode(&log_dir), 0o700);
     }
 
+    /// One clock sample. Boundary tests pass this into the `_at` helpers so
+    /// retention does not read the clock a second time and disagree across UTC midnight.
+    #[cfg(unix)]
+    fn fixed_today() -> i64 {
+        unix_day_number()
+    }
+
     #[cfg(unix)]
     fn mode(path: &Path) -> u32 {
         use std::os::unix::fs::PermissionsExt;
@@ -1727,7 +1761,7 @@ mod tests {
     fn retention_uses_filename_date_and_keeps_recent_logs() {
         use std::os::unix::fs::{symlink, PermissionsExt};
         let root = tempfile::tempdir().unwrap();
-        let today_day = unix_day_number();
+        let today_day = fixed_today();
         let recent = root.path().join(dated_log_name(
             today_day - i64::try_from(MAX_LOG_FILES).unwrap(),
         ));
@@ -1766,7 +1800,7 @@ mod tests {
         ));
         symlink(&outside, &link).unwrap();
 
-        let warnings = capture_warnings(|| scrub_legacy_logs(root.path()));
+        let warnings = capture_warnings(|| scrub_legacy_logs_at(root.path(), today_day));
         assert!(!warnings.contains("WARN"), "{warnings}");
         assert!(recent.is_file(), "recent log was deleted");
         assert!(!fs::read(&recent)
@@ -1787,7 +1821,7 @@ mod tests {
             .is_symlink());
         assert_eq!(fs::read(&outside).unwrap(), line.as_bytes());
 
-        let (writer, guard) = open_log_writer(root.path()).expect("log writer");
+        let (writer, guard) = open_log_writer_at(root.path(), today_day).expect("log writer");
         drop(writer);
         drop(guard);
         assert!(
@@ -1804,7 +1838,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let log_dir = root.path().join("logs");
         fs::create_dir(&log_dir).unwrap();
-        let today = unix_day_number();
+        let today = fixed_today();
         let historical: Vec<_> = [30_i64, 45, 60, 90]
             .into_iter()
             .map(|age| {
@@ -1815,13 +1849,13 @@ mod tests {
             .collect();
 
         for pass in 0..2 {
-            let notes = prepare_startup_logs(&log_dir, None, true);
+            let notes = prepare_startup_logs_at(&log_dir, None, true, today);
             assert!(
                 notes.warnings.is_empty(),
                 "pass {pass}: {:?}",
                 notes.warnings
             );
-            let (writer, guard) = open_log_writer(&log_dir).expect("log writer");
+            let (writer, guard) = open_log_writer_at(&log_dir, today).expect("log writer");
             drop(writer);
             drop(guard);
         }
@@ -1840,7 +1874,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let log_dir = root.path().join("logs");
         fs::create_dir(&log_dir).unwrap();
-        let today = unix_day_number();
+        let today = fixed_today();
         let line = format!("uri=?ST={TOKEN}&region=US\n");
         for age in 0..=14 {
             fs::write(log_dir.join(dated_log_name(today - age)), &line).unwrap();
@@ -1850,9 +1884,9 @@ mod tests {
         }
         fs::write(log_dir.join("hearthstone-linux-gui.log.2020-01-03"), &line).unwrap();
 
-        let notes = prepare_startup_logs(&log_dir, None, true);
+        let notes = prepare_startup_logs_at(&log_dir, None, true, today);
         assert!(notes.warnings.is_empty(), "{:?}", notes.warnings);
-        let (writer, guard) = open_log_writer(&log_dir).expect("log writer");
+        let (writer, guard) = open_log_writer_at(&log_dir, today).expect("log writer");
         drop(writer);
         drop(guard);
 
