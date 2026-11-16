@@ -483,41 +483,11 @@ fn validate_token(token: &mut Token) -> Result<()> {
     Ok(())
 }
 
-/// Writes the token through a temporary file and a rename, so a crash cannot
-/// leave a half-written token, and with mode 0600 even when the file already
-/// existed with wider permissions.
+/// Writes the token through [`crate::auth::write_private_file`], so a crash
+/// cannot leave a half-written token and the file is mode 0600 even when it
+/// already existed with wider permissions.
 fn save_token(file: &Path, token: &Token) -> Result<()> {
-    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
-    if let Some(parent) = file
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-    {
-        fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(parent)
-            .with_context(|| format!("failed to create {}", parent.display()))?;
-    }
-    let mut temporary = file.as_os_str().to_owned();
-    temporary.push(".tmp");
-    let temporary = std::path::PathBuf::from(temporary);
-    let _ = fs::remove_file(&temporary);
-    let write = || -> Result<()> {
-        let mut out = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&temporary)
-            .with_context(|| format!("failed to write {}", temporary.display()))?;
-        out.write_all(&serde_json::to_vec(token)?)?;
-        out.sync_all()?;
-        fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600))?;
-        fs::rename(&temporary, file)
-            .with_context(|| format!("failed to replace {}", file.display()))
-    };
-    write().inspect_err(|_| {
-        let _ = fs::remove_file(&temporary);
-    })
+    crate::auth::write_private_file(file, &serde_json::to_vec(token)?)
 }
 
 /// OAuth2 authorization code flow with PKCE and a one-shot local callback server.

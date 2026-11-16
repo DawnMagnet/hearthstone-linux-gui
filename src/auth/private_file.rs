@@ -1,10 +1,21 @@
 use anyhow::{Context, Result};
 use std::{fs, io::Write, path::Path};
 
-/// Replace a credential file atomically, with owner-only permissions on Unix.
-/// A destination symlink is replaced rather than followed. Existing directory
-/// permissions are preserved, including user-selected game directories.
+/// Replace a credential file atomically, with owner-only permissions (`0600`)
+/// on Unix.
 pub fn write_private_file(path: &Path, contents: &[u8]) -> Result<()> {
+    write_private_file_with_mode(path, contents, 0o600)
+}
+
+/// Replace `path` atomically with `contents`.
+///
+/// On Unix the temporary file is given `mode` before it is renamed, so the
+/// destination never appears under a different mode. A destination symlink is
+/// replaced rather than followed. Existing directory permissions are preserved,
+/// including user-selected game directories. The parent directory is synced
+/// after the rename so the new directory entry survives a crash.
+#[cfg_attr(not(unix), allow(unused_variables))]
+pub fn write_private_file_with_mode(path: &Path, contents: &[u8], mode: u32) -> Result<()> {
     let parent = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -26,7 +37,8 @@ pub fn write_private_file(path: &Path, contents: &[u8]) -> Result<()> {
         use std::os::unix::fs::PermissionsExt;
         temporary
             .as_file()
-            .set_permissions(fs::Permissions::from_mode(0o600))?;
+            .set_permissions(fs::Permissions::from_mode(mode))
+            .with_context(|| format!("failed to set permissions on {}", path.display()))?;
     }
     temporary.write_all(contents)?;
     temporary.as_file().sync_all()?;
@@ -34,6 +46,18 @@ pub fn write_private_file(path: &Path, contents: &[u8]) -> Result<()> {
         .persist(path)
         .map_err(|error| error.error)
         .with_context(|| format!("failed to replace {}", path.display()))?;
+    #[cfg(unix)]
+    {
+        let directory = fs::File::open(parent).with_context(|| {
+            format!(
+                "failed to open {} to sync the replacement",
+                parent.display()
+            )
+        })?;
+        directory
+            .sync_all()
+            .with_context(|| format!("failed to sync {}", parent.display()))?;
+    }
     Ok(())
 }
 
@@ -100,6 +124,20 @@ mod tests {
             .unwrap()
             .file_type()
             .is_symlink());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn requested_mode_is_the_mode_visible_at_the_destination() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("helper");
+        write_private_file_with_mode(&path, b"#!/bin/sh\n", 0o700).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"#!/bin/sh\n");
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
     }
 
     #[test]

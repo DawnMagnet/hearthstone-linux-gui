@@ -8,7 +8,7 @@ use std::path::Path;
 use url::Url;
 
 mod private_file;
-pub use private_file::write_private_file;
+pub use private_file::{write_private_file, write_private_file_with_mode};
 
 type Aes128CbcEnc = cbc::Encryptor<Aes128>;
 
@@ -40,10 +40,26 @@ pub fn looks_like_token(value: &str) -> bool {
 }
 
 fn looks_like_token_bytes(bytes: &[u8]) -> bool {
-    bytes.len() >= TOKEN_MIN_LEN
-        && bytes.len() <= TOKEN_MAX_LEN
-        && is_token_prefix(bytes)
-        && bytes[36..].iter().all(|byte| byte.is_ascii_digit())
+    login_token_len_at(bytes, 0) == Some(bytes.len())
+}
+
+/// Length of a login token that starts at `start`.
+///
+/// A longer run of account-id digits is not a token: the encrypted file cannot
+/// hold it, and redacting a shorter prefix would leave a different secret.
+pub(crate) fn login_token_len_at(bytes: &[u8], start: usize) -> Option<usize> {
+    let rest = bytes.get(start..)?;
+    if rest.len() < TOKEN_MIN_LEN || !is_token_prefix(rest) {
+        return None;
+    }
+    let mut len = 36;
+    while len < rest.len() && len < TOKEN_MAX_LEN && rest[len].is_ascii_digit() {
+        len += 1;
+    }
+    if len < TOKEN_MIN_LEN || rest.get(len).is_some_and(u8::is_ascii_digit) {
+        return None;
+    }
+    Some(len)
 }
 
 /// Validates the fixed-width "XX-<32 characters>-" prefix of a token.
