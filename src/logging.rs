@@ -9,16 +9,33 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilte
 
 const LOG_FILE_PREFIX: &str = "hearthstone-linux-gui.log";
 const LEGACY_AUTH_CALLBACK_LOG: &str = "auth-callback.log";
+const SCRUB_MARKER: &str = ".token-scrub-v1";
+/// Daily files kept by the rolling appender. tracing-appender may retain one
+/// fewer than this while it rotates, which is still about two weeks.
+const MAX_LOG_FILES: usize = 14;
 const REDACTED: &[u8] = b"REDACTED";
 
+#[derive(Default)]
+struct StartupNotes {
+    warnings: Vec<String>,
+    debug: Vec<String>,
+}
+
 pub fn init() -> Option<WorkerGuard> {
-    // One pass per process, before the rolling appender opens today's file.
-    // Rewriting a log that is already open would leave the token in the inode
-    // the appender still holds.
+    // Scrub before the rolling appender opens today's file. Rewriting a log
+    // that is already open would leave the token in the inode the appender
+    // still holds. A marker skips the reread after the first successful pass,
+    // and short-lived helper invocations never do it.
     let paths = AppPaths::discover().ok();
-    let mut warnings = paths
+    let mut notes = paths
         .as_ref()
-        .map(|paths| prepare_log_dir(&paths.log_dir))
+        .map(|paths| {
+            prepare_startup_logs(
+                &paths.log_dir,
+                Some(&legacy_hsreplay_token_tmp(&paths.hsreplay_token())),
+                scrub_legacy_logs_for_this_process(),
+            )
+        })
         .unwrap_or_default();
 
     let stderr_layer = tracing_subscriber::fmt::layer()
@@ -52,7 +69,7 @@ pub fn init() -> Option<WorkerGuard> {
             }
         }
         Some(Err(warning)) => {
-            warnings.push(warning);
+            notes.warnings.push(warning);
             let _ = tracing_subscriber::registry()
                 .with(default_filter())
                 .with(stderr_layer)
@@ -68,10 +85,67 @@ pub fn init() -> Option<WorkerGuard> {
         }
     };
 
-    for warning in warnings {
+    for warning in notes.warnings {
         tracing::warn!("{warning}");
     }
+    for note in notes.debug {
+        tracing::debug!("{note}");
+    }
     guard
+}
+
+/// The main launcher scrubs once. `--help`, login callbacks, and the other
+/// short-lived commands must not reread every historical log on the way out.
+fn scrub_legacy_logs_for_this_process() -> bool {
+    invocation_scrubs_legacy_logs(std::env::args().skip(1))
+}
+
+fn invocation_scrubs_legacy_logs(args: impl IntoIterator<Item = impl AsRef<str>>) -> bool {
+    let args: Vec<String> = args
+        .into_iter()
+        .map(|arg| arg.as_ref().to_owned())
+        .collect();
+    if args.iter().any(|arg| is_short_lived_flag(arg)) {
+        return false;
+    }
+    // A bare callback URI is positional. Values of `--region` and `--locale`
+    // are not.
+    let mut skip_value = false;
+    for arg in &args {
+        if skip_value && !arg.starts_with('-') {
+            skip_value = false;
+            continue;
+        }
+        skip_value = false;
+        if let Some((name, _)) = arg.split_once('=') {
+            if flag_takes_value(name) {
+                continue;
+            }
+        }
+        if flag_takes_value(arg) {
+            skip_value = true;
+            continue;
+        }
+        if !arg.starts_with('-') {
+            return false;
+        }
+    }
+    true
+}
+
+fn is_short_lived_flag(arg: &str) -> bool {
+    matches!(
+        arg,
+        "-h" | "--help" | "--print-child-env" | "--no-gui" | "--auth-callback" | "--write-token"
+    ) || arg.starts_with("--auth-callback=")
+        || arg.starts_with("--write-token=")
+}
+
+fn flag_takes_value(arg: &str) -> bool {
+    matches!(
+        arg,
+        "--region" | "--locale" | "--auth-callback" | "--write-token"
+    )
 }
 
 fn default_filter() -> EnvFilter {
@@ -102,19 +176,40 @@ fn mentions_app_filter(filter: &str) -> bool {
     .any(|target| filter.contains(target))
 }
 
-/// Tightens the log directory, deletes the legacy callback log, and rewrites
-/// rolling logs that still contain login tokens. Problems are warnings; none
-/// of them stop startup.
-fn prepare_log_dir(log_dir: &Path) -> Vec<String> {
-    let mut warnings = Vec::new();
-    if let Err(error) = ensure_private_log_dir(log_dir) {
-        warnings.push(format!(
+/// Tightens the log directory and, when `scrub_logs` is set, rewrites rolling
+/// logs that still contain login tokens. Problems are warnings; none of them
+/// stop startup.
+fn prepare_startup_logs(
+    log_dir: &Path,
+    legacy_token_tmp: Option<&Path>,
+    scrub_logs: bool,
+) -> StartupNotes {
+    let mut notes = StartupNotes::default();
+    if is_symlink(log_dir) {
+        // A symlink is an intentional redirect. Chmod would follow it, and
+        // warning on every start would drown the log.
+        notes.debug.push(format!(
+            "log directory {} is a symlink; not changing its permissions",
+            log_dir.display()
+        ));
+    } else if let Err(error) = ensure_private_log_dir(log_dir) {
+        notes.warnings.push(format!(
             "could not restrict log directory {}: {error}",
             log_dir.display()
         ));
     }
-    warnings.extend(scrub_legacy_logs_returning_warnings(log_dir));
-    warnings
+    if scrub_logs {
+        notes
+            .warnings
+            .extend(scrub_legacy_logs_with_token_tmp(log_dir, legacy_token_tmp));
+    }
+    notes
+}
+
+fn is_symlink(path: &Path) -> bool {
+    fs::symlink_metadata(path)
+        .map(|metadata| metadata.file_type().is_symlink())
+        .unwrap_or(false)
 }
 
 fn ensure_private_log_dir(log_dir: &Path) -> io::Result<()> {
@@ -154,6 +249,7 @@ fn open_log_writer(log_dir: &Path) -> Result<(NonBlocking, WorkerGuard), String>
     let file = match tracing_appender::rolling::RollingFileAppender::builder()
         .rotation(tracing_appender::rolling::Rotation::DAILY)
         .filename_prefix(LOG_FILE_PREFIX)
+        .max_log_files(MAX_LOG_FILES)
         .build(log_dir)
     {
         Ok(file) => file,
@@ -255,15 +351,79 @@ fn tighten_file_mode(path: &Path) -> io::Result<()> {
 /// subscriber is installed, because this runs before any subscriber exists.
 #[cfg(test)]
 fn scrub_legacy_logs(log_dir: &Path) {
-    for warning in scrub_legacy_logs_returning_warnings(log_dir) {
+    for warning in scrub_legacy_logs_with_token_tmp(log_dir, None) {
         tracing::warn!("{warning}");
     }
 }
 
-fn scrub_legacy_logs_returning_warnings(log_dir: &Path) -> Vec<String> {
-    let mut warnings = Vec::new();
-    warnings.extend(remove_legacy_auth_callback_log(log_dir));
+fn scrub_legacy_logs_with_token_tmp(
+    log_dir: &Path,
+    legacy_token_tmp: Option<&Path>,
+) -> Vec<String> {
+    // The marker is written only after a clean pass, so a failure retries.
+    if marker_is_present(log_dir) {
+        return remove_legacy_auth_callback_log(log_dir);
+    }
 
+    let mut warnings = remove_legacy_auth_callback_log(log_dir);
+    warnings.extend(scrub_log_files(log_dir));
+    if let Some(legacy_token_tmp) = legacy_token_tmp {
+        warnings.extend(remove_regular_file(
+            legacy_token_tmp,
+            "stale token temporary file",
+        ));
+    }
+    if warnings.is_empty() {
+        if let Err(warning) = write_scrub_marker(log_dir) {
+            warnings.push(warning);
+        }
+    }
+    warnings
+}
+
+fn marker_is_present(log_dir: &Path) -> bool {
+    fs::symlink_metadata(log_dir.join(SCRUB_MARKER))
+        .map(|metadata| metadata.file_type().is_file())
+        .unwrap_or(false)
+}
+
+fn write_scrub_marker(log_dir: &Path) -> Result<(), String> {
+    crate::auth::write_private_file(&log_dir.join(SCRUB_MARKER), b"v1\n").map_err(|error| {
+        format!(
+            "could not record log token scrub in {}: {error:#}",
+            log_dir.display()
+        )
+    })
+}
+
+/// Old HSReplay saves used a fixed `token.json.tmp` name beside the token.
+fn legacy_hsreplay_token_tmp(token_file: &Path) -> PathBuf {
+    let mut temporary = token_file.as_os_str().to_owned();
+    temporary.push(".tmp");
+    PathBuf::from(temporary)
+}
+
+fn remove_regular_file(path: &Path, what: &str) -> Vec<String> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_file() => match fs::remove_file(path) {
+            Ok(()) => Vec::new(),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Vec::new(),
+            Err(error) => vec![format!(
+                "could not remove {what} {}: {error}",
+                path.display()
+            )],
+        },
+        Ok(_) => Vec::new(),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Vec::new(),
+        Err(error) => vec![format!(
+            "could not inspect {what} {}: {error}",
+            path.display()
+        )],
+    }
+}
+
+fn scrub_log_files(log_dir: &Path) -> Vec<String> {
+    let mut warnings = Vec::new();
     let entries = match fs::read_dir(log_dir) {
         Ok(entries) => entries,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return warnings,
@@ -353,8 +513,9 @@ fn is_launcher_log_name(name: &OsStr) -> bool {
         .starts_with(LOG_FILE_PREFIX.as_bytes())
 }
 
-/// Replaces Battle.net `ST=` values, other callback parameters that carry a
-/// login token, and any bare login token. Already-redacted text is unchanged.
+/// Replaces Battle.net `ST=` values (and `ST%3D`, either case), other callback
+/// parameters that carry a login token, and any bare login token.
+/// Already-redacted text is unchanged.
 fn redact_login_tokens(input: &[u8]) -> Vec<u8> {
     let mut output = Vec::with_capacity(input.len());
     let mut index = 0;
@@ -386,10 +547,11 @@ fn sensitive_param_value(input: &[u8], index: usize) -> Option<std::ops::Range<u
     while name_end < input.len() && is_name_byte(input[name_end]) {
         name_end += 1;
     }
-    if name_end == index || input.get(name_end) != Some(&b'=') {
+    let separator = separator_len(input, name_end)?;
+    if name_end == index {
         return None;
     }
-    let value_start = name_end + 1;
+    let value_start = name_end + separator;
     let mut value_end = value_start;
     while value_end < input.len() && !is_value_ender(input[value_end]) {
         value_end += 1;
@@ -429,6 +591,19 @@ fn eq_ignore_ascii_case(left: &[u8], right: &[u8]) -> bool {
             .iter()
             .zip(right)
             .all(|(left, right)| left.eq_ignore_ascii_case(right))
+}
+
+/// `=` or a percent-encoded `=` (`%3D` / `%3d`).
+fn separator_len(input: &[u8], index: usize) -> Option<usize> {
+    if input.get(index) == Some(&b'=') {
+        return Some(1);
+    }
+    let encoded = input.get(index..index + 3)?;
+    if encoded[0] == b'%' && encoded[1] == b'3' && encoded[2].eq_ignore_ascii_case(&b'd') {
+        Some(3)
+    } else {
+        None
+    }
 }
 
 fn is_name_start(bytes: &[u8], index: usize) -> bool {
@@ -511,8 +686,178 @@ mod tests {
 
     #[test]
     fn leaves_unrelated_assignments_alone() {
-        let input = b"LAST=foo token_path=/home/me/token region=US\n";
+        let input = b"LAST=foo token_path=/home/me/token region=US LAST%3Dfoo\n";
         assert_eq!(redact_login_tokens(input), input);
+    }
+
+    #[test]
+    fn redacts_percent_encoded_st_parameter() {
+        let input = format!("uri=?ST%3D{TOKEN}&x=1 st%3dshort-secret foo%3D{TOKEN}");
+        let once = redact_login_tokens(input.as_bytes());
+        let text = String::from_utf8(once.clone()).unwrap();
+        assert!(!text.contains(TOKEN), "{text}");
+        assert!(text.contains("?ST%3DREDACTED&x=1"), "{text}");
+        assert!(text.contains("st%3dREDACTED"), "{text}");
+        assert!(text.contains("foo%3DREDACTED"), "{text}");
+        assert!(!text.contains("short-secret"), "{text}");
+        assert_eq!(redact_login_tokens(&once), once);
+    }
+
+    #[test]
+    fn main_launcher_scrubs_and_short_invocations_do_not() {
+        assert!(invocation_scrubs_legacy_logs(std::iter::empty::<&str>()));
+        assert!(invocation_scrubs_legacy_logs(["--launch"]));
+        assert!(invocation_scrubs_legacy_logs([
+            "--install",
+            "--region",
+            "eu"
+        ]));
+        assert!(!invocation_scrubs_legacy_logs(["--help"]));
+        assert!(!invocation_scrubs_legacy_logs(["-h"]));
+        assert!(!invocation_scrubs_legacy_logs([
+            "--auth-callback",
+            "wtcg://x"
+        ]));
+        assert!(!invocation_scrubs_legacy_logs(["--auth-callback=wtcg://x"]));
+        assert!(!invocation_scrubs_legacy_logs(["--no-gui"]));
+        assert!(!invocation_scrubs_legacy_logs(["--print-child-env"]));
+        assert!(!invocation_scrubs_legacy_logs(["--write-token", TOKEN]));
+        assert!(!invocation_scrubs_legacy_logs([
+            "blizzard-hearthstone://localhost:0/?ST=x"
+        ]));
+    }
+
+    #[test]
+    fn scrub_marker_skips_later_passes_and_short_invocations_do_not_write_it() {
+        let root = tempfile::tempdir().unwrap();
+        let log = root.path().join("hearthstone-linux-gui.log");
+        fs::write(&log, format!("ST={TOKEN}\n")).unwrap();
+
+        let skipped = prepare_startup_logs(root.path(), None, false);
+        assert!(skipped.warnings.is_empty(), "{:?}", skipped.warnings);
+        assert!(fs::read(&log)
+            .unwrap()
+            .windows(TOKEN.len())
+            .any(|window| window == TOKEN.as_bytes()));
+        assert!(!root.path().join(SCRUB_MARKER).exists());
+
+        let warnings = capture_warnings(|| scrub_legacy_logs(root.path()));
+        assert!(!warnings.contains("WARN"), "{warnings}");
+        assert!(!fs::read(&log)
+            .unwrap()
+            .windows(TOKEN.len())
+            .any(|window| window == TOKEN.as_bytes()));
+        let marker = root.path().join(SCRUB_MARKER);
+        assert!(marker.is_file());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&marker).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+
+        fs::write(&log, format!("ST={TOKEN}\n")).unwrap();
+        let again = capture_warnings(|| scrub_legacy_logs(root.path()));
+        assert!(!again.contains("WARN"), "{again}");
+        assert!(fs::read(&log)
+            .unwrap()
+            .windows(TOKEN.len())
+            .any(|window| window == TOKEN.as_bytes()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn removes_a_regular_legacy_token_temp_file_and_leaves_other_types() {
+        use std::os::unix::fs::symlink;
+        let root = tempfile::tempdir().unwrap();
+        let token = root.path().join("hsreplay-token.json");
+        let temporary = legacy_hsreplay_token_tmp(&token);
+        fs::write(&temporary, b"partial").unwrap();
+        let warnings = scrub_legacy_logs_with_token_tmp(root.path(), Some(&temporary));
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert!(!temporary.exists());
+
+        fs::create_dir(&temporary).unwrap();
+        assert!(remove_regular_file(&temporary, "stale token temporary file").is_empty());
+        assert!(temporary.is_dir());
+        fs::remove_dir(&temporary).unwrap();
+
+        let target = root.path().join("elsewhere");
+        fs::write(&target, b"keep").unwrap();
+        symlink(&target, &temporary).unwrap();
+        assert!(remove_regular_file(&temporary, "stale token temporary file").is_empty());
+        assert!(fs::symlink_metadata(&temporary)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(fs::read(&target).unwrap(), b"keep");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_log_directory_is_debug_not_a_repeated_warning() {
+        use std::os::unix::fs::symlink;
+        let root = tempfile::tempdir().unwrap();
+        let real = root.path().join("real-logs");
+        fs::create_dir(&real).unwrap();
+        fs::write(
+            real.join("hearthstone-linux-gui.log"),
+            format!("ST={TOKEN}\n"),
+        )
+        .unwrap();
+        let link = root.path().join("logs");
+        symlink(&real, &link).unwrap();
+
+        let first = prepare_startup_logs(&link, None, true);
+        assert!(first.warnings.is_empty(), "{:?}", first.warnings);
+        assert!(first.debug.iter().any(|note| note.contains("symlink")));
+        assert!(!fs::read(real.join("hearthstone-linux-gui.log"))
+            .unwrap()
+            .windows(TOKEN.len())
+            .any(|window| window == TOKEN.as_bytes()));
+
+        fs::write(
+            real.join("hearthstone-linux-gui.log"),
+            format!("ST={TOKEN}\n"),
+        )
+        .unwrap();
+        let second = prepare_startup_logs(&link, None, true);
+        assert!(second.warnings.is_empty(), "{:?}", second.warnings);
+        assert!(fs::read(real.join("hearthstone-linux-gui.log"))
+            .unwrap()
+            .windows(TOKEN.len())
+            .any(|window| window == TOKEN.as_bytes()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rolling_appender_drops_logs_beyond_the_retention_cap() {
+        let root = tempfile::tempdir().unwrap();
+        let log_dir = root.path().join("logs");
+        fs::create_dir(&log_dir).unwrap();
+        for day in 1..=20 {
+            fs::write(
+                log_dir.join(format!("hearthstone-linux-gui.log.2020-01-{day:02}")),
+                b"old\n",
+            )
+            .unwrap();
+        }
+        let (writer, guard) = open_log_writer(&log_dir).expect("log writer");
+        drop(writer);
+        drop(guard);
+        let count = fs::read_dir(&log_dir)
+            .unwrap()
+            .filter(|entry| {
+                entry.as_ref().ok().is_some_and(|entry| {
+                    entry.file_type().is_ok_and(|kind| kind.is_file())
+                        && is_launcher_log_name(&entry.file_name())
+                })
+            })
+            .count();
+        assert!(count <= MAX_LOG_FILES, "{count}");
+        assert!(count > 1, "{count}");
     }
 
     #[cfg(unix)]
@@ -697,8 +1042,8 @@ mod tests {
         fs::write(&existing, b"plain log line\n").unwrap();
         fs::set_permissions(&existing, fs::Permissions::from_mode(0o644)).unwrap();
 
-        let warnings = prepare_log_dir(&log_dir);
-        assert!(warnings.is_empty(), "{warnings:?}");
+        let notes = prepare_startup_logs(&log_dir, None, true);
+        assert!(notes.warnings.is_empty(), "{:?}", notes.warnings);
         assert_eq!(mode(&log_dir), 0o700);
         assert_eq!(mode(&existing), 0o600);
         assert_eq!(fs::read(&existing).unwrap(), b"plain log line\n");
