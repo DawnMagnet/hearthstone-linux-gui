@@ -76,9 +76,6 @@ url = "2.5.8"
 walkdir = "2.5.0"
 xz2 = "0.1.7"
 
-[target.'cfg(unix)'.dependencies]
-libc = "0.2.191"
-
 # Pinned. 0.11 needs Rust 1.93 and gtk4 0.11.
 relm4 = { version = "=0.10.1", default-features = false, features = ["css", "macros", "libadwaita"], optional = true }
 relm4-components = { version = "=0.10.1", features = ["libadwaita"], optional = true }
@@ -92,6 +89,9 @@ relm4-components = { version = "=0.10.1", features = ["libadwaita"], optional = 
 # gnome_43+ features are unused; they would raise GTK (and pango) too.
 gtk4 = { version = "0.10", features = ["v4_4"], optional = true }
 libadwaita = { version = "0.8", features = ["v1_1"], optional = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.191"
 
 [dev-dependencies]
 # examples/blte_bench.rs reuses crates already depended on by the library.

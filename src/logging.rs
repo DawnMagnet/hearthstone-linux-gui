@@ -353,6 +353,7 @@ fn utc_unix_day(now: SystemTime) -> i64 {
 }
 
 /// `YYYY-MM-DD` for a UTC day count, matching tracing-appender's daily suffix.
+#[cfg(unix)]
 fn dated_log_name(day: i64) -> String {
     let (year, month, day_of_month) = date_from_unix_day(day);
     format!("{LOG_FILE_PREFIX}.{year:04}-{month:02}-{day_of_month:02}")
@@ -388,8 +389,10 @@ fn filename_date_outside_retention(file_day: i64, today: i64) -> bool {
 /// Names that only share the prefix, symlinks, and directories are left alone.
 /// The file's mtime and ctime are not consulted.
 ///
-/// If the newest dated log is itself outside the window, nothing is removed.
-/// A clock set far ahead would otherwise treat every existing file as expired.
+/// The newest [`MAX_LOG_FILES`] dated logs are always kept. A file is removed
+/// only when it is older than those and its filename date is outside the
+/// window. A clock set far ahead still cannot drop the whole history: today's
+/// pre-created file does not make every older log eligible.
 fn delete_expired_rotated_logs(log_dir: &Path) -> Vec<String> {
     let mut warnings = Vec::new();
     let today = unix_day_number();
@@ -405,8 +408,7 @@ fn delete_expired_rotated_logs(log_dir: &Path) -> Vec<String> {
         }
     };
 
-    let mut expired = Vec::new();
-    let mut newest_day: Option<i64> = None;
+    let mut dated = Vec::new();
     for entry in entries {
         let entry = match entry {
             Ok(entry) => entry,
@@ -421,16 +423,24 @@ fn delete_expired_rotated_logs(log_dir: &Path) -> Vec<String> {
         let Some(file_day) = rotated_log_day(&entry.file_name()) else {
             continue;
         };
-        newest_day = Some(newest_day.map_or(file_day, |day| day.max(file_day)));
-        if filename_date_outside_retention(file_day, today) {
-            expired.push(entry.path());
+        match fs::symlink_metadata(entry.path()) {
+            Ok(metadata) if metadata.file_type().is_file() => {
+                dated.push((file_day, entry.path()));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => warnings.push(format!(
+                "could not inspect {} while applying log retention: {error}",
+                entry.path().display()
+            )),
         }
     }
-    if newest_day.is_some_and(|day| filename_date_outside_retention(day, today)) {
-        return warnings;
-    }
+    dated.sort_by_key(|(day, _)| std::cmp::Reverse(*day));
 
-    for path in expired {
+    for (file_day, path) in dated.into_iter().skip(MAX_LOG_FILES) {
+        if !filename_date_outside_retention(file_day, today) {
+            continue;
+        }
         match fs::symlink_metadata(&path) {
             Ok(metadata) if metadata.file_type().is_file() => {
                 if let Err(error) = fs::remove_file(&path) {
@@ -500,6 +510,7 @@ fn unix_day_from_date(year: i32, month: u32, day: u32) -> Option<i64> {
     Some(era * 146097 + i64::try_from(day_of_era).ok()? - 719468)
 }
 
+#[cfg(unix)]
 fn date_from_unix_day(mut days: i64) -> (i32, u32, u32) {
     // Howard Hinnant, `civil_from_days`.
     days += 719468;
@@ -1304,6 +1315,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn civil_dates_round_trip_unix_days() {
         assert_eq!(unix_day_from_date(1970, 1, 1), Some(0));
@@ -1480,17 +1492,23 @@ mod tests {
         drop(writer);
         drop(guard);
         assert_eq!(fs::read(&recent).unwrap(), b"recent\n");
-        let dated = fs::read_dir(&log_dir)
-            .unwrap()
-            .filter_map(|entry| entry.ok())
-            .filter(|entry| rotated_log_day(&entry.file_name()).is_some())
-            .count();
-        assert!(dated <= MAX_LOG_FILES + 1, "{dated}");
-        assert!(dated >= 2, "{dated}");
-        for day in 1..=20 {
-            assert!(!log_dir
-                .join(format!("hearthstone-linux-gui.log.2020-01-{day:02}"))
-                .exists());
+        // Newest 14 at prune time are yesterday plus 2020-01-08..20. Today is
+        // created after that prune, so the January 1–7 files are the ones removed.
+        for day in 1..=7 {
+            assert!(
+                !log_dir
+                    .join(format!("hearthstone-linux-gui.log.2020-01-{day:02}"))
+                    .exists(),
+                "2020-01-{day:02} should be outside the newest {MAX_LOG_FILES}"
+            );
+        }
+        for day in 8..=20 {
+            assert!(
+                log_dir
+                    .join(format!("hearthstone-linux-gui.log.2020-01-{day:02}"))
+                    .is_file(),
+                "2020-01-{day:02} is among the newest {MAX_LOG_FILES}"
+            );
         }
     }
 
@@ -1720,6 +1738,15 @@ mod tests {
         let invalid = root.path().join("hearthstone-linux-gui.log.2021-02-29");
         let current = root.path().join(LOG_FILE_PREFIX);
         let line = format!("ST={TOKEN}\n");
+        // Fourteen newer dated logs put `expired` past the keep set. `recent`
+        // is outside that set too, but its filename date is still inside the window.
+        for age in 0..i64::try_from(MAX_LOG_FILES).unwrap() {
+            fs::write(
+                root.path().join(dated_log_name(today_day - age)),
+                b"plain\n",
+            )
+            .unwrap();
+        }
         fs::write(&recent, &line).unwrap();
         fs::write(&expired, &line).unwrap();
         fs::write(&user, &line).unwrap();
@@ -1771,28 +1798,40 @@ mod tests {
         assert_eq!(fs::read(&user).unwrap(), line.as_bytes());
     }
 
+    #[cfg(unix)]
     #[test]
-    fn clock_jump_skips_pruning_when_every_dated_log_is_outside_the_window() {
+    fn clock_jump_keeps_history_across_two_startups() {
         let root = tempfile::tempdir().unwrap();
+        let log_dir = root.path().join("logs");
+        fs::create_dir(&log_dir).unwrap();
         let today = unix_day_number();
-        let window = i64::try_from(MAX_LOG_FILES).unwrap();
-        let newest = root.path().join(dated_log_name(today - window - 1));
-        let older = root.path().join(dated_log_name(today - window - 30));
-        fs::write(&newest, b"newest\n").unwrap();
-        fs::write(&older, b"older\n").unwrap();
+        let historical: Vec<_> = [30_i64, 45, 60, 90]
+            .into_iter()
+            .map(|age| {
+                let path = log_dir.join(dated_log_name(today - age));
+                fs::write(&path, format!("history {age}\n")).unwrap();
+                path
+            })
+            .collect();
 
-        let warnings = delete_expired_rotated_logs(root.path());
-        assert!(warnings.is_empty(), "{warnings:?}");
-        assert_eq!(fs::read(&newest).unwrap(), b"newest\n");
-        assert_eq!(fs::read(&older).unwrap(), b"older\n");
+        for pass in 0..2 {
+            let notes = prepare_startup_logs(&log_dir, None, true);
+            assert!(
+                notes.warnings.is_empty(),
+                "pass {pass}: {:?}",
+                notes.warnings
+            );
+            let (writer, guard) = open_log_writer(&log_dir).expect("log writer");
+            drop(writer);
+            drop(guard);
+        }
 
-        let recent = root.path().join(dated_log_name(today - 1));
-        fs::write(&recent, b"recent\n").unwrap();
-        let warnings = delete_expired_rotated_logs(root.path());
-        assert!(warnings.is_empty(), "{warnings:?}");
-        assert_eq!(fs::read(&recent).unwrap(), b"recent\n");
-        assert!(!newest.exists());
-        assert!(!older.exists());
+        for path in &historical {
+            assert!(path.is_file(), "lost {}", path.display());
+            let body = fs::read(path).unwrap();
+            assert!(body.starts_with(b"history "), "{}", path.display());
+        }
+        assert!(log_dir.join(dated_log_name(today)).is_file());
     }
 
     #[cfg(unix)]

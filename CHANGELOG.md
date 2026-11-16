@@ -7,9 +7,9 @@
 - Rotated logs are removed when the date in the filename
   (`hearthstone-linux-gui.log.YYYY-MM-DD`) is more than 14 days before today
   (UTC). Timestamps are not used, so rewriting an old log during the
-  login-token scrub cannot make it look newer than a recent one. If every
-  dated log is outside that window, pruning is skipped so a clock set far
-  ahead cannot delete the whole history. Files that only share the log-name
+  login-token scrub cannot make it look newer than a recent one. The newest
+  14 dated logs are always kept, so a clock set far ahead cannot delete the
+  history on the next launch. Files that only share the log-name
   prefix are not part of that retention and are left in place.
 
 ## v0.4.0 - 2026-10-29
