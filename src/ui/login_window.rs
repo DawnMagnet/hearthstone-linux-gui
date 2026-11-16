@@ -81,7 +81,7 @@ pub fn run(program: &Path, url: &str, cancel: &CancellationToken) -> Outcome {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit());
-    let mut child = match command.spawn() {
+    let mut child = match spawn_retrying_text_busy(&mut command) {
         Ok(child) => child,
         Err(error) => return Outcome::Failed(format!("{}: {error}", program.display())),
     };
@@ -107,6 +107,26 @@ pub fn run(program: &Path, url: &str, cancel: &CancellationToken) -> Outcome {
         }
     };
     outcome(status, &join_reader(reader))
+}
+
+/// Starts the login window, retrying when the executable is still open for
+/// writing. That is `ETXTBSY`: a helper that was just installed, or a test
+/// script that was just written, can fail the first `exec` in the Nix sandbox.
+fn spawn_retrying_text_busy(command: &mut Command) -> io::Result<Child> {
+    let mut pause = Duration::from_millis(10);
+    loop {
+        match command.spawn() {
+            Ok(child) => return Ok(child),
+            Err(error)
+                if error.kind() == io::ErrorKind::ExecutableFileBusy
+                    && pause <= Duration::from_millis(160) =>
+            {
+                std::thread::sleep(pause);
+                pause *= 2;
+            }
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 /// Waits for the login window to exit. `None` means `cancel` killed it.
@@ -196,8 +216,15 @@ mod tests {
     fn helper_script(body: &str) -> (tempfile::TempDir, PathBuf) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("hearthstone-linux-gui-login");
-        fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        {
+            use std::io::Write;
+            let mut file = fs::File::create(&path).unwrap();
+            file.write_all(format!("#!/bin/sh\n{body}\n").as_bytes())
+                .unwrap();
+            file.sync_all().unwrap();
+        }
         fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        let _ = fs::File::open(dir.path()).and_then(|directory| directory.sync_all());
         (dir, path)
     }
 
