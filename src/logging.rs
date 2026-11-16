@@ -603,24 +603,52 @@ mod tests {
         fs::write(&second, &line).unwrap();
         fs::write(log_dir.join(LEGACY_AUTH_CALLBACK_LOG), b"old token").unwrap();
         fs::set_permissions(&log_dir, fs::Permissions::from_mode(0o555)).unwrap();
+        // Root ignores mode bits, so the package build can still create files
+        // here. Only require a warning when the directory actually rejects writes.
+        let blocked = !can_create_file(&log_dir);
 
         let warnings = capture_warnings(|| scrub_legacy_logs(&log_dir));
         fs::set_permissions(&log_dir, fs::Permissions::from_mode(0o755)).unwrap();
 
-        assert!(
-            warnings.contains("could not rewrite"),
-            "expected a rewrite warning, got {warnings}"
-        );
-        assert!(
-            warnings.contains("could not remove legacy auth callback log"),
-            "expected a delete warning, got {warnings}"
-        );
-        assert_eq!(fs::read(&first).unwrap(), line.as_bytes());
-        assert_eq!(fs::read(&second).unwrap(), line.as_bytes());
-        assert_eq!(
-            fs::read(log_dir.join(LEGACY_AUTH_CALLBACK_LOG)).unwrap(),
-            b"old token"
-        );
+        if blocked {
+            assert!(
+                warnings.contains("could not rewrite"),
+                "expected a rewrite warning, got {warnings}"
+            );
+            assert!(
+                warnings.contains("could not remove legacy auth callback log"),
+                "expected a delete warning, got {warnings}"
+            );
+            assert_eq!(fs::read(&first).unwrap(), line.as_bytes());
+            assert_eq!(fs::read(&second).unwrap(), line.as_bytes());
+            assert_eq!(
+                fs::read(log_dir.join(LEGACY_AUTH_CALLBACK_LOG)).unwrap(),
+                b"old token"
+            );
+        } else {
+            assert!(!warnings.contains("WARN"), "{warnings}");
+            assert!(!fs::read(&first)
+                .unwrap()
+                .windows(TOKEN.len())
+                .any(|window| window == TOKEN.as_bytes()));
+            assert!(!fs::read(&second)
+                .unwrap()
+                .windows(TOKEN.len())
+                .any(|window| window == TOKEN.as_bytes()));
+            assert!(!log_dir.join(LEGACY_AUTH_CALLBACK_LOG).exists());
+        }
+    }
+
+    #[cfg(unix)]
+    fn can_create_file(dir: &Path) -> bool {
+        let probe = dir.join(".write-probe");
+        match fs::write(&probe, b"x") {
+            Ok(()) => {
+                let _ = fs::remove_file(&probe);
+                true
+            }
+            Err(_) => false,
+        }
     }
 
     #[test]
