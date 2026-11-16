@@ -122,18 +122,34 @@ fn desktop_exec_arg(path: &Path) -> Vec<u8> {
             escaped.push(byte);
         }
     }
-    let needs_quotes = match std::str::from_utf8(bytes) {
+    if !needs_desktop_quotes(bytes) {
+        return escaped;
+    }
+    // Desktop Entry spec: a quoted argument escapes ", `, $, and \ with a backslash.
+    let mut quoted = Vec::with_capacity(escaped.len() + 2);
+    quoted.push(b'"');
+    for &byte in &escaped {
+        if matches!(byte, b'"' | b'`' | b'$' | b'\\') {
+            quoted.push(b'\\');
+        }
+        quoted.push(byte);
+    }
+    quoted.push(b'"');
+    quoted
+}
+
+fn needs_desktop_quotes(bytes: &[u8]) -> bool {
+    if bytes.iter().any(|byte| {
+        matches!(
+            byte,
+            b'"' | b'`' | b'$' | b'\\' | b' ' | b'\t' | b'\n' | b'\r'
+        )
+    }) {
+        return true;
+    }
+    match std::str::from_utf8(bytes) {
         Ok(text) => text.chars().any(char::is_whitespace),
         Err(_) => bytes.iter().any(u8::is_ascii_whitespace),
-    };
-    if needs_quotes {
-        let mut quoted = Vec::with_capacity(escaped.len() + 2);
-        quoted.push(b'"');
-        quoted.extend_from_slice(&escaped);
-        quoted.push(b'"');
-        quoted
-    } else {
-        escaped
     }
 }
 
@@ -351,5 +367,25 @@ mod tests {
             "non-utf8 path was replaced with U+FFFD"
         );
         assert!(script.windows(4).any(|window| window == b"'\\''"));
+    }
+
+    #[test]
+    fn desktop_exec_escapes_reserved_characters_inside_quotes() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        let plain = desktop_exec_arg(Path::new("/tmp/helper"));
+        assert_eq!(plain, b"/tmp/helper");
+        let path = Path::new(OsStr::from_bytes(b"/tmp/my dir/$\"`\\helper%"));
+        let quoted = desktop_exec_arg(path);
+        let mut expected = Vec::new();
+        expected.push(b'"');
+        expected.extend_from_slice(b"/tmp/my dir/");
+        expected.extend_from_slice(br"\$");
+        expected.extend_from_slice(br#"\""#);
+        expected.extend_from_slice(br"\`");
+        expected.extend_from_slice(br"\\");
+        expected.extend_from_slice(b"helper%%");
+        expected.push(b'"');
+        assert_eq!(quoted, expected);
     }
 }

@@ -13,6 +13,9 @@ const SCRUB_MARKER: &str = ".token-scrub-v1";
 /// Daily files kept by the rolling appender. tracing-appender may retain one
 /// fewer than this while it rotates, which is still about two weeks.
 const MAX_LOG_FILES: usize = 14;
+/// Longer lines are not parsed. A line this long that still contains a login
+/// token is replaced in one step so a hostile log cannot stall startup.
+const MAX_SCRUB_LINE: usize = 64 * 1024;
 const REDACTED: &[u8] = b"REDACTED";
 
 #[derive(Default)]
@@ -271,10 +274,10 @@ fn open_log_writer(log_dir: &Path) -> Result<(NonBlocking, WorkerGuard), String>
     Ok(tracing_appender::non_blocking(writer))
 }
 
-/// Chmods log files created by a later daily rotation. The directory is
-/// already `0700`; this keeps the file itself `0600` if that directory is
-/// later relaxed. Warnings are not emitted here: a log line must not recurse
-/// back into this writer.
+/// Chmods log files created by a later daily rotation. tracing-appender 0.2
+/// opens those files itself and has no creation mode, so the mode is set on
+/// the write that creates the file. The directory is already `0700`.
+/// Warnings are not emitted here: a log line must not recurse into this writer.
 struct RestrictingWriter<W> {
     inner: W,
     log_dir: PathBuf,
@@ -516,30 +519,75 @@ fn is_launcher_log_name(name: &OsStr) -> bool {
 /// Replaces Battle.net `ST=` values (and `ST%3D`, either case), other callback
 /// parameters that carry a login token, and any bare login token.
 /// Already-redacted text is unchanged.
+///
+/// The scan is linear. A non-sensitive `name=` does not walk its value; the
+/// cursor stays on the value so a later `ST=` is still found, without rereading
+/// the suffix from every byte.
 fn redact_login_tokens(input: &[u8]) -> Vec<u8> {
     let mut output = Vec::with_capacity(input.len());
+    let mut start = 0;
+    while start < input.len() {
+        let mut end = start;
+        while end < input.len() && input[end] != b'\n' {
+            end += 1;
+        }
+        let line = &input[start..end];
+        if line.len() > MAX_SCRUB_LINE && line_has_sensitive_marker(line) {
+            output.extend_from_slice(b"REDACTED");
+        } else {
+            redact_line(line, &mut output);
+        }
+        if end < input.len() {
+            output.push(b'\n');
+            start = end + 1;
+        } else {
+            break;
+        }
+    }
+    output
+}
+
+fn redact_line(line: &[u8], output: &mut Vec<u8>) {
     let mut index = 0;
-    while index < input.len() {
-        if let Some(value) = sensitive_param_value(input, index) {
-            output.extend_from_slice(&input[index..value.start]);
-            output.extend_from_slice(REDACTED);
-            index = value.end;
+    while index < line.len() {
+        if let Some(found) = assignment_at(line, index) {
+            let name = &line[index..found.name_end];
+            if is_sensitive_param(name) {
+                let value_end = value_end(line, found.value_start);
+                if value_end > found.value_start {
+                    output.extend_from_slice(&line[index..found.value_start]);
+                    output.extend_from_slice(REDACTED);
+                    index = value_end;
+                    continue;
+                }
+            } else if let Some(len) = exact_token_len(line, found.value_start) {
+                output.extend_from_slice(&line[index..found.value_start]);
+                output.extend_from_slice(REDACTED);
+                index = found.value_start + len;
+                continue;
+            }
+            output.extend_from_slice(&line[index..found.value_start]);
+            index = found.value_start;
             continue;
         }
-        if is_name_start(input, index) {
-            if let Some(len) = crate::auth::login_token_len_at(input, index) {
+        if is_name_start(line, index) {
+            if let Some(len) = crate::auth::login_token_len_at(line, index) {
                 output.extend_from_slice(REDACTED);
                 index += len;
                 continue;
             }
         }
-        output.push(input[index]);
+        output.push(line[index]);
         index += 1;
     }
-    output
 }
 
-fn sensitive_param_value(input: &[u8], index: usize) -> Option<std::ops::Range<usize>> {
+struct Assignment {
+    name_end: usize,
+    value_start: usize,
+}
+
+fn assignment_at(input: &[u8], index: usize) -> Option<Assignment> {
     if !is_name_start(input, index) {
         return None;
     }
@@ -547,26 +595,53 @@ fn sensitive_param_value(input: &[u8], index: usize) -> Option<std::ops::Range<u
     while name_end < input.len() && is_name_byte(input[name_end]) {
         name_end += 1;
     }
-    let separator = separator_len(input, name_end)?;
     if name_end == index {
         return None;
     }
-    let value_start = name_end + separator;
+    let separator = separator_len(input, name_end)?;
+    Some(Assignment {
+        name_end,
+        value_start: name_end + separator,
+    })
+}
+
+fn value_end(input: &[u8], value_start: usize) -> usize {
     let mut value_end = value_start;
     while value_end < input.len() && !is_value_ender(input[value_end]) {
         value_end += 1;
     }
-    if value_start == value_end {
-        return None;
-    }
-    let name = &input[index..name_end];
-    let value = &input[value_start..value_end];
-    let token_value = crate::auth::login_token_len_at(value, 0) == Some(value.len());
-    if is_sensitive_param(name) || token_value {
-        Some(value_start..value_end)
+    value_end
+}
+
+/// Token length when the value is exactly one login token.
+fn exact_token_len(input: &[u8], value_start: usize) -> Option<usize> {
+    let len = crate::auth::login_token_len_at(input, value_start)?;
+    let after = value_start + len;
+    if after == input.len() || is_value_ender(input[after]) {
+        Some(len)
     } else {
         None
     }
+}
+
+fn line_has_sensitive_marker(line: &[u8]) -> bool {
+    let mut index = 0;
+    while index < line.len() {
+        if let Some(found) = assignment_at(line, index) {
+            if is_sensitive_param(&line[index..found.name_end])
+                || exact_token_len(line, found.value_start).is_some()
+            {
+                return true;
+            }
+            index = found.value_start;
+            continue;
+        }
+        if is_name_start(line, index) && crate::auth::login_token_len_at(line, index).is_some() {
+            return true;
+        }
+        index += 1;
+    }
+    false
 }
 
 fn is_sensitive_param(name: &[u8]) -> bool {
@@ -701,6 +776,33 @@ mod tests {
         assert!(text.contains("foo%3DREDACTED"), "{text}");
         assert!(!text.contains("short-secret"), "{text}");
         assert_eq!(redact_login_tokens(&once), once);
+    }
+
+    #[test]
+    fn oversized_line_with_a_token_is_replaced_wholesale() {
+        let mut line = vec![b'x'; MAX_SCRUB_LINE + 8];
+        line.extend_from_slice(format!("ST={TOKEN}").as_bytes());
+        line.push(b'\n');
+        line.extend_from_slice(b"next ST=kept-out\n");
+        let text = String::from_utf8(redact_login_tokens(&line)).unwrap();
+        assert_eq!(text, "REDACTED\nnext ST=REDACTED\n");
+        assert!(!text.contains(TOKEN));
+    }
+
+    #[test]
+    fn pathological_assignments_stay_linear() {
+        let mut input = Vec::with_capacity(1024 * 1024);
+        while input.len() + 2 <= 1024 * 1024 {
+            input.extend_from_slice(b"a=");
+        }
+        let started = std::time::Instant::now();
+        let output = redact_login_tokens(&input);
+        let elapsed = started.elapsed();
+        assert_eq!(output, input);
+        assert!(
+            elapsed < std::time::Duration::from_secs(1),
+            "redaction took {elapsed:?}"
+        );
     }
 
     #[test]
