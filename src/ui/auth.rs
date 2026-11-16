@@ -114,28 +114,42 @@ fn user_desktop_entry(helper: &Path) -> Vec<u8> {
 
 fn desktop_exec_arg(path: &Path) -> Vec<u8> {
     let bytes = path.as_os_str().as_encoded_bytes();
-    let mut escaped = Vec::with_capacity(bytes.len());
+    // Exec-level escapes first. The desktop-entry string escapes are applied
+    // before Exec unquoting, so every backslash that Exec must still see is
+    // written a second time: a literal backslash is `\\\\` and a literal `$`
+    // is `\\$`.
+    let mut exec = Vec::with_capacity(bytes.len());
     for &byte in bytes {
         if byte == b'%' {
-            escaped.extend_from_slice(b"%%");
+            exec.extend_from_slice(b"%%");
         } else {
-            escaped.push(byte);
+            exec.push(byte);
         }
     }
-    if !needs_desktop_quotes(bytes) {
-        return escaped;
-    }
-    // Desktop Entry spec: a quoted argument escapes ", `, $, and \ with a backslash.
-    let mut quoted = Vec::with_capacity(escaped.len() + 2);
-    quoted.push(b'"');
-    for &byte in &escaped {
-        if matches!(byte, b'"' | b'`' | b'$' | b'\\') {
-            quoted.push(b'\\');
+    let mut quoted = Vec::with_capacity(exec.len() + 2);
+    if needs_desktop_quotes(bytes) {
+        quoted.push(b'"');
+        for &byte in &exec {
+            if matches!(byte, b'"' | b'`' | b'$' | b'\\') {
+                quoted.push(b'\\');
+            }
+            quoted.push(byte);
         }
-        quoted.push(byte);
+        quoted.push(b'"');
+    } else {
+        quoted = exec;
     }
-    quoted.push(b'"');
-    quoted
+    let mut file_value = Vec::with_capacity(quoted.len());
+    for &byte in &quoted {
+        match byte {
+            b'\\' => file_value.extend_from_slice(br"\\"),
+            b'\n' => file_value.extend_from_slice(br"\n"),
+            b'\t' => file_value.extend_from_slice(br"\t"),
+            b'\r' => file_value.extend_from_slice(br"\r"),
+            other => file_value.push(other),
+        }
+    }
+    file_value
 }
 
 fn needs_desktop_quotes(bytes: &[u8]) -> bool {
@@ -286,17 +300,17 @@ mod tests {
         let exe = root
             .path()
             .join("launcher ' $(touch injected) `touch injected`");
-        std::fs::write(&exe, "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$0.args\"\n").unwrap();
-        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o700)).unwrap();
+        write_executable(&exe, "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$0.args\"\n");
         let helper = install_auth_callback_helper(&paths, &exe).unwrap();
         let uri =
             "blizzard-hearthstone://localhost:0/?ST=US-0123456789ABCDEFGHIJKLMNOPQRSTUV-1234567";
-        let output = std::process::Command::new("/bin/sh")
-            .arg(&helper)
-            .arg(uri)
-            .current_dir(root.path())
-            .output()
-            .unwrap();
+        let output = run_retrying_text_busy(
+            std::process::Command::new("/bin/sh")
+                .arg(&helper)
+                .arg(uri)
+                .current_dir(root.path()),
+        )
+        .unwrap();
         assert!(output.status.success(), "{output:?}");
         let mut args_file = exe.as_os_str().to_owned();
         args_file.push(".args");
@@ -318,15 +332,15 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let paths = paths_in(root.path());
         let exe = root.path().join("launcher");
-        std::fs::write(&exe, "#!/bin/sh\nexit 23\n").unwrap();
-        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o700)).unwrap();
+        write_executable(&exe, "#!/bin/sh\nexit 23\n");
         let helper = install_auth_callback_helper(&paths, &exe).unwrap();
-        let status = std::process::Command::new("/bin/sh")
-            .arg(helper)
-            .arg("callback")
-            .status()
-            .unwrap();
-        assert_eq!(status.code(), Some(23));
+        let output = run_retrying_text_busy(
+            std::process::Command::new("/bin/sh")
+                .arg(helper)
+                .arg("callback"),
+        )
+        .unwrap();
+        assert_eq!(output.status.code(), Some(23));
     }
 
     #[test]
@@ -380,12 +394,84 @@ mod tests {
         let mut expected = Vec::new();
         expected.push(b'"');
         expected.extend_from_slice(b"/tmp/my dir/");
-        expected.extend_from_slice(br"\$");
-        expected.extend_from_slice(br#"\""#);
-        expected.extend_from_slice(br"\`");
-        expected.extend_from_slice(br"\\");
+        expected.extend_from_slice(br"\\$");
+        expected.extend_from_slice(br#"\\""#);
+        expected.extend_from_slice(br"\\`");
+        expected.extend_from_slice(br"\\\\");
         expected.extend_from_slice(b"helper%%");
         expected.push(b'"');
         assert_eq!(quoted, expected);
+    }
+
+    #[test]
+    fn desktop_exec_doubles_backslashes_again_for_the_string_layer() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        // Spec examples: a quoted backslash is four backslashes, a quoted dollar is `\\$`.
+        assert_eq!(
+            desktop_exec_arg(Path::new(OsStr::from_bytes(br"\a"))),
+            br#""\\\\a""#
+        );
+        assert_eq!(
+            desktop_exec_arg(Path::new(OsStr::from_bytes(br"$a"))),
+            br#""\\$a""#
+        );
+        assert_eq!(
+            desktop_exec_arg(Path::new("/tmp/helper%")),
+            b"/tmp/helper%%"
+        );
+    }
+
+    /// Write, fsync, and close before exec. Overlayfs can return `ETXTBSY` if
+    /// the script is still open, which is the same pattern the login window uses.
+    fn write_executable(path: &Path, body: &str) {
+        {
+            use std::io::Write;
+            let mut file = std::fs::File::create(path).unwrap();
+            file.write_all(body.as_bytes()).unwrap();
+            file.sync_all().unwrap();
+        }
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::File::open(parent).and_then(|directory| directory.sync_all());
+        }
+    }
+
+    /// Same backoff as the login window's `ETXTBSY` retry. `output` also sees
+    /// "Text file busy" from the helper's `exec` of a script that was just written.
+    fn run_retrying_text_busy(
+        command: &mut std::process::Command,
+    ) -> std::io::Result<std::process::Output> {
+        let mut pause = std::time::Duration::from_millis(10);
+        let limit = std::time::Duration::from_millis(160);
+        loop {
+            match command.output() {
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::ExecutableFileBusy && pause <= limit =>
+                {
+                    std::thread::sleep(pause);
+                    pause *= 2;
+                }
+                Err(error) => return Err(error),
+                Ok(output)
+                    if !output.status.success()
+                        && text_file_busy(&output.stderr)
+                        && pause <= limit =>
+                {
+                    std::thread::sleep(pause);
+                    pause *= 2;
+                }
+                Ok(output) => return Ok(output),
+            }
+        }
+    }
+
+    fn text_file_busy(stderr: &[u8]) -> bool {
+        const MESSAGES: [&[u8]; 2] = [b"Text file busy", b"ETXTBSY"];
+        MESSAGES.iter().any(|message| {
+            stderr
+                .windows(message.len())
+                .any(|window| window == *message)
+        })
     }
 }

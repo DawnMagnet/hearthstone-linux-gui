@@ -1,6 +1,8 @@
 use crate::paths::AppPaths;
 use std::ffi::OsStr;
 use std::fs;
+#[cfg(unix)]
+use std::io::Read;
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -10,8 +12,11 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilte
 const LOG_FILE_PREFIX: &str = "hearthstone-linux-gui.log";
 const LEGACY_AUTH_CALLBACK_LOG: &str = "auth-callback.log";
 const SCRUB_MARKER: &str = ".token-scrub-v1";
-/// Daily files kept by the rolling appender. tracing-appender may retain one
-/// fewer than this while it rotates, which is still about two weeks.
+/// Days of rotated logs to keep. The date in the filename decides this, not
+/// mtime or ctime: rewriting a log gives it a new creation time, and
+/// tracing-appender's `max_log_files` would then keep that rewritten file and
+/// delete a genuinely newer one. A filename date more than this many days
+/// before today (UTC) is outside the window.
 const MAX_LOG_FILES: usize = 14;
 /// Longer lines are not parsed. A line this long that still contains a login
 /// token is replaced in one step so a hostile log cannot stall startup.
@@ -25,10 +30,11 @@ struct StartupNotes {
 }
 
 pub fn init() -> Option<WorkerGuard> {
-    // Scrub before the rolling appender opens today's file. Rewriting a log
-    // that is already open would leave the token in the inode the appender
-    // still holds. A marker skips the reread after the first successful pass,
-    // and short-lived helper invocations never do it.
+    // Drop expired rotated logs, then scrub, before the rolling appender opens
+    // today's file. Rewriting a log that is already open would leave the token
+    // in the inode the appender still holds, and rewriting first would make an
+    // old file look newly created. A marker skips the reread after the first
+    // successful pass, and short-lived helper invocations never do it.
     let paths = AppPaths::discover().ok();
     let mut notes = paths
         .as_ref()
@@ -187,6 +193,15 @@ fn prepare_startup_logs(
     legacy_token_tmp: Option<&Path>,
     scrub_logs: bool,
 ) -> StartupNotes {
+    prepare_startup_logs_at(log_dir, legacy_token_tmp, scrub_logs, unix_day_number())
+}
+
+fn prepare_startup_logs_at(
+    log_dir: &Path,
+    legacy_token_tmp: Option<&Path>,
+    scrub_logs: bool,
+    today: i64,
+) -> StartupNotes {
     let mut notes = StartupNotes::default();
     if is_symlink(log_dir) {
         // A symlink is an intentional redirect. Chmod would follow it, and
@@ -202,9 +217,17 @@ fn prepare_startup_logs(
         ));
     }
     if scrub_logs {
+        notes.warnings.extend(scrub_legacy_logs_with_token_tmp_at(
+            log_dir,
+            legacy_token_tmp,
+            today,
+        ));
+    } else {
+        // Short-lived commands skip the token rewrite but still enforce the
+        // filename retention window. They must not leave that to creation time.
         notes
             .warnings
-            .extend(scrub_legacy_logs_with_token_tmp(log_dir, legacy_token_tmp));
+            .extend(delete_expired_rotated_logs_at(log_dir, today));
     }
     notes
 }
@@ -243,16 +266,29 @@ fn tighten_dir_mode(path: &Path) -> io::Result<()> {
 }
 
 fn open_log_writer(log_dir: &Path) -> Result<(NonBlocking, WorkerGuard), String> {
+    open_log_writer_at(log_dir, unix_day_number())
+}
+
+fn open_log_writer_at(log_dir: &Path, today: i64) -> Result<(NonBlocking, WorkerGuard), String> {
     if !log_dir.is_dir() {
         return Err(format!(
             "could not open log files in {}: directory is not available",
             log_dir.display()
         ));
     }
+    // Filename retention again, including launches that never scrub. Expired
+    // files are already gone before any rewrite can refresh their timestamps.
+    let _ = delete_expired_rotated_logs_at(log_dir, today);
+    // Retention is by filename date (see `delete_expired_rotated_logs`), not
+    // tracing-appender's creation-time prune. That prune also matches every
+    // name that merely starts with the log prefix.
+    //
+    // Create today's file as `0600` before the appender opens it. The appender
+    // has no creation mode; a file that already exists is opened, not recreated.
+    precreate_private_log(log_dir, today);
     let file = match tracing_appender::rolling::RollingFileAppender::builder()
         .rotation(tracing_appender::rolling::Rotation::DAILY)
         .filename_prefix(LOG_FILE_PREFIX)
-        .max_log_files(MAX_LOG_FILES)
         .build(log_dir)
     {
         Ok(file) => file,
@@ -269,15 +305,15 @@ fn open_log_writer(log_dir: &Path) -> Result<(NonBlocking, WorkerGuard), String>
     let writer = RestrictingWriter {
         inner: file,
         log_dir: log_dir.to_path_buf(),
-        restricted_day: unix_day_number(),
+        restricted_day: today,
     };
     Ok(tracing_appender::non_blocking(writer))
 }
 
-/// Chmods log files created by a later daily rotation. tracing-appender 0.2
-/// opens those files itself and has no creation mode, so the mode is set on
-/// the write that creates the file. The directory is already `0700`.
-/// Warnings are not emitted here: a log line must not recurse into this writer.
+/// Pre-creates the next day's log as `0600` before tracing-appender opens it.
+/// The appender has no creation mode. A log line must not recurse into this
+/// writer, so retention and chmod failures are ignored here. The directory is
+/// already `0700`.
 struct RestrictingWriter<W> {
     inner: W,
     log_dir: PathBuf,
@@ -286,12 +322,14 @@ struct RestrictingWriter<W> {
 
 impl<W: Write> Write for RestrictingWriter<W> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.prepare_today();
         let written = self.inner.write(buf)?;
         self.restrict_if_day_changed();
         Ok(written)
     }
 
     fn flush(&mut self) -> io::Result<()> {
+        self.prepare_today();
         self.inner.flush()?;
         self.restrict_if_day_changed();
         Ok(())
@@ -299,6 +337,16 @@ impl<W: Write> Write for RestrictingWriter<W> {
 }
 
 impl<W> RestrictingWriter<W> {
+    fn prepare_today(&mut self) {
+        let day = unix_day_number();
+        if day == self.restricted_day {
+            return;
+        }
+        // Before the appender creates the new day's file with the process umask.
+        let _ = delete_expired_rotated_logs(&self.log_dir);
+        precreate_private_log(&self.log_dir, day);
+    }
+
     fn restrict_if_day_changed(&mut self) {
         let day = unix_day_number();
         if day != self.restricted_day {
@@ -309,11 +357,215 @@ impl<W> RestrictingWriter<W> {
 }
 
 fn unix_day_number() -> i64 {
-    let seconds = SystemTime::now()
+    utc_unix_day(SystemTime::now())
+}
+
+fn utc_unix_day(now: SystemTime) -> i64 {
+    let seconds = now
         .duration_since(UNIX_EPOCH)
         .map(|elapsed| elapsed.as_secs())
         .unwrap_or(0);
     i64::try_from(seconds / 86_400).unwrap_or(i64::MAX)
+}
+
+/// `YYYY-MM-DD` for a UTC day count, matching tracing-appender's daily suffix.
+#[cfg(unix)]
+fn dated_log_name(day: i64) -> String {
+    let (year, month, day_of_month) = date_from_unix_day(day);
+    format!("{LOG_FILE_PREFIX}.{year:04}-{month:02}-{day_of_month:02}")
+}
+
+/// Creates `hearthstone-linux-gui.log.YYYY-MM-DD` as mode `0600` when it does
+/// not already exist. `OpenOptions::mode` is applied by `open(2)` before the
+/// file is visible; the process umask can only clear bits, and `0600` has no
+/// group or other bits for a typical umask to remove.
+fn precreate_private_log(log_dir: &Path, day: i64) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let path = log_dir.join(dated_log_name(day));
+        let _ = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(path);
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (log_dir, day);
+    }
+}
+
+fn filename_date_outside_retention(file_day: i64, today: i64) -> bool {
+    let window = i64::try_from(MAX_LOG_FILES).unwrap_or(i64::MAX);
+    today.saturating_sub(file_day) > window
+}
+
+/// Removes rotated logs whose filename date is outside the retention window.
+/// Names that only share the prefix, symlinks, and directories are left alone.
+/// The file's mtime and ctime are not consulted.
+///
+/// The newest [`MAX_LOG_FILES`] dated logs are always kept. A file is removed
+/// only when it is older than those and its filename date is outside the
+/// window. A clock set far ahead still cannot drop the whole history: today's
+/// pre-created file does not make every older log eligible.
+fn delete_expired_rotated_logs(log_dir: &Path) -> Vec<String> {
+    delete_expired_rotated_logs_at(log_dir, unix_day_number())
+}
+
+fn delete_expired_rotated_logs_at(log_dir: &Path, today: i64) -> Vec<String> {
+    let mut warnings = Vec::new();
+    let entries = match fs::read_dir(log_dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return warnings,
+        Err(error) => {
+            warnings.push(format!(
+                "could not read log directory {} to apply log retention: {error}",
+                log_dir.display()
+            ));
+            return warnings;
+        }
+    };
+
+    let mut dated = Vec::new();
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                warnings.push(format!(
+                    "could not read an entry in {} while applying log retention: {error}",
+                    log_dir.display()
+                ));
+                continue;
+            }
+        };
+        let Some(file_day) = rotated_log_day(&entry.file_name()) else {
+            continue;
+        };
+        match fs::symlink_metadata(entry.path()) {
+            Ok(metadata) if metadata.file_type().is_file() => {
+                dated.push((file_day, entry.path()));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => warnings.push(format!(
+                "could not inspect {} while applying log retention: {error}",
+                entry.path().display()
+            )),
+        }
+    }
+    dated.sort_by_key(|(day, _)| std::cmp::Reverse(*day));
+
+    for (file_day, path) in dated.into_iter().skip(MAX_LOG_FILES) {
+        if !filename_date_outside_retention(file_day, today) {
+            continue;
+        }
+        match fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.file_type().is_file() => {
+                if let Err(error) = fs::remove_file(&path) {
+                    if error.kind() != io::ErrorKind::NotFound {
+                        warnings.push(format!(
+                            "could not remove expired log {}: {error}",
+                            path.display()
+                        ));
+                    }
+                }
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => warnings.push(format!(
+                "could not inspect expired log {}: {error}",
+                path.display()
+            )),
+        }
+    }
+    warnings
+}
+
+/// Day count for `prefix.YYYY-MM-DD` only. Any other suffix is not a rotated log.
+fn rotated_log_day(name: &OsStr) -> Option<i64> {
+    let bytes = name.as_encoded_bytes();
+    let rest = bytes.strip_prefix(LOG_FILE_PREFIX.as_bytes())?;
+    let rest = rest.strip_prefix(b".")?;
+    if rest.len() != 10 || rest[4] != b'-' || rest[7] != b'-' {
+        return None;
+    }
+    if !rest
+        .iter()
+        .enumerate()
+        .all(|(index, byte)| index == 4 || index == 7 || byte.is_ascii_digit())
+    {
+        return None;
+    }
+    let year = i32::try_from(parse_u32(&rest[0..4])?).ok()?;
+    let month = parse_u32(&rest[5..7])?;
+    let day = parse_u32(&rest[8..10])?;
+    unix_day_from_date(year, month, day)
+}
+
+fn parse_u32(bytes: &[u8]) -> Option<u32> {
+    let mut value = 0u32;
+    for byte in bytes {
+        let digit = u32::from(byte.wrapping_sub(b'0'));
+        if digit > 9 {
+            return None;
+        }
+        value = value.checked_mul(10)?.checked_add(digit)?;
+    }
+    Some(value)
+}
+
+fn unix_day_from_date(year: i32, month: u32, day: u32) -> Option<i64> {
+    if !is_valid_civil_date(year, month, day) {
+        return None;
+    }
+    // Howard Hinnant, `days_from_civil`.
+    let year = i64::from(year) - i64::from(month <= 2);
+    let era = year.div_euclid(400);
+    let year_of_era = (year - era * 400) as u64;
+    let month_prime = if month > 2 { month - 3 } else { month + 9 };
+    let day_of_year = (153 * u64::from(month_prime) + 2) / 5 + u64::from(day) - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    Some(era * 146097 + i64::try_from(day_of_era).ok()? - 719468)
+}
+
+#[cfg(unix)]
+fn date_from_unix_day(mut days: i64) -> (i32, u32, u32) {
+    // Howard Hinnant, `civil_from_days`.
+    days += 719468;
+    let era = days.div_euclid(146097);
+    let day_of_era = (days - era * 146097) as u64;
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36524 - day_of_era / 146096) / 365;
+    let year = year_of_era as i64 + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+    let month = if month_prime < 10 {
+        month_prime + 3
+    } else {
+        month_prime - 9
+    };
+    let year = if month <= 2 { year + 1 } else { year };
+    (i32::try_from(year).unwrap_or(0), month as u32, day as u32)
+}
+
+fn is_valid_civil_date(year: i32, month: u32, day: u32) -> bool {
+    if !(1..=12).contains(&month) || day == 0 || year < 1 {
+        return false;
+    }
+    let max_day = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if is_leap_year(year) => 29,
+        2 => 28,
+        _ => return false,
+    };
+    day <= max_day
+}
+
+fn is_leap_year(year: i32) -> bool {
+    year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
 }
 
 fn tighten_existing_log_files(log_dir: &Path) {
@@ -333,15 +585,16 @@ fn tighten_existing_log_files(log_dir: &Path) {
 fn tighten_file_mode(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        let metadata = fs::symlink_metadata(path)?;
-        if !metadata.file_type().is_file() {
-            return Ok(());
-        }
-        if metadata.permissions().mode() & 0o777 != 0o600 {
-            fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
-        }
-        Ok(())
+        // Open with `O_NOFOLLOW`, then `fstat` and `fchmod` that descriptor.
+        // A path `chmod` would follow a symlink swapped in after the listing.
+        let file = match open_nofollow(path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound || is_eloop(&error) => {
+                return Ok(());
+            }
+            Err(error) => return Err(error),
+        };
+        restrict_log_fd(&file)
     }
     #[cfg(not(unix))]
     {
@@ -350,26 +603,68 @@ fn tighten_file_mode(path: &Path) -> io::Result<()> {
     }
 }
 
+#[cfg(unix)]
+fn open_nofollow(path: &Path) -> io::Result<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
+}
+
+/// `O_NOFOLLOW` fails with `ELOOP` when the path is a symlink.
+/// `ErrorKind::FilesystemLoop` is still unstable (`io_error_more`) on the 1.92
+/// MSRV, so this compares `libc::ELOOP`, which is the target's own errno.
+#[cfg(unix)]
+fn is_eloop(error: &io::Error) -> bool {
+    error.raw_os_error() == Some(libc::ELOOP)
+}
+
+#[cfg(unix)]
+fn restrict_log_fd(file: &fs::File) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    // `File::metadata` is `fstat` on this descriptor, not a path lookup.
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
+        return Ok(());
+    }
+    if metadata.permissions().mode() & 0o777 != 0o600 {
+        file.set_permissions(fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
+}
+
 /// Startup entry used by tests. [`init`] reports the same warnings after the
 /// subscriber is installed, because this runs before any subscriber exists.
 #[cfg(test)]
 fn scrub_legacy_logs(log_dir: &Path) {
-    for warning in scrub_legacy_logs_with_token_tmp(log_dir, None) {
+    scrub_legacy_logs_at(log_dir, unix_day_number());
+}
+
+#[cfg(test)]
+fn scrub_legacy_logs_at(log_dir: &Path, today: i64) {
+    for warning in scrub_legacy_logs_with_token_tmp_at(log_dir, None, today) {
         tracing::warn!("{warning}");
     }
 }
 
-fn scrub_legacy_logs_with_token_tmp(
+fn scrub_legacy_logs_with_token_tmp_at(
     log_dir: &Path,
     legacy_token_tmp: Option<&Path>,
+    today: i64,
 ) -> Vec<String> {
+    // Delete by filename date before any rewrite. A rewrite replaces the file,
+    // so the old log would otherwise look newer than logs that were left alone.
+    let mut warnings = delete_expired_rotated_logs_at(log_dir, today);
     // The marker is written only after a clean pass, so a failure retries.
     if marker_is_present(log_dir) {
-        return remove_legacy_auth_callback_log(log_dir);
+        warnings.extend(remove_legacy_auth_callback_log(log_dir));
+        return warnings;
     }
 
-    let mut warnings = remove_legacy_auth_callback_log(log_dir);
-    warnings.extend(scrub_log_files(log_dir));
+    warnings.extend(remove_legacy_auth_callback_log(log_dir));
+    let (file_warnings, hard_links) = scrub_log_files(log_dir);
+    warnings.extend(file_warnings);
     if let Some(legacy_token_tmp) = legacy_token_tmp {
         warnings.extend(remove_regular_file(
             legacy_token_tmp,
@@ -381,6 +676,9 @@ fn scrub_legacy_logs_with_token_tmp(
             warnings.push(warning);
         }
     }
+    // A hard link is skipped on purpose. Reporting it must not withhold the
+    // marker, or every later startup would scan and warn again.
+    warnings.extend(hard_links);
     warnings
 }
 
@@ -425,17 +723,18 @@ fn remove_regular_file(path: &Path, what: &str) -> Vec<String> {
     }
 }
 
-fn scrub_log_files(log_dir: &Path) -> Vec<String> {
+fn scrub_log_files(log_dir: &Path) -> (Vec<String>, Vec<String>) {
     let mut warnings = Vec::new();
+    let mut hard_links = Vec::new();
     let entries = match fs::read_dir(log_dir) {
         Ok(entries) => entries,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return warnings,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return (warnings, hard_links),
         Err(error) => {
             warnings.push(format!(
                 "could not read log directory {} to remove login tokens: {error}",
                 log_dir.display()
             ));
-            return warnings;
+            return (warnings, hard_links);
         }
     };
 
@@ -467,11 +766,16 @@ fn scrub_log_files(log_dir: &Path) -> Vec<String> {
         if !file_type.is_file() {
             continue;
         }
-        if let Err(warning) = redact_log_file(&entry.path()) {
-            warnings.push(warning);
+        match redact_log_file(&entry.path()) {
+            Ok(RedactOutcome::Done) => {}
+            Ok(RedactOutcome::HardLink) => hard_links.push(format!(
+                "skipping {} because it has multiple hard links; permissions were tightened and the shared file was not rewritten",
+                entry.path().display()
+            )),
+            Err(warning) => warnings.push(warning),
         }
     }
-    warnings
+    (warnings, hard_links)
 }
 
 fn remove_legacy_auth_callback_log(log_dir: &Path) -> Vec<String> {
@@ -486,14 +790,101 @@ fn remove_legacy_auth_callback_log(log_dir: &Path) -> Vec<String> {
     }
 }
 
-fn redact_log_file(path: &Path) -> Result<(), String> {
-    let original = fs::read(path).map_err(|error| {
+enum RedactOutcome {
+    Done,
+    /// Present on every platform so the scrub loop can name it. Only Unix
+    /// opens a log with `fstat` and produces this outcome.
+    #[cfg_attr(not(unix), allow(dead_code))]
+    HardLink,
+}
+
+fn redact_log_file(path: &Path) -> Result<RedactOutcome, String> {
+    #[cfg(unix)]
+    {
+        redact_log_file_unix(path)
+    }
+    #[cfg(not(unix))]
+    {
+        let original = fs::read(path).map_err(|error| {
+            format!(
+                "could not read {} to remove login tokens: {error}",
+                path.display()
+            )
+        })?;
+        rewrite_redacted_log(path, &original)?;
+        Ok(RedactOutcome::Done)
+    }
+}
+
+/// Opens with `O_NOFOLLOW` and `fstat`s that descriptor before reading. A
+/// symlink swapped in after the directory listing fails the open instead of
+/// being followed. A hard link is mode `0600` and then left unread: rewriting
+/// the inode would change every name, and replacing this name would leave the
+/// token on the other link.
+#[cfg(unix)]
+fn redact_log_file_unix(path: &Path) -> Result<RedactOutcome, String> {
+    use std::os::unix::fs::MetadataExt;
+    let mut file = match open_nofollow(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound || is_eloop(&error) => {
+            return Ok(RedactOutcome::Done);
+        }
+        Err(error) => {
+            return Err(format!(
+                "could not read {} to remove login tokens: {error}",
+                path.display()
+            ));
+        }
+    };
+    let metadata = file.metadata().map_err(|error| {
+        format!(
+            "could not inspect {} to remove login tokens: {error}",
+            path.display()
+        )
+    })?;
+    if !metadata.is_file() {
+        return Ok(RedactOutcome::Done);
+    }
+    if metadata.nlink() > 1 {
+        restrict_log_fd(&file).map_err(|error| {
+            format!(
+                "could not restrict permissions on {}: {error}",
+                path.display()
+            )
+        })?;
+        return Ok(RedactOutcome::HardLink);
+    }
+    let mut original = Vec::new();
+    file.read_to_end(&mut original).map_err(|error| {
         format!(
             "could not read {} to remove login tokens: {error}",
             path.display()
         )
     })?;
     let redacted = redact_login_tokens(&original);
+    if redacted != original {
+        // Drop the read fd before replacing the directory entry.
+        drop(file);
+        crate::auth::write_private_file(path, &redacted).map_err(|error| {
+            format!(
+                "could not rewrite {} to remove login tokens: {error:#}",
+                path.display()
+            )
+        })?;
+        return Ok(RedactOutcome::Done);
+    }
+    restrict_log_fd(&file).map_err(|error| {
+        format!(
+            "could not restrict permissions on {}: {error}",
+            path.display()
+        )
+    })?;
+    Ok(RedactOutcome::Done)
+}
+
+#[cfg(not(unix))]
+fn rewrite_redacted_log(path: &Path, original: &[u8]) -> Result<(), String> {
+    let redacted = redact_login_tokens(original);
     if redacted != original {
         crate::auth::write_private_file(path, &redacted).map_err(|error| {
             format!(
@@ -502,27 +893,23 @@ fn redact_log_file(path: &Path) -> Result<(), String> {
             )
         })?;
     }
-    tighten_file_mode(path).map_err(|error| {
-        format!(
-            "could not restrict permissions on {}: {error}",
-            path.display()
-        )
-    })?;
     Ok(())
 }
 
+/// The active log (`hearthstone-linux-gui.log`) or one daily rotation
+/// (`hearthstone-linux-gui.log.YYYY-MM-DD`). A name that only shares the
+/// prefix is the user's file and is not scrubbed, chmod'd, or deleted.
 fn is_launcher_log_name(name: &OsStr) -> bool {
-    name.as_encoded_bytes()
-        .starts_with(LOG_FILE_PREFIX.as_bytes())
+    name.as_encoded_bytes() == LOG_FILE_PREFIX.as_bytes() || rotated_log_day(name).is_some()
 }
 
-/// Replaces Battle.net `ST=` values (and `ST%3D`, either case), other callback
-/// parameters that carry a login token, and any bare login token.
-/// Already-redacted text is unchanged.
+/// Replaces Battle.net `ST=` values (and percent-encoded forms of `=`, `?`, and
+/// `&`, including a once-doubled `=`), other callback parameters that carry a
+/// login token, and any bare login token. Already-redacted text is unchanged.
 ///
-/// The scan is linear. A non-sensitive `name=` does not walk its value; the
-/// cursor stays on the value so a later `ST=` is still found, without rereading
-/// the suffix from every byte.
+/// The scan is linear. Each byte is classified with a fixed-size lookahead, and
+/// a non-sensitive `name=` does not walk its value; the cursor stays on the
+/// value so a later `ST=` is still found, without rereading the suffix.
 fn redact_login_tokens(input: &[u8]) -> Vec<u8> {
     let mut output = Vec::with_capacity(input.len());
     let mut start = 0;
@@ -550,6 +937,13 @@ fn redact_login_tokens(input: &[u8]) -> Vec<u8> {
 fn redact_line(line: &[u8], output: &mut Vec<u8>) {
     let mut index = 0;
     while index < line.len() {
+        // `%3F` / `%26` (and `%253F` / `%2526`) are `?` / `&`. Skip them before
+        // reading a name, or the hex digits become part of the name (`3Fst`).
+        if let Some(len) = encoded_query_delim_len(line, index) {
+            output.extend_from_slice(&line[index..index + len]);
+            index += len;
+            continue;
+        }
         if let Some(found) = assignment_at(line, index) {
             let name = &line[index..found.name_end];
             if is_sensitive_param(name) {
@@ -570,12 +964,10 @@ fn redact_line(line: &[u8], output: &mut Vec<u8>) {
             index = found.value_start;
             continue;
         }
-        if is_name_start(line, index) {
-            if let Some(len) = crate::auth::login_token_len_at(line, index) {
-                output.extend_from_slice(REDACTED);
-                index += len;
-                continue;
-            }
+        if let Some(len) = bare_token_len(line, index) {
+            output.extend_from_slice(REDACTED);
+            index += len;
+            continue;
         }
         output.push(line[index]);
         index += 1;
@@ -607,7 +999,7 @@ fn assignment_at(input: &[u8], index: usize) -> Option<Assignment> {
 
 fn value_end(input: &[u8], value_start: usize) -> usize {
     let mut value_end = value_start;
-    while value_end < input.len() && !is_value_ender(input[value_end]) {
+    while value_end < input.len() && !is_value_ender_at(input, value_end) {
         value_end += 1;
     }
     value_end
@@ -617,7 +1009,7 @@ fn value_end(input: &[u8], value_start: usize) -> usize {
 fn exact_token_len(input: &[u8], value_start: usize) -> Option<usize> {
     let len = crate::auth::login_token_len_at(input, value_start)?;
     let after = value_start + len;
-    if after == input.len() || is_value_ender(input[after]) {
+    if after == input.len() || is_value_ender_at(input, after) {
         Some(len)
     } else {
         None
@@ -627,6 +1019,10 @@ fn exact_token_len(input: &[u8], value_start: usize) -> Option<usize> {
 fn line_has_sensitive_marker(line: &[u8]) -> bool {
     let mut index = 0;
     while index < line.len() {
+        if let Some(len) = encoded_query_delim_len(line, index) {
+            index += len;
+            continue;
+        }
         if let Some(found) = assignment_at(line, index) {
             if is_sensitive_param(&line[index..found.name_end])
                 || exact_token_len(line, found.value_start).is_some()
@@ -636,7 +1032,7 @@ fn line_has_sensitive_marker(line: &[u8]) -> bool {
             index = found.value_start;
             continue;
         }
-        if is_name_start(line, index) && crate::auth::login_token_len_at(line, index).is_some() {
+        if bare_token_len(line, index).is_some() {
             return true;
         }
         index += 1;
@@ -668,21 +1064,82 @@ fn eq_ignore_ascii_case(left: &[u8], right: &[u8]) -> bool {
             .all(|(left, right)| left.eq_ignore_ascii_case(right))
 }
 
-/// `=` or a percent-encoded `=` (`%3D` / `%3d`).
+/// `=`, percent-encoded `=` (`%3D` / `%3d`), or that encoding doubled (`%253D` / `%253d`).
 fn separator_len(input: &[u8], index: usize) -> Option<usize> {
     if input.get(index) == Some(&b'=') {
         return Some(1);
     }
-    let encoded = input.get(index..index + 3)?;
-    if encoded[0] == b'%' && encoded[1] == b'3' && encoded[2].eq_ignore_ascii_case(&b'd') {
-        Some(3)
-    } else {
-        None
+    if percent_hex_at(input, index, b"253d") {
+        return Some(5);
     }
+    if percent_hex_at(input, index, b"3d") {
+        return Some(3);
+    }
+    None
+}
+
+/// `true` when `input[index..]` is `%` plus the hex digits in `hex`, ignoring case.
+fn percent_hex_at(input: &[u8], index: usize, hex: &[u8]) -> bool {
+    let Some(encoded) = input.get(index..index + 1 + hex.len()) else {
+        return false;
+    };
+    encoded[0] == b'%'
+        && encoded[1..]
+            .iter()
+            .zip(hex)
+            .all(|(byte, expected)| byte.eq_ignore_ascii_case(expected))
+}
+
+/// Length of `%3F` / `%3f` / `%26` / `%253F` / `%2526` at `index`, longest first.
+fn encoded_query_delim_len(input: &[u8], index: usize) -> Option<usize> {
+    if percent_hex_at(input, index, b"253f") || percent_hex_at(input, index, b"2526") {
+        return Some(5);
+    }
+    if percent_hex_at(input, index, b"3f") || percent_hex_at(input, index, b"26") {
+        return Some(3);
+    }
+    None
+}
+
+/// Login token glued to `%2F` / `%2f` (`/`) or `%3A` / `%3a` (`:`). Those hex
+/// digits are name bytes, so the token would not otherwise be a bare token.
+fn bare_token_len(line: &[u8], index: usize) -> Option<usize> {
+    if !is_name_start(line, index) && !encoded_slash_or_colon_ends_at(line, index) {
+        return None;
+    }
+    crate::auth::login_token_len_at(line, index)
+}
+
+fn encoded_slash_or_colon_ends_at(bytes: &[u8], index: usize) -> bool {
+    if index < 3 {
+        return false;
+    }
+    percent_hex_at(bytes, index - 3, b"2f") || percent_hex_at(bytes, index - 3, b"3a")
 }
 
 fn is_name_start(bytes: &[u8], index: usize) -> bool {
-    index == 0 || !is_name_byte(bytes[index - 1])
+    if index == 0 || !is_name_byte(bytes[index - 1]) {
+        return true;
+    }
+    // `%3F` / `%3f` is `?` and `%26` is `&`. The hex digits are name bytes, so
+    // the parameter that follows them would otherwise stay glued to the encoding.
+    // `%253F` and `%2526` are those delimiters encoded a second time.
+    encoded_delimiter_ends_at(bytes, index)
+}
+
+fn encoded_delimiter_ends_at(bytes: &[u8], index: usize) -> bool {
+    (index >= 5
+        && (percent_hex_at(bytes, index - 5, b"253f") || percent_hex_at(bytes, index - 5, b"2526")))
+        || (index >= 3
+            && (percent_hex_at(bytes, index - 3, b"3f") || percent_hex_at(bytes, index - 3, b"26")))
+}
+
+fn is_value_ender_at(input: &[u8], index: usize) -> bool {
+    if is_value_ender(input[index]) {
+        return true;
+    }
+    // Encoded `&`, then the same sequence with the percent sign encoded again.
+    percent_hex_at(input, index, b"2526") || percent_hex_at(input, index, b"26")
 }
 
 fn is_name_byte(byte: u8) -> bool {
@@ -779,6 +1236,58 @@ mod tests {
     }
 
     #[test]
+    fn redacts_nested_and_double_encoded_parameters() {
+        // Values are not login-token shaped, so a bare-token match cannot pass these.
+        let cases = [
+            ("%3Fst%3dshortsecret", "%3Fst%3dREDACTED"),
+            ("%3fst%3Dshortsecret", "%3fst%3DREDACTED"),
+            ("x%26ST%3Dshortsecret", "x%26ST%3DREDACTED"),
+            ("x%26st%3dshortsecret&tail", "x%26st%3dREDACTED&tail"),
+            ("%2526ST%253Dshortsecret", "%2526ST%253DREDACTED"),
+            (
+                "%2526access_token%253dshortsecret%26ok",
+                "%2526access_token%253dREDACTED%26ok",
+            ),
+            (
+                "note=keep%3FST%3dshortsecret%26tail",
+                "note=keep%3FST%3dREDACTED%26tail",
+            ),
+            ("foo%253Dshortsecret%26", "foo%253Dshortsecret%26"),
+        ];
+        for (input, expected) in cases {
+            let once = redact_login_tokens(input.as_bytes());
+            let text = String::from_utf8(once.clone()).unwrap();
+            assert_eq!(text, expected, "{input}");
+            assert_eq!(redact_login_tokens(&once), once, "{text}");
+        }
+    }
+
+    #[test]
+    fn redacts_bare_token_after_encoded_slash_or_colon() {
+        let cases = [
+            (format!("pre%2F{TOKEN}"), "pre%2FREDACTED"),
+            (format!("pre%2f{TOKEN} tail"), "pre%2fREDACTED tail"),
+            (format!("pre%3A{TOKEN}"), "pre%3AREDACTED"),
+            (format!("pre%3a{TOKEN},next"), "pre%3aREDACTED,next"),
+        ];
+        for (input, expected) in cases {
+            let once = redact_login_tokens(input.as_bytes());
+            let text = String::from_utf8(once.clone()).unwrap();
+            assert_eq!(text, expected, "{input}");
+            assert!(!text.contains(TOKEN));
+            assert_eq!(redact_login_tokens(&once), once, "{text}");
+        }
+        assert_eq!(
+            redact_login_tokens(b"pre%2Fnot-a-token"),
+            b"pre%2Fnot-a-token"
+        );
+        assert_eq!(
+            redact_login_tokens(b"pre%3Anot-a-token"),
+            b"pre%3Anot-a-token"
+        );
+    }
+
+    #[test]
     fn oversized_line_with_a_token_is_replaced_wholesale() {
         let mut line = vec![b'x'; MAX_SCRUB_LINE + 8];
         line.extend_from_slice(format!("ST={TOKEN}").as_bytes());
@@ -787,6 +1296,13 @@ mod tests {
         let text = String::from_utf8(redact_login_tokens(&line)).unwrap();
         assert_eq!(text, "REDACTED\nnext ST=REDACTED\n");
         assert!(!text.contains(TOKEN));
+
+        let mut encoded = vec![b'y'; MAX_SCRUB_LINE + 8];
+        encoded.extend_from_slice(b"%3Fst%3dshortsecret%26");
+        encoded.push(b'\n');
+        let text = String::from_utf8(redact_login_tokens(&encoded)).unwrap();
+        assert_eq!(text, "REDACTED\n");
+        assert!(!text.contains("shortsecret"));
     }
 
     #[test]
@@ -803,6 +1319,49 @@ mod tests {
             elapsed < std::time::Duration::from_secs(1),
             "redaction took {elapsed:?}"
         );
+    }
+
+    #[test]
+    fn encoded_delimiters_stay_linear() {
+        // No sensitive parameter name: a line over the cap would otherwise be
+        // replaced wholesale, which does not measure the scanner.
+        let piece = b"%3f%26%253f%2526%3d%253dxx";
+        let mut input = Vec::with_capacity(1024 * 1024);
+        while input.len() + piece.len() <= 1024 * 1024 {
+            input.extend_from_slice(piece);
+        }
+        let started = std::time::Instant::now();
+        let output = redact_login_tokens(&input);
+        let elapsed = started.elapsed();
+        assert_eq!(output, input);
+        assert!(
+            elapsed < std::time::Duration::from_secs(1),
+            "encoded redaction took {elapsed:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn civil_dates_round_trip_unix_days() {
+        assert_eq!(unix_day_from_date(1970, 1, 1), Some(0));
+        assert_eq!(date_from_unix_day(0), (1970, 1, 1));
+        for (year, month, day) in [(2024, 2, 29), (2026, 11, 16), (2000, 2, 29), (1999, 12, 31)] {
+            let unix_day = unix_day_from_date(year, month, day).unwrap();
+            assert_eq!(date_from_unix_day(unix_day), (year, month, day));
+        }
+        assert!(unix_day_from_date(1900, 2, 29).is_none());
+        assert!(unix_day_from_date(2021, 2, 29).is_none());
+        assert!(unix_day_from_date(2024, 13, 1).is_none());
+        let today = unix_day_number();
+        assert!(!filename_date_outside_retention(today, today));
+        assert!(!filename_date_outside_retention(
+            today - i64::try_from(MAX_LOG_FILES).unwrap(),
+            today
+        ));
+        assert!(filename_date_outside_retention(
+            today - i64::try_from(MAX_LOG_FILES).unwrap() - 1,
+            today
+        ));
     }
 
     #[test]
@@ -877,7 +1436,8 @@ mod tests {
         let token = root.path().join("hsreplay-token.json");
         let temporary = legacy_hsreplay_token_tmp(&token);
         fs::write(&temporary, b"partial").unwrap();
-        let warnings = scrub_legacy_logs_with_token_tmp(root.path(), Some(&temporary));
+        let warnings =
+            scrub_legacy_logs_with_token_tmp_at(root.path(), Some(&temporary), unix_day_number());
         assert!(warnings.is_empty(), "{warnings:?}");
         assert!(!temporary.exists());
 
@@ -946,20 +1506,37 @@ mod tests {
             )
             .unwrap();
         }
-        let (writer, guard) = open_log_writer(&log_dir).expect("log writer");
+        let today = fixed_today();
+        let recent = log_dir.join(dated_log_name(today - 1));
+        fs::write(&recent, b"recent\n").unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&recent)
+            .unwrap()
+            .set_modified(UNIX_EPOCH)
+            .unwrap();
+        let (writer, guard) = open_log_writer_at(&log_dir, today).expect("log writer");
         drop(writer);
         drop(guard);
-        let count = fs::read_dir(&log_dir)
-            .unwrap()
-            .filter(|entry| {
-                entry.as_ref().ok().is_some_and(|entry| {
-                    entry.file_type().is_ok_and(|kind| kind.is_file())
-                        && is_launcher_log_name(&entry.file_name())
-                })
-            })
-            .count();
-        assert!(count <= MAX_LOG_FILES, "{count}");
-        assert!(count > 1, "{count}");
+        assert_eq!(fs::read(&recent).unwrap(), b"recent\n");
+        // Newest 14 at prune time are yesterday plus 2020-01-08..20. Today is
+        // created after that prune, so the January 1–7 files are the ones removed.
+        for day in 1..=7 {
+            assert!(
+                !log_dir
+                    .join(format!("hearthstone-linux-gui.log.2020-01-{day:02}"))
+                    .exists(),
+                "2020-01-{day:02} should be outside the newest {MAX_LOG_FILES}"
+            );
+        }
+        for day in 8..=20 {
+            assert!(
+                log_dir
+                    .join(format!("hearthstone-linux-gui.log.2020-01-{day:02}"))
+                    .is_file(),
+                "2020-01-{day:02} is among the newest {MAX_LOG_FILES}"
+            );
+        }
     }
 
     #[cfg(unix)]
@@ -967,7 +1544,7 @@ mod tests {
     fn rewrites_rolling_logs_and_a_second_pass_does_not_touch_them() {
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
         let root = tempfile::tempdir().unwrap();
-        let dated = root.path().join("hearthstone-linux-gui.log.2024-05-06");
+        let dated = root.path().join(dated_log_name(unix_day_number() - 1));
         let current = root.path().join("hearthstone-linux-gui.log");
         let untouched = root.path().join("notes.log");
         let line = format!(
@@ -1016,7 +1593,7 @@ mod tests {
         let nested = root.path().join("hearthstone-linux-gui.log.d");
         fs::create_dir(&nested).unwrap();
         fs::write(nested.join("inner.log"), &line).unwrap();
-        let regular = root.path().join("hearthstone-linux-gui.log.2020-01-01");
+        let regular = root.path().join(dated_log_name(unix_day_number() - 1));
         fs::write(&regular, &line).unwrap();
 
         let warnings = capture_warnings(|| scrub_legacy_logs(root.path()));
@@ -1045,7 +1622,7 @@ mod tests {
         fs::create_dir(&log_dir).unwrap();
         let line = format!("uri=?ST={TOKEN}&keep=yes\n");
         let first = log_dir.join("hearthstone-linux-gui.log");
-        let second = log_dir.join("hearthstone-linux-gui.log.2024-01-01");
+        let second = log_dir.join(dated_log_name(unix_day_number() - 1));
         fs::write(&first, &line).unwrap();
         fs::write(&second, &line).unwrap();
         fs::write(log_dir.join(LEGACY_AUTH_CALLBACK_LOG), b"old token").unwrap();
@@ -1140,7 +1717,7 @@ mod tests {
         let log_dir = root.path().join("logs");
         fs::create_dir(&log_dir).unwrap();
         fs::set_permissions(&log_dir, fs::Permissions::from_mode(0o755)).unwrap();
-        let existing = log_dir.join("hearthstone-linux-gui.log.2020-01-01");
+        let existing = log_dir.join(dated_log_name(unix_day_number() - 1));
         fs::write(&existing, b"plain log line\n").unwrap();
         fs::set_permissions(&existing, fs::Permissions::from_mode(0o644)).unwrap();
 
@@ -1166,9 +1743,242 @@ mod tests {
         assert_eq!(mode(&log_dir), 0o700);
     }
 
+    /// One clock sample. Boundary tests pass this into the `_at` helpers so
+    /// retention does not read the clock a second time and disagree across UTC midnight.
+    #[cfg(unix)]
+    fn fixed_today() -> i64 {
+        unix_day_number()
+    }
+
     #[cfg(unix)]
     fn mode(path: &Path) -> u32 {
         use std::os::unix::fs::PermissionsExt;
         fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn retention_uses_filename_date_and_keeps_recent_logs() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        let root = tempfile::tempdir().unwrap();
+        let today_day = fixed_today();
+        let recent = root.path().join(dated_log_name(
+            today_day - i64::try_from(MAX_LOG_FILES).unwrap(),
+        ));
+        let expired = root.path().join(dated_log_name(
+            today_day - i64::try_from(MAX_LOG_FILES).unwrap() - 1,
+        ));
+        let user = root.path().join("hearthstone-linux-gui.log.backup");
+        let invalid = root.path().join("hearthstone-linux-gui.log.2021-02-29");
+        let current = root.path().join(LOG_FILE_PREFIX);
+        let line = format!("ST={TOKEN}\n");
+        // Fourteen newer dated logs put `expired` past the keep set. `recent`
+        // is outside that set too, but its filename date is still inside the window.
+        for age in 0..i64::try_from(MAX_LOG_FILES).unwrap() {
+            fs::write(
+                root.path().join(dated_log_name(today_day - age)),
+                b"plain\n",
+            )
+            .unwrap();
+        }
+        fs::write(&recent, &line).unwrap();
+        fs::write(&expired, &line).unwrap();
+        fs::write(&user, &line).unwrap();
+        fs::write(&invalid, &line).unwrap();
+        fs::write(&current, &line).unwrap();
+        fs::set_permissions(&user, fs::Permissions::from_mode(0o644)).unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&recent)
+            .unwrap()
+            .set_modified(UNIX_EPOCH)
+            .unwrap();
+        let outside = root.path().join("outside.log");
+        fs::write(&outside, &line).unwrap();
+        let link = root.path().join(dated_log_name(
+            today_day - i64::try_from(MAX_LOG_FILES).unwrap() - 2,
+        ));
+        symlink(&outside, &link).unwrap();
+
+        let warnings = capture_warnings(|| scrub_legacy_logs_at(root.path(), today_day));
+        assert!(!warnings.contains("WARN"), "{warnings}");
+        assert!(recent.is_file(), "recent log was deleted");
+        assert!(!fs::read(&recent)
+            .unwrap()
+            .windows(TOKEN.len())
+            .any(|window| window == TOKEN.as_bytes()));
+        assert!(!expired.exists(), "expired log survived the scrub");
+        assert_eq!(fs::read(&user).unwrap(), line.as_bytes());
+        assert_eq!(mode(&user), 0o644);
+        assert_eq!(fs::read(&invalid).unwrap(), line.as_bytes());
+        assert!(!fs::read(&current)
+            .unwrap()
+            .windows(TOKEN.len())
+            .any(|window| window == TOKEN.as_bytes()));
+        assert!(fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(fs::read(&outside).unwrap(), line.as_bytes());
+
+        let (writer, guard) = open_log_writer_at(root.path(), today_day).expect("log writer");
+        drop(writer);
+        drop(guard);
+        assert!(
+            recent.is_file(),
+            "opening the log writer deleted a recent log"
+        );
+        assert!(!expired.exists());
+        assert_eq!(fs::read(&user).unwrap(), line.as_bytes());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn clock_jump_keeps_history_across_two_startups() {
+        let root = tempfile::tempdir().unwrap();
+        let log_dir = root.path().join("logs");
+        fs::create_dir(&log_dir).unwrap();
+        let today = fixed_today();
+        let historical: Vec<_> = [30_i64, 45, 60, 90]
+            .into_iter()
+            .map(|age| {
+                let path = log_dir.join(dated_log_name(today - age));
+                fs::write(&path, format!("history {age}\n")).unwrap();
+                path
+            })
+            .collect();
+
+        for pass in 0..2 {
+            let notes = prepare_startup_logs_at(&log_dir, None, true, today);
+            assert!(
+                notes.warnings.is_empty(),
+                "pass {pass}: {:?}",
+                notes.warnings
+            );
+            let (writer, guard) = open_log_writer_at(&log_dir, today).expect("log writer");
+            drop(writer);
+            drop(guard);
+        }
+
+        for path in &historical {
+            assert!(path.is_file(), "lost {}", path.display());
+            let body = fs::read(path).unwrap();
+            assert!(body.starts_with(b"history "), "{}", path.display());
+        }
+        assert!(log_dir.join(dated_log_name(today)).is_file());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn first_upgrade_redacts_the_last_fifteen_days_and_drops_older_logs() {
+        let root = tempfile::tempdir().unwrap();
+        let log_dir = root.path().join("logs");
+        fs::create_dir(&log_dir).unwrap();
+        let today = fixed_today();
+        let line = format!("uri=?ST={TOKEN}&region=US\n");
+        for age in 0..=14 {
+            fs::write(log_dir.join(dated_log_name(today - age)), &line).unwrap();
+        }
+        for age in [15, 16, 40] {
+            fs::write(log_dir.join(dated_log_name(today - age)), &line).unwrap();
+        }
+        fs::write(log_dir.join("hearthstone-linux-gui.log.2020-01-03"), &line).unwrap();
+
+        let notes = prepare_startup_logs_at(&log_dir, None, true, today);
+        assert!(notes.warnings.is_empty(), "{:?}", notes.warnings);
+        let (writer, guard) = open_log_writer_at(&log_dir, today).expect("log writer");
+        drop(writer);
+        drop(guard);
+
+        for age in 0..=14 {
+            let path = log_dir.join(dated_log_name(today - age));
+            let body = fs::read(&path).unwrap_or_else(|_| panic!("missing {}", path.display()));
+            assert!(
+                !body
+                    .windows(TOKEN.len())
+                    .any(|window| window == TOKEN.as_bytes()),
+                "{}",
+                path.display()
+            );
+            assert!(
+                body.windows(b"ST=REDACTED".len())
+                    .any(|window| window == b"ST=REDACTED"),
+                "{}",
+                String::from_utf8_lossy(&body)
+            );
+        }
+        for age in [15, 16, 40] {
+            assert!(!log_dir.join(dated_log_name(today - age)).exists());
+        }
+        assert!(!log_dir
+            .join("hearthstone-linux-gui.log.2020-01-03")
+            .exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hardlinked_log_is_left_unchanged_and_symlink_is_not_followed() {
+        use std::os::unix::fs::symlink;
+        let root = tempfile::tempdir().unwrap();
+        let line = format!("ST={TOKEN}\n");
+        use std::os::unix::fs::PermissionsExt;
+        let log = root.path().join(dated_log_name(unix_day_number()));
+        fs::write(&log, &line).unwrap();
+        fs::set_permissions(&log, fs::Permissions::from_mode(0o644)).unwrap();
+        let other = root.path().join("shared.log");
+        fs::hard_link(&log, &other).unwrap();
+
+        let warnings = capture_warnings(|| scrub_legacy_logs(root.path()));
+        assert!(
+            warnings.contains("hard link"),
+            "expected a hard-link warning, got {warnings}"
+        );
+        assert_eq!(fs::read(&log).unwrap(), line.as_bytes());
+        assert_eq!(fs::read(&other).unwrap(), line.as_bytes());
+        assert_eq!(
+            fs::metadata(&log).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert!(root.path().join(SCRUB_MARKER).is_file());
+
+        let again = capture_warnings(|| scrub_legacy_logs(root.path()));
+        assert!(!again.contains("WARN"), "{again}");
+        assert_eq!(fs::read(&log).unwrap(), line.as_bytes());
+
+        let outside = root.path().join("secret.log");
+        fs::write(&outside, &line).unwrap();
+        let link = root.path().join(dated_log_name(unix_day_number() - 1));
+        symlink(&outside, &link).unwrap();
+        assert!(redact_log_file(&link).is_ok());
+        assert_eq!(fs::read(&outside).unwrap(), line.as_bytes());
+        assert!(fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn precreate_private_log_is_owner_only_and_does_not_truncate() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let day = unix_day_number();
+        let existing = root.path().join(dated_log_name(day));
+        fs::write(&existing, b"keep").unwrap();
+        fs::set_permissions(&existing, fs::Permissions::from_mode(0o644)).unwrap();
+        precreate_private_log(root.path(), day);
+        assert_eq!(fs::read(&existing).unwrap(), b"keep");
+        assert_eq!(
+            fs::metadata(&existing).unwrap().permissions().mode() & 0o777,
+            0o644
+        );
+
+        let created = root.path().join(dated_log_name(day - 1));
+        precreate_private_log(root.path(), day - 1);
+        assert_eq!(fs::read(&created).unwrap(), b"");
+        assert_eq!(
+            fs::metadata(&created).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
     }
 }
