@@ -881,6 +881,7 @@ dependencies = [
  "gtk4",
  "hex",
  "libadwaita",
+ "libc",
  "md5",
  "pbkdf2",
  "relm4",

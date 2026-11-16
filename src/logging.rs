@@ -1,7 +1,9 @@
 use crate::paths::AppPaths;
 use std::ffi::OsStr;
 use std::fs;
-use std::io::{self, IsTerminal, Read, Write};
+#[cfg(unix)]
+use std::io::Read;
+use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing_appender::non_blocking::{NonBlocking, WorkerGuard};
@@ -385,6 +387,9 @@ fn filename_date_outside_retention(file_day: i64, today: i64) -> bool {
 /// Removes rotated logs whose filename date is outside the retention window.
 /// Names that only share the prefix, symlinks, and directories are left alone.
 /// The file's mtime and ctime are not consulted.
+///
+/// If the newest dated log is itself outside the window, nothing is removed.
+/// A clock set far ahead would otherwise treat every existing file as expired.
 fn delete_expired_rotated_logs(log_dir: &Path) -> Vec<String> {
     let mut warnings = Vec::new();
     let today = unix_day_number();
@@ -401,6 +406,7 @@ fn delete_expired_rotated_logs(log_dir: &Path) -> Vec<String> {
     };
 
     let mut expired = Vec::new();
+    let mut newest_day: Option<i64> = None;
     for entry in entries {
         let entry = match entry {
             Ok(entry) => entry,
@@ -415,9 +421,13 @@ fn delete_expired_rotated_logs(log_dir: &Path) -> Vec<String> {
         let Some(file_day) = rotated_log_day(&entry.file_name()) else {
             continue;
         };
+        newest_day = Some(newest_day.map_or(file_day, |day| day.max(file_day)));
         if filename_date_outside_retention(file_day, today) {
             expired.push(entry.path());
         }
+    }
+    if newest_day.is_some_and(|day| filename_date_outside_retention(day, today)) {
+        return warnings;
     }
 
     for path in expired {
@@ -545,21 +555,53 @@ fn tighten_existing_log_files(log_dir: &Path) {
 fn tighten_file_mode(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        let metadata = fs::symlink_metadata(path)?;
-        if !metadata.file_type().is_file() {
-            return Ok(());
-        }
-        if metadata.permissions().mode() & 0o777 != 0o600 {
-            fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
-        }
-        Ok(())
+        // Open with `O_NOFOLLOW`, then `fstat` and `fchmod` that descriptor.
+        // A path `chmod` would follow a symlink swapped in after the listing.
+        let file = match open_nofollow(path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound || is_eloop(&error) => {
+                return Ok(());
+            }
+            Err(error) => return Err(error),
+        };
+        restrict_log_fd(&file)
     }
     #[cfg(not(unix))]
     {
         let _ = path;
         Ok(())
     }
+}
+
+#[cfg(unix)]
+fn open_nofollow(path: &Path) -> io::Result<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
+}
+
+/// `O_NOFOLLOW` fails with `ELOOP` when the path is a symlink.
+/// `ErrorKind::FilesystemLoop` is still unstable (`io_error_more`) on the 1.92
+/// MSRV, so this compares `libc::ELOOP`, which is the target's own errno.
+#[cfg(unix)]
+fn is_eloop(error: &io::Error) -> bool {
+    error.raw_os_error() == Some(libc::ELOOP)
+}
+
+#[cfg(unix)]
+fn restrict_log_fd(file: &fs::File) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    // `File::metadata` is `fstat` on this descriptor, not a path lookup.
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
+        return Ok(());
+    }
+    if metadata.permissions().mode() & 0o777 != 0o600 {
+        file.set_permissions(fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
 }
 
 /// Startup entry used by tests. [`init`] reports the same warnings after the
@@ -585,7 +627,8 @@ fn scrub_legacy_logs_with_token_tmp(
     }
 
     warnings.extend(remove_legacy_auth_callback_log(log_dir));
-    warnings.extend(scrub_log_files(log_dir));
+    let (file_warnings, hard_links) = scrub_log_files(log_dir);
+    warnings.extend(file_warnings);
     if let Some(legacy_token_tmp) = legacy_token_tmp {
         warnings.extend(remove_regular_file(
             legacy_token_tmp,
@@ -597,6 +640,9 @@ fn scrub_legacy_logs_with_token_tmp(
             warnings.push(warning);
         }
     }
+    // A hard link is skipped on purpose. Reporting it must not withhold the
+    // marker, or every later startup would scan and warn again.
+    warnings.extend(hard_links);
     warnings
 }
 
@@ -641,17 +687,18 @@ fn remove_regular_file(path: &Path, what: &str) -> Vec<String> {
     }
 }
 
-fn scrub_log_files(log_dir: &Path) -> Vec<String> {
+fn scrub_log_files(log_dir: &Path) -> (Vec<String>, Vec<String>) {
     let mut warnings = Vec::new();
+    let mut hard_links = Vec::new();
     let entries = match fs::read_dir(log_dir) {
         Ok(entries) => entries,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return warnings,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return (warnings, hard_links),
         Err(error) => {
             warnings.push(format!(
                 "could not read log directory {} to remove login tokens: {error}",
                 log_dir.display()
             ));
-            return warnings;
+            return (warnings, hard_links);
         }
     };
 
@@ -683,11 +730,16 @@ fn scrub_log_files(log_dir: &Path) -> Vec<String> {
         if !file_type.is_file() {
             continue;
         }
-        if let Err(warning) = redact_log_file(&entry.path()) {
-            warnings.push(warning);
+        match redact_log_file(&entry.path()) {
+            Ok(RedactOutcome::Done) => {}
+            Ok(RedactOutcome::HardLink) => hard_links.push(format!(
+                "skipping {} because it has multiple hard links; permissions were tightened and the shared file was not rewritten",
+                entry.path().display()
+            )),
+            Err(warning) => warnings.push(warning),
         }
     }
-    warnings
+    (warnings, hard_links)
 }
 
 fn remove_legacy_auth_callback_log(log_dir: &Path) -> Vec<String> {
@@ -702,7 +754,15 @@ fn remove_legacy_auth_callback_log(log_dir: &Path) -> Vec<String> {
     }
 }
 
-fn redact_log_file(path: &Path) -> Result<(), String> {
+enum RedactOutcome {
+    Done,
+    /// Present on every platform so the scrub loop can name it. Only Unix
+    /// opens a log with `fstat` and produces this outcome.
+    #[cfg_attr(not(unix), allow(dead_code))]
+    HardLink,
+}
+
+fn redact_log_file(path: &Path) -> Result<RedactOutcome, String> {
     #[cfg(unix)]
     {
         redact_log_file_unix(path)
@@ -715,27 +775,24 @@ fn redact_log_file(path: &Path) -> Result<(), String> {
                 path.display()
             )
         })?;
-        rewrite_redacted_log(path, &original)
+        rewrite_redacted_log(path, &original)?;
+        Ok(RedactOutcome::Done)
     }
 }
 
 /// Opens with `O_NOFOLLOW` and `fstat`s that descriptor before reading. A
 /// symlink swapped in after the directory listing fails the open instead of
-/// being followed. Hard links are left unchanged: rewriting the inode would
-/// change every name, and replacing this name would leave the token on the
-/// other link.
+/// being followed. A hard link is mode `0600` and then left unread: rewriting
+/// the inode would change every name, and replacing this name would leave the
+/// token on the other link.
 #[cfg(unix)]
-fn redact_log_file_unix(path: &Path) -> Result<(), String> {
-    use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
-    let mut file = match fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(o_nofollow())
-        .open(path)
-    {
+fn redact_log_file_unix(path: &Path) -> Result<RedactOutcome, String> {
+    use std::os::unix::fs::MetadataExt;
+    let mut file = match open_nofollow(path) {
         Ok(file) => file,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-        // `O_NOFOLLOW` fails with `ELOOP` when the path is a symlink.
-        Err(error) if is_eloop(&error) => return Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound || is_eloop(&error) => {
+            return Ok(RedactOutcome::Done);
+        }
         Err(error) => {
             return Err(format!(
                 "could not read {} to remove login tokens: {error}",
@@ -750,14 +807,16 @@ fn redact_log_file_unix(path: &Path) -> Result<(), String> {
         )
     })?;
     if !metadata.is_file() {
-        return Ok(());
+        return Ok(RedactOutcome::Done);
     }
     if metadata.nlink() > 1 {
-        return Err(format!(
-            "skipping {} because it has {} hard links; not rewriting a shared log",
-            path.display(),
-            metadata.nlink()
-        ));
+        restrict_log_fd(&file).map_err(|error| {
+            format!(
+                "could not restrict permissions on {}: {error}",
+                path.display()
+            )
+        })?;
+        return Ok(RedactOutcome::HardLink);
     }
     let mut original = Vec::new();
     file.read_to_end(&mut original).map_err(|error| {
@@ -776,39 +835,15 @@ fn redact_log_file_unix(path: &Path) -> Result<(), String> {
                 path.display()
             )
         })?;
-        return Ok(());
+        return Ok(RedactOutcome::Done);
     }
-    if metadata.permissions().mode() & 0o777 != 0o600 {
-        file.set_permissions(fs::Permissions::from_mode(0o600))
-            .map_err(|error| {
-                format!(
-                    "could not restrict permissions on {}: {error}",
-                    path.display()
-                )
-            })?;
-    }
-    Ok(())
-}
-
-#[cfg(unix)]
-fn is_eloop(error: &io::Error) -> bool {
-    #[cfg(any(target_os = "linux", target_os = "android"))]
-    const ELOOP: i32 = 40;
-    #[cfg(not(any(target_os = "linux", target_os = "android")))]
-    const ELOOP: i32 = 62;
-    error.raw_os_error() == Some(ELOOP)
-}
-
-#[cfg(unix)]
-fn o_nofollow() -> i32 {
-    #[cfg(any(target_os = "linux", target_os = "android"))]
-    {
-        0x20000
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "android")))]
-    {
-        0x100
-    }
+    restrict_log_fd(&file).map_err(|error| {
+        format!(
+            "could not restrict permissions on {}: {error}",
+            path.display()
+        )
+    })?;
+    Ok(RedactOutcome::Done)
 }
 
 #[cfg(not(unix))]
@@ -866,6 +901,13 @@ fn redact_login_tokens(input: &[u8]) -> Vec<u8> {
 fn redact_line(line: &[u8], output: &mut Vec<u8>) {
     let mut index = 0;
     while index < line.len() {
+        // `%3F` / `%26` (and `%253F` / `%2526`) are `?` / `&`. Skip them before
+        // reading a name, or the hex digits become part of the name (`3Fst`).
+        if let Some(len) = encoded_query_delim_len(line, index) {
+            output.extend_from_slice(&line[index..index + len]);
+            index += len;
+            continue;
+        }
         if let Some(found) = assignment_at(line, index) {
             let name = &line[index..found.name_end];
             if is_sensitive_param(name) {
@@ -886,12 +928,10 @@ fn redact_line(line: &[u8], output: &mut Vec<u8>) {
             index = found.value_start;
             continue;
         }
-        if is_name_start(line, index) {
-            if let Some(len) = crate::auth::login_token_len_at(line, index) {
-                output.extend_from_slice(REDACTED);
-                index += len;
-                continue;
-            }
+        if let Some(len) = bare_token_len(line, index) {
+            output.extend_from_slice(REDACTED);
+            index += len;
+            continue;
         }
         output.push(line[index]);
         index += 1;
@@ -943,6 +983,10 @@ fn exact_token_len(input: &[u8], value_start: usize) -> Option<usize> {
 fn line_has_sensitive_marker(line: &[u8]) -> bool {
     let mut index = 0;
     while index < line.len() {
+        if let Some(len) = encoded_query_delim_len(line, index) {
+            index += len;
+            continue;
+        }
         if let Some(found) = assignment_at(line, index) {
             if is_sensitive_param(&line[index..found.name_end])
                 || exact_token_len(line, found.value_start).is_some()
@@ -952,7 +996,7 @@ fn line_has_sensitive_marker(line: &[u8]) -> bool {
             index = found.value_start;
             continue;
         }
-        if is_name_start(line, index) && crate::auth::login_token_len_at(line, index).is_some() {
+        if bare_token_len(line, index).is_some() {
             return true;
         }
         index += 1;
@@ -1008,6 +1052,33 @@ fn percent_hex_at(input: &[u8], index: usize, hex: &[u8]) -> bool {
             .iter()
             .zip(hex)
             .all(|(byte, expected)| byte.eq_ignore_ascii_case(expected))
+}
+
+/// Length of `%3F` / `%3f` / `%26` / `%253F` / `%2526` at `index`, longest first.
+fn encoded_query_delim_len(input: &[u8], index: usize) -> Option<usize> {
+    if percent_hex_at(input, index, b"253f") || percent_hex_at(input, index, b"2526") {
+        return Some(5);
+    }
+    if percent_hex_at(input, index, b"3f") || percent_hex_at(input, index, b"26") {
+        return Some(3);
+    }
+    None
+}
+
+/// Login token glued to `%2F` / `%2f` (`/`) or `%3A` / `%3a` (`:`). Those hex
+/// digits are name bytes, so the token would not otherwise be a bare token.
+fn bare_token_len(line: &[u8], index: usize) -> Option<usize> {
+    if !is_name_start(line, index) && !encoded_slash_or_colon_ends_at(line, index) {
+        return None;
+    }
+    crate::auth::login_token_len_at(line, index)
+}
+
+fn encoded_slash_or_colon_ends_at(bytes: &[u8], index: usize) -> bool {
+    if index < 3 {
+        return false;
+    }
+    percent_hex_at(bytes, index - 3, b"2f") || percent_hex_at(bytes, index - 3, b"3a")
 }
 
 fn is_name_start(bytes: &[u8], index: usize) -> bool {
@@ -1130,30 +1201,54 @@ mod tests {
 
     #[test]
     fn redacts_nested_and_double_encoded_parameters() {
-        let samples = [
-            format!("%3FST%3D{TOKEN}%26"),
-            format!("%3fst%3d{TOKEN}%26"),
-            format!("%3FST%253D{TOKEN}%26"),
-            format!("%3fst%253d{TOKEN}%2526"),
-            format!("pre%253Faccess_token%3D{TOKEN}%26ok"),
-            format!("foo%253D{TOKEN}%26"),
-            format!("note=keep%3FST%3d{TOKEN}%26tail"),
+        // Values are not login-token shaped, so a bare-token match cannot pass these.
+        let cases = [
+            ("%3Fst%3dshortsecret", "%3Fst%3dREDACTED"),
+            ("%3fst%3Dshortsecret", "%3fst%3DREDACTED"),
+            ("x%26ST%3Dshortsecret", "x%26ST%3DREDACTED"),
+            ("x%26st%3dshortsecret&tail", "x%26st%3dREDACTED&tail"),
+            ("%2526ST%253Dshortsecret", "%2526ST%253DREDACTED"),
+            (
+                "%2526access_token%253dshortsecret%26ok",
+                "%2526access_token%253dREDACTED%26ok",
+            ),
+            (
+                "note=keep%3FST%3dshortsecret%26tail",
+                "note=keep%3FST%3dREDACTED%26tail",
+            ),
+            ("foo%253Dshortsecret%26", "foo%253Dshortsecret%26"),
         ];
-        for input in samples {
+        for (input, expected) in cases {
             let once = redact_login_tokens(input.as_bytes());
             let text = String::from_utf8(once.clone()).unwrap();
-            assert!(!text.contains(TOKEN), "{input} -> {text}");
-            assert!(text.contains("REDACTED"), "{input} -> {text}");
-            assert!(text.contains("tail") || !input.contains("tail"), "{text}");
-            if input.contains("tail") {
-                assert!(text.contains("note=keep"), "{text}");
-                assert!(text.contains("tail"), "{text}");
-            }
-            if input.starts_with("foo%253D") {
-                assert!(text.starts_with("foo%253DREDACTED%26"), "{text}");
-            }
+            assert_eq!(text, expected, "{input}");
             assert_eq!(redact_login_tokens(&once), once, "{text}");
         }
+    }
+
+    #[test]
+    fn redacts_bare_token_after_encoded_slash_or_colon() {
+        let cases = [
+            (format!("pre%2F{TOKEN}"), "pre%2FREDACTED"),
+            (format!("pre%2f{TOKEN} tail"), "pre%2fREDACTED tail"),
+            (format!("pre%3A{TOKEN}"), "pre%3AREDACTED"),
+            (format!("pre%3a{TOKEN},next"), "pre%3aREDACTED,next"),
+        ];
+        for (input, expected) in cases {
+            let once = redact_login_tokens(input.as_bytes());
+            let text = String::from_utf8(once.clone()).unwrap();
+            assert_eq!(text, expected, "{input}");
+            assert!(!text.contains(TOKEN));
+            assert_eq!(redact_login_tokens(&once), once, "{text}");
+        }
+        assert_eq!(
+            redact_login_tokens(b"pre%2Fnot-a-token"),
+            b"pre%2Fnot-a-token"
+        );
+        assert_eq!(
+            redact_login_tokens(b"pre%3Anot-a-token"),
+            b"pre%3Anot-a-token"
+        );
     }
 
     #[test]
@@ -1167,11 +1262,11 @@ mod tests {
         assert!(!text.contains(TOKEN));
 
         let mut encoded = vec![b'y'; MAX_SCRUB_LINE + 8];
-        encoded.extend_from_slice(format!("%3FST%3D{TOKEN}%26").as_bytes());
+        encoded.extend_from_slice(b"%3Fst%3dshortsecret%26");
         encoded.push(b'\n');
         let text = String::from_utf8(redact_login_tokens(&encoded)).unwrap();
         assert_eq!(text, "REDACTED\n");
-        assert!(!text.contains(TOKEN));
+        assert!(!text.contains("shortsecret"));
     }
 
     #[test]
@@ -1192,7 +1287,9 @@ mod tests {
 
     #[test]
     fn encoded_delimiters_stay_linear() {
-        let piece = b"%3fst%3d%26%253d%3f%2526%3F";
+        // No sensitive parameter name: a line over the cap would otherwise be
+        // replaced wholesale, which does not measure the scanner.
+        let piece = b"%3f%26%253f%2526%3d%253dxx";
         let mut input = Vec::with_capacity(1024 * 1024);
         while input.len() + piece.len() <= 1024 * 1024 {
             input.extend_from_slice(piece);
@@ -1674,14 +1771,87 @@ mod tests {
         assert_eq!(fs::read(&user).unwrap(), line.as_bytes());
     }
 
+    #[test]
+    fn clock_jump_skips_pruning_when_every_dated_log_is_outside_the_window() {
+        let root = tempfile::tempdir().unwrap();
+        let today = unix_day_number();
+        let window = i64::try_from(MAX_LOG_FILES).unwrap();
+        let newest = root.path().join(dated_log_name(today - window - 1));
+        let older = root.path().join(dated_log_name(today - window - 30));
+        fs::write(&newest, b"newest\n").unwrap();
+        fs::write(&older, b"older\n").unwrap();
+
+        let warnings = delete_expired_rotated_logs(root.path());
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(fs::read(&newest).unwrap(), b"newest\n");
+        assert_eq!(fs::read(&older).unwrap(), b"older\n");
+
+        let recent = root.path().join(dated_log_name(today - 1));
+        fs::write(&recent, b"recent\n").unwrap();
+        let warnings = delete_expired_rotated_logs(root.path());
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(fs::read(&recent).unwrap(), b"recent\n");
+        assert!(!newest.exists());
+        assert!(!older.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn first_upgrade_redacts_the_last_fifteen_days_and_drops_older_logs() {
+        let root = tempfile::tempdir().unwrap();
+        let log_dir = root.path().join("logs");
+        fs::create_dir(&log_dir).unwrap();
+        let today = unix_day_number();
+        let line = format!("uri=?ST={TOKEN}&region=US\n");
+        for age in 0..=14 {
+            fs::write(log_dir.join(dated_log_name(today - age)), &line).unwrap();
+        }
+        for age in [15, 16, 40] {
+            fs::write(log_dir.join(dated_log_name(today - age)), &line).unwrap();
+        }
+        fs::write(log_dir.join("hearthstone-linux-gui.log.2020-01-03"), &line).unwrap();
+
+        let notes = prepare_startup_logs(&log_dir, None, true);
+        assert!(notes.warnings.is_empty(), "{:?}", notes.warnings);
+        let (writer, guard) = open_log_writer(&log_dir).expect("log writer");
+        drop(writer);
+        drop(guard);
+
+        for age in 0..=14 {
+            let path = log_dir.join(dated_log_name(today - age));
+            let body = fs::read(&path).unwrap_or_else(|_| panic!("missing {}", path.display()));
+            assert!(
+                !body
+                    .windows(TOKEN.len())
+                    .any(|window| window == TOKEN.as_bytes()),
+                "{}",
+                path.display()
+            );
+            assert!(
+                body.windows(b"ST=REDACTED".len())
+                    .any(|window| window == b"ST=REDACTED"),
+                "{}",
+                String::from_utf8_lossy(&body)
+            );
+        }
+        for age in [15, 16, 40] {
+            assert!(!log_dir.join(dated_log_name(today - age)).exists());
+        }
+        assert!(!log_dir
+            .join("hearthstone-linux-gui.log.2020-01-03")
+            .exists());
+    }
+
     #[cfg(unix)]
     #[test]
     fn hardlinked_log_is_left_unchanged_and_symlink_is_not_followed() {
         use std::os::unix::fs::symlink;
         let root = tempfile::tempdir().unwrap();
         let line = format!("ST={TOKEN}\n");
+        use std::os::unix::fs::PermissionsExt;
         let log = root.path().join(dated_log_name(unix_day_number()));
         fs::write(&log, &line).unwrap();
+        fs::set_permissions(&log, fs::Permissions::from_mode(0o644)).unwrap();
         let other = root.path().join("shared.log");
         fs::hard_link(&log, &other).unwrap();
 
@@ -1692,7 +1862,15 @@ mod tests {
         );
         assert_eq!(fs::read(&log).unwrap(), line.as_bytes());
         assert_eq!(fs::read(&other).unwrap(), line.as_bytes());
-        assert!(!root.path().join(SCRUB_MARKER).exists());
+        assert_eq!(
+            fs::metadata(&log).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert!(root.path().join(SCRUB_MARKER).is_file());
+
+        let again = capture_warnings(|| scrub_legacy_logs(root.path()));
+        assert!(!again.contains("WARN"), "{again}");
+        assert_eq!(fs::read(&log).unwrap(), line.as_bytes());
 
         let outside = root.path().join("secret.log");
         fs::write(&outside, &line).unwrap();
