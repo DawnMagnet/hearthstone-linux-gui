@@ -7,6 +7,9 @@ use sha1::Sha1;
 use std::path::Path;
 use url::Url;
 
+mod private_file;
+pub use private_file::{write_private_file, write_private_file_with_mode};
+
 type Aes128CbcEnc = cbc::Encryptor<Aes128>;
 
 const ENTROPY: [u8; 16] = [
@@ -37,10 +40,26 @@ pub fn looks_like_token(value: &str) -> bool {
 }
 
 fn looks_like_token_bytes(bytes: &[u8]) -> bool {
-    bytes.len() >= TOKEN_MIN_LEN
-        && bytes.len() <= TOKEN_MAX_LEN
-        && is_token_prefix(bytes)
-        && bytes[36..].iter().all(|byte| byte.is_ascii_digit())
+    login_token_len_at(bytes, 0) == Some(bytes.len())
+}
+
+/// Length of a login token that starts at `start`.
+///
+/// A longer run of account-id digits is not a token: the encrypted file cannot
+/// hold it, and redacting a shorter prefix would leave a different secret.
+pub(crate) fn login_token_len_at(bytes: &[u8], start: usize) -> Option<usize> {
+    let rest = bytes.get(start..)?;
+    if rest.len() < TOKEN_MIN_LEN || !is_token_prefix(rest) {
+        return None;
+    }
+    let mut len = 36;
+    while len < rest.len() && len < TOKEN_MAX_LEN && rest[len].is_ascii_digit() {
+        len += 1;
+    }
+    if len < TOKEN_MIN_LEN || rest.get(len).is_some_and(u8::is_ascii_digit) {
+        return None;
+    }
+    Some(len)
 }
 
 /// Validates the fixed-width "XX-<32 characters>-" prefix of a token.
@@ -77,10 +96,8 @@ fn find_token_candidate(input: &str) -> Option<String> {
 pub fn write_encrypted_token_for_current_user(path: &Path, token: &str) -> Result<()> {
     let username = current_username();
     let encrypted = encrypt_token_for_user(token, &username)?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(path, encrypted).with_context(|| format!("failed to write {}", path.display()))
+    write_private_file(path, &encrypted)
+        .with_context(|| format!("failed to write {}", path.display()))
 }
 
 pub fn handle_callback_uri(paths: &AppPaths, uri: &str) -> Result<()> {
@@ -149,6 +166,20 @@ fn current_username() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn written_token_keeps_the_game_expected_encrypted_layout() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("game/token");
+        let token = "US-0123456789ABCDEFGHIJKLMNOPQRSTUV-1234567";
+        write_encrypted_token_for_current_user(&path, token).unwrap();
+        let actual = std::fs::read(&path).unwrap();
+        assert_eq!(actual.len(), TOKEN_CIPHERTEXT_LEN);
+        assert_eq!(
+            actual,
+            encrypt_token_for_user(token, &current_username()).unwrap()
+        );
+    }
 
     #[test]
     fn extracts_token_from_query_or_text() {

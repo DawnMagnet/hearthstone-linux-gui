@@ -85,40 +85,71 @@ fn install_auth_callback_helper(paths: &AppPaths, exe: &Path) -> std::io::Result
     std::fs::create_dir_all(&paths.state_dir)?;
     std::fs::create_dir_all(&paths.log_dir)?;
     let helper = paths.state_dir.join("auth-callback-handler");
-    let log = paths.log_dir.join("auth-callback.log");
-    std::fs::write(
-        &helper,
-        format!(
-            "#!/usr/bin/env sh\nset -u\nlog={}\nprintf '%s callback %s\\n' \"$(date -Is 2>/dev/null || date)\" \"$*\" >> \"$log\"\n{} --auth-callback \"${{1:-}}\" >> \"$log\" 2>&1\nstatus=$?\nprintf '%s exit %s\\n' \"$(date -Is 2>/dev/null || date)\" \"$status\" >> \"$log\"\nexit \"$status\"\n",
-            shell_quote_path(&log),
-            shell_quote_path(exe),
-        ),
-    )?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut permissions = std::fs::metadata(&helper)?.permissions();
-        permissions.set_mode(0o755);
-        std::fs::set_permissions(&helper, permissions)?;
-    }
-
+    // Mode 0700 is applied to the temporary file before rename, so the helper
+    // path is never visible as a non-executable 0600 file.
+    hearthstone_linux::auth::write_private_file_with_mode(&helper, &helper_script(exe), 0o700)
+        .map_err(std::io::Error::other)?;
     Ok(helper)
 }
 
-fn user_desktop_entry(helper: &Path) -> String {
-    format!(
-        "[Desktop Entry]\nType=Application\nName=hearthstone-linux-gui Login Callback\nExec={} %u\nIcon=io.github.hearthstone_linux_gui\nCategories=Game;\nMimeType=x-scheme-handler/wtcg;x-scheme-handler/blizzard-hearthstone;x-scheme-handler/hearthstone-linux;x-scheme-handler/hearthstone-linux-gui;\nNoDisplay=true\nTerminal=false\nStartupNotify=false\n",
-        desktop_exec_arg(helper)
-    )
+fn helper_script(exe: &Path) -> Vec<u8> {
+    let mut script = Vec::new();
+    script.extend_from_slice(b"#!/usr/bin/env sh\nset -eu\numask 077\nexec ");
+    script.extend_from_slice(&shell_quote_path(exe));
+    script.extend_from_slice(b" --auth-callback \"${1:-}\"\n");
+    script
 }
 
-fn desktop_exec_arg(path: &Path) -> String {
-    let value = path.to_string_lossy().replace('%', "%%");
-    if value.chars().any(char::is_whitespace) {
-        format!("\"{value}\"")
-    } else {
-        value
+fn user_desktop_entry(helper: &Path) -> Vec<u8> {
+    let mut entry = Vec::new();
+    entry.extend_from_slice(
+        b"[Desktop Entry]\nType=Application\nName=hearthstone-linux-gui Login Callback\nExec=",
+    );
+    entry.extend_from_slice(&desktop_exec_arg(helper));
+    entry.extend_from_slice(
+        b" %u\nIcon=io.github.hearthstone_linux_gui\nCategories=Game;\nMimeType=x-scheme-handler/wtcg;x-scheme-handler/blizzard-hearthstone;x-scheme-handler/hearthstone-linux;x-scheme-handler/hearthstone-linux-gui;\nNoDisplay=true\nTerminal=false\nStartupNotify=false\n",
+    );
+    entry
+}
+
+fn desktop_exec_arg(path: &Path) -> Vec<u8> {
+    let bytes = path.as_os_str().as_encoded_bytes();
+    let mut escaped = Vec::with_capacity(bytes.len());
+    for &byte in bytes {
+        if byte == b'%' {
+            escaped.extend_from_slice(b"%%");
+        } else {
+            escaped.push(byte);
+        }
+    }
+    if !needs_desktop_quotes(bytes) {
+        return escaped;
+    }
+    // Desktop Entry spec: a quoted argument escapes ", `, $, and \ with a backslash.
+    let mut quoted = Vec::with_capacity(escaped.len() + 2);
+    quoted.push(b'"');
+    for &byte in &escaped {
+        if matches!(byte, b'"' | b'`' | b'$' | b'\\') {
+            quoted.push(b'\\');
+        }
+        quoted.push(byte);
+    }
+    quoted.push(b'"');
+    quoted
+}
+
+fn needs_desktop_quotes(bytes: &[u8]) -> bool {
+    if bytes.iter().any(|byte| {
+        matches!(
+            byte,
+            b'"' | b'`' | b'$' | b'\\' | b' ' | b'\t' | b'\n' | b'\r'
+        )
+    }) {
+        return true;
+    }
+    match std::str::from_utf8(bytes) {
+        Ok(text) => text.chars().any(char::is_whitespace),
+        Err(_) => bytes.iter().any(u8::is_ascii_whitespace),
     }
 }
 
@@ -212,8 +243,149 @@ fn make_executable(_path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-fn shell_quote_path(path: &Path) -> String {
-    let value = path.to_string_lossy();
-    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
-    format!("\"{escaped}\"")
+/// Single-quotes `path` for `sh`, preserving bytes that are not valid UTF-8.
+fn shell_quote_path(path: &Path) -> Vec<u8> {
+    let bytes = path.as_os_str().as_encoded_bytes();
+    let mut quoted = Vec::with_capacity(bytes.len() + 2);
+    quoted.push(b'\'');
+    for &byte in bytes {
+        if byte == b'\'' {
+            quoted.extend_from_slice(b"'\\''");
+        } else {
+            quoted.push(byte);
+        }
+    }
+    quoted.push(b'\'');
+    quoted
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn paths_in(root: &Path) -> AppPaths {
+        AppPaths {
+            config_dir: root.join("config"),
+            data_dir: root.join("data"),
+            cache_dir: root.join("cache"),
+            state_dir: root.join("state"),
+            config_file: root.join("config/config.toml"),
+            game_dir: root.join("game"),
+            ngdp_dir: root.join("cache/ngdp"),
+            unity_cache_dir: root.join("cache/unity"),
+            log_dir: root.join("state/logs"),
+        }
+    }
+
+    #[test]
+    fn helper_passes_the_callback_without_logging_or_evaluating_its_executable_path() {
+        let root = tempfile::tempdir().unwrap();
+        let paths = paths_in(root.path());
+        paths.ensure().unwrap();
+        let exe = root
+            .path()
+            .join("launcher ' $(touch injected) `touch injected`");
+        std::fs::write(&exe, "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$0.args\"\n").unwrap();
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let helper = install_auth_callback_helper(&paths, &exe).unwrap();
+        let uri =
+            "blizzard-hearthstone://localhost:0/?ST=US-0123456789ABCDEFGHIJKLMNOPQRSTUV-1234567";
+        let output = std::process::Command::new("/bin/sh")
+            .arg(&helper)
+            .arg(uri)
+            .current_dir(root.path())
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let mut args_file = exe.as_os_str().to_owned();
+        args_file.push(".args");
+        assert_eq!(
+            std::fs::read_to_string(PathBuf::from(args_file)).unwrap(),
+            format!("--auth-callback\n{uri}\n")
+        );
+        assert!(output.stdout.is_empty());
+        assert!(output.stderr.is_empty());
+        assert!(!root.path().join("injected").exists());
+        assert_eq!(
+            std::fs::metadata(helper).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+    }
+
+    #[test]
+    fn helper_preserves_the_launcher_exit_status() {
+        let root = tempfile::tempdir().unwrap();
+        let paths = paths_in(root.path());
+        let exe = root.path().join("launcher");
+        std::fs::write(&exe, "#!/bin/sh\nexit 23\n").unwrap();
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let helper = install_auth_callback_helper(&paths, &exe).unwrap();
+        let status = std::process::Command::new("/bin/sh")
+            .arg(helper)
+            .arg("callback")
+            .status()
+            .unwrap();
+        assert_eq!(status.code(), Some(23));
+    }
+
+    #[test]
+    fn helper_install_does_not_fail_when_the_legacy_log_is_a_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let paths = paths_in(root.path());
+        paths.ensure().unwrap();
+        let log = paths.log_dir.join("auth-callback.log");
+        std::fs::create_dir(&log).unwrap();
+        let exe = root.path().join("launcher");
+        std::fs::write(&exe, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let helper = install_auth_callback_helper(&paths, &exe).unwrap();
+        assert!(log.is_dir());
+        assert_eq!(
+            std::fs::metadata(helper).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+    }
+
+    #[test]
+    fn helper_script_preserves_non_utf8_executable_bytes() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+        let root = tempfile::tempdir().unwrap();
+        let paths = paths_in(root.path());
+        let mut bytes = b"/tmp/launcher ".to_vec();
+        bytes.push(b'\'');
+        bytes.push(0xff);
+        let exe = std::path::PathBuf::from(OsString::from_vec(bytes));
+        let helper = install_auth_callback_helper(&paths, &exe).unwrap();
+        let script = std::fs::read(helper).unwrap();
+        assert!(script.contains(&0xff), "non-utf8 path byte was lost");
+        assert!(
+            !script
+                .windows(3)
+                .any(|window| window == "\u{FFFD}".as_bytes()),
+            "non-utf8 path was replaced with U+FFFD"
+        );
+        assert!(script.windows(4).any(|window| window == b"'\\''"));
+    }
+
+    #[test]
+    fn desktop_exec_escapes_reserved_characters_inside_quotes() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        let plain = desktop_exec_arg(Path::new("/tmp/helper"));
+        assert_eq!(plain, b"/tmp/helper");
+        let path = Path::new(OsStr::from_bytes(b"/tmp/my dir/$\"`\\helper%"));
+        let quoted = desktop_exec_arg(path);
+        let mut expected = Vec::new();
+        expected.push(b'"');
+        expected.extend_from_slice(b"/tmp/my dir/");
+        expected.extend_from_slice(br"\$");
+        expected.extend_from_slice(br#"\""#);
+        expected.extend_from_slice(br"\`");
+        expected.extend_from_slice(br"\\");
+        expected.extend_from_slice(b"helper%%");
+        expected.push(b'"');
+        assert_eq!(quoted, expected);
+    }
 }
