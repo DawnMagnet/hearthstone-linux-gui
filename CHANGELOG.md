@@ -1,16 +1,37 @@
 # Changelog
 
-## Unreleased
+## v0.4.1 - 2026-11-17
 
 ### Fixed
 
+- Login callback URLs are no longer written to the launcher log, so the
+  Battle.net token does not land in `hearthstone-linux-gui.log` or in
+  `auth-callback.log`. That legacy callback log is removed on startup,
+  including copies left by older versions. On the first start after this
+  update, older rolling logs are scrubbed once for leftover tokens (`ST` and
+  the other callback parameters, including nested and double-encoded forms,
+  and a bare token after `%2F` or `%3A`). A private marker records a clean
+  pass, so later starts do not reread every log. Help, the callback itself
+  and other short commands skip that pass. A leftover HSReplay token
+  temporary file is removed in the same pass (#84, #86).
+- Token files and the HSReplay token are written privately (`0600`). The
+  login callback helper is `0700` before it is put in place. The log
+  directory is `0700` and log files are `0600`. Logs are opened with
+  `O_NOFOLLOW` via `libc`, and the mode is applied to that descriptor, so a
+  symlink is not followed. A hard-linked log is tightened to `0600` and then
+  left unrewritten (#84, #86).
 - Rotated logs are removed when the date in the filename
   (`hearthstone-linux-gui.log.YYYY-MM-DD`) is more than 14 days before today
   (UTC). Timestamps are not used, so rewriting an old log during the
   login-token scrub cannot make it look newer than a recent one. The newest
   14 dated logs are always kept, so a clock set far ahead cannot delete the
-  history on the next launch. Files that only share the log-name
-  prefix are not part of that retention and are left in place.
+  history on the next launch. Retention only removes files matching that
+  rotated log name; files that only share the log-name prefix, and symlinks,
+  are left in place (#86).
+- Desktop `Exec` values escape backslashes, quotes, backticks and dollar
+  signs for both layers of the desktop-entry spec. Starting the login helper
+  retries when the new script is still busy, which the Nix sandbox can
+  return (#84, #86).
 
 ## v0.4.0 - 2026-10-29
 
