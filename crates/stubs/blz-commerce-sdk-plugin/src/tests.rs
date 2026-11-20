@@ -89,7 +89,8 @@ use crate::registry;
 use crate::strings;
 use hearthstone_linux_gui_commerce::{
     fixtures, CommerceTransport, EndpointSource, ExpectedCall, FixtureReplay, FixtureStep,
-    ReadOnlyCall, TransportResponse,
+    ReadOnlyCall, TransportResponse, EXPORT_CHECKOUT_BATTLENET_PURCHASE, EXPORT_CHECKOUT_PURCHASE,
+    EXPORT_COMMERCE_VC_PURCHASE, REFUSED_EXPORTS,
 };
 use serde_json::Value;
 use std::ffi::{CStr, CString};
@@ -435,6 +436,19 @@ impl CommerceTransport for PanicTransport {
     }
 }
 
+fn invoke_refused_export(sdk: isize, export: &str) -> isize {
+    let payload = c_string("{\"productId\":1}");
+    if export == EXPORT_CHECKOUT_PURCHASE {
+        CSharp_BlizzardfCommerce_blz_checkout_purchase___(sdk, 0)
+    } else if export == EXPORT_CHECKOUT_BATTLENET_PURCHASE {
+        CSharp_BlizzardfCommerce_blz_checkout_battlenet_purchase___(sdk, 0)
+    } else if export == EXPORT_COMMERCE_VC_PURCHASE {
+        CSharp_BlizzardfCommerce_blz_commerce_vc_purchase___(sdk, payload.as_ptr())
+    } else {
+        panic!("stub has no purchase entry for refused export {export}");
+    }
+}
+
 #[test]
 fn init_keeps_the_callers_region_and_registers_modules_in_order() {
     let _guard = harness();
@@ -667,19 +681,10 @@ fn purchases_are_refused_before_any_transport_call() {
     let _guard = harness();
     let started = start(42, "zhCN", None);
     registry::testing_set_transport(started.sdk, Box::new(PanicTransport));
-    assert_eq!(
-        CSharp_BlizzardfCommerce_blz_checkout_purchase___(started.sdk, 0),
-        0
-    );
-    assert_eq!(
-        CSharp_BlizzardfCommerce_blz_checkout_battlenet_purchase___(started.sdk, 0),
-        0
-    );
-    let payload = c_string("{\"productId\":1}");
-    assert_eq!(
-        CSharp_BlizzardfCommerce_blz_commerce_vc_purchase___(started.sdk, payload.as_ptr()),
-        0
-    );
+    assert_eq!(REFUSED_EXPORTS.len(), 3);
+    for export in REFUSED_EXPORTS {
+        assert_eq!(invoke_refused_export(started.sdk, export), 0, "{export}");
+    }
     assert_eq!(
         CSharp_BlizzardfCommerce_blz_checkout_cancel_purchase___(started.sdk, 0),
         0
@@ -692,7 +697,10 @@ fn purchases_are_refused_before_any_transport_call() {
     );
     assert!(captured().is_empty());
     let stats = registry::testing_view(started.sdk).unwrap().stats;
-    assert_eq!(stats.purchase_refusals, 3);
+    assert_eq!(
+        stats.purchase_refusals,
+        u32::try_from(REFUSED_EXPORTS.len()).unwrap()
+    );
     assert_eq!(stats.resume_calls, 1);
     assert_eq!(stats.transport_executions, 0);
 

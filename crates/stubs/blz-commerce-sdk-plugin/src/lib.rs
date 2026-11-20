@@ -12,6 +12,8 @@ mod registry;
 mod strings;
 
 #[cfg(test)]
+mod exports;
+#[cfg(test)]
 mod tests;
 
 use registry::Field;
@@ -241,7 +243,10 @@ pub extern "C" fn CSharp_BlizzardfCommerce_blz_checkout_purchase___(
     sdk: isize,
     _purchase: isize,
 ) -> isize {
-    lifecycle::refuse_purchase(sdk)
+    lifecycle::refuse_listed(
+        sdk,
+        hearthstone_linux_gui_commerce::EXPORT_CHECKOUT_PURCHASE,
+    )
 }
 
 #[no_mangle]
@@ -249,7 +254,10 @@ pub extern "C" fn CSharp_BlizzardfCommerce_blz_checkout_battlenet_purchase___(
     sdk: isize,
     _purchase: isize,
 ) -> isize {
-    lifecycle::refuse_purchase(sdk)
+    lifecycle::refuse_listed(
+        sdk,
+        hearthstone_linux_gui_commerce::EXPORT_CHECKOUT_BATTLENET_PURCHASE,
+    )
 }
 
 #[no_mangle]
@@ -257,7 +265,10 @@ pub extern "C" fn CSharp_BlizzardfCommerce_blz_commerce_vc_purchase___(
     sdk: isize,
     _request: *const c_char,
 ) -> isize {
-    lifecycle::refuse_purchase(sdk)
+    lifecycle::refuse_listed(
+        sdk,
+        hearthstone_linux_gui_commerce::EXPORT_COMMERCE_VC_PURCHASE,
+    )
 }
 
 #[no_mangle]
