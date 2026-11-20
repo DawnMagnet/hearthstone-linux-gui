@@ -636,16 +636,20 @@ fn restrict_log_fd(file: &fs::File) -> io::Result<()> {
 
 /// Startup entry used by tests. [`init`] reports the same warnings after the
 /// subscriber is installed, because this runs before any subscriber exists.
-#[cfg(test)]
-fn scrub_legacy_logs(log_dir: &Path) {
-    scrub_legacy_logs_at(log_dir, unix_day_number());
-}
-
+/// Callers pass `today` so a UTC midnight cannot change which files are kept.
 #[cfg(test)]
 fn scrub_legacy_logs_at(log_dir: &Path, today: i64) {
     for warning in scrub_legacy_logs_with_token_tmp_at(log_dir, None, today) {
         tracing::warn!("{warning}");
     }
+}
+
+/// One UTC day for log tests. `RestrictingWriter` compares this value with the
+/// wall clock, so it has to be the current day or closing the writer prunes
+/// again. Tests pass the same value into every `_at` helper.
+#[cfg(test)]
+fn fixed_today() -> i64 {
+    unix_day_number()
 }
 
 fn scrub_legacy_logs_with_token_tmp_at(
@@ -1352,7 +1356,7 @@ mod tests {
         assert!(unix_day_from_date(1900, 2, 29).is_none());
         assert!(unix_day_from_date(2021, 2, 29).is_none());
         assert!(unix_day_from_date(2024, 13, 1).is_none());
-        let today = unix_day_number();
+        let today = fixed_today();
         assert!(!filename_date_outside_retention(today, today));
         assert!(!filename_date_outside_retention(
             today - i64::try_from(MAX_LOG_FILES).unwrap(),
@@ -1393,8 +1397,9 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let log = root.path().join("hearthstone-linux-gui.log");
         fs::write(&log, format!("ST={TOKEN}\n")).unwrap();
+        let today = fixed_today();
 
-        let skipped = prepare_startup_logs(root.path(), None, false);
+        let skipped = prepare_startup_logs_at(root.path(), None, false, today);
         assert!(skipped.warnings.is_empty(), "{:?}", skipped.warnings);
         assert!(fs::read(&log)
             .unwrap()
@@ -1402,7 +1407,7 @@ mod tests {
             .any(|window| window == TOKEN.as_bytes()));
         assert!(!root.path().join(SCRUB_MARKER).exists());
 
-        let warnings = capture_warnings(|| scrub_legacy_logs(root.path()));
+        let warnings = capture_warnings(|| scrub_legacy_logs_at(root.path(), today));
         assert!(!warnings.contains("WARN"), "{warnings}");
         assert!(!fs::read(&log)
             .unwrap()
@@ -1420,7 +1425,7 @@ mod tests {
         }
 
         fs::write(&log, format!("ST={TOKEN}\n")).unwrap();
-        let again = capture_warnings(|| scrub_legacy_logs(root.path()));
+        let again = capture_warnings(|| scrub_legacy_logs_at(root.path(), today));
         assert!(!again.contains("WARN"), "{again}");
         assert!(fs::read(&log)
             .unwrap()
@@ -1437,7 +1442,7 @@ mod tests {
         let temporary = legacy_hsreplay_token_tmp(&token);
         fs::write(&temporary, b"partial").unwrap();
         let warnings =
-            scrub_legacy_logs_with_token_tmp_at(root.path(), Some(&temporary), unix_day_number());
+            scrub_legacy_logs_with_token_tmp_at(root.path(), Some(&temporary), fixed_today());
         assert!(warnings.is_empty(), "{warnings:?}");
         assert!(!temporary.exists());
 
@@ -1471,8 +1476,9 @@ mod tests {
         .unwrap();
         let link = root.path().join("logs");
         symlink(&real, &link).unwrap();
+        let today = fixed_today();
 
-        let first = prepare_startup_logs(&link, None, true);
+        let first = prepare_startup_logs_at(&link, None, true, today);
         assert!(first.warnings.is_empty(), "{:?}", first.warnings);
         assert!(first.debug.iter().any(|note| note.contains("symlink")));
         assert!(!fs::read(real.join("hearthstone-linux-gui.log"))
@@ -1485,7 +1491,7 @@ mod tests {
             format!("ST={TOKEN}\n"),
         )
         .unwrap();
-        let second = prepare_startup_logs(&link, None, true);
+        let second = prepare_startup_logs_at(&link, None, true, today);
         assert!(second.warnings.is_empty(), "{:?}", second.warnings);
         assert!(fs::read(real.join("hearthstone-linux-gui.log"))
             .unwrap()
@@ -1544,7 +1550,8 @@ mod tests {
     fn rewrites_rolling_logs_and_a_second_pass_does_not_touch_them() {
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
         let root = tempfile::tempdir().unwrap();
-        let dated = root.path().join(dated_log_name(unix_day_number() - 1));
+        let today = fixed_today();
+        let dated = root.path().join(dated_log_name(today - 1));
         let current = root.path().join("hearthstone-linux-gui.log");
         let untouched = root.path().join("notes.log");
         let line = format!(
@@ -1555,7 +1562,7 @@ mod tests {
         fs::write(&untouched, &line).unwrap();
         fs::set_permissions(&dated, fs::Permissions::from_mode(0o644)).unwrap();
 
-        let warnings = capture_warnings(|| scrub_legacy_logs(root.path()));
+        let warnings = capture_warnings(|| scrub_legacy_logs_at(root.path(), today));
         assert!(!warnings.contains("WARN"), "{warnings}");
         let redacted = fs::read(&dated).unwrap();
         assert!(!redacted
@@ -1575,7 +1582,7 @@ mod tests {
         assert_eq!(fs::read(&untouched).unwrap(), line.as_bytes());
 
         let inode = fs::metadata(&dated).unwrap().ino();
-        let again = capture_warnings(|| scrub_legacy_logs(root.path()));
+        let again = capture_warnings(|| scrub_legacy_logs_at(root.path(), today));
         assert!(!again.contains("WARN"), "{again}");
         assert_eq!(fs::read(&dated).unwrap(), redacted);
         assert_eq!(fs::metadata(&dated).unwrap().ino(), inode);
@@ -1593,10 +1600,11 @@ mod tests {
         let nested = root.path().join("hearthstone-linux-gui.log.d");
         fs::create_dir(&nested).unwrap();
         fs::write(nested.join("inner.log"), &line).unwrap();
-        let regular = root.path().join(dated_log_name(unix_day_number() - 1));
+        let today = fixed_today();
+        let regular = root.path().join(dated_log_name(today - 1));
         fs::write(&regular, &line).unwrap();
 
-        let warnings = capture_warnings(|| scrub_legacy_logs(root.path()));
+        let warnings = capture_warnings(|| scrub_legacy_logs_at(root.path(), today));
         assert!(!warnings.contains("WARN"), "{warnings}");
         assert_eq!(fs::read(&outside).unwrap(), line.as_bytes());
         assert!(
@@ -1621,8 +1629,9 @@ mod tests {
         let log_dir = root.path().join("logs");
         fs::create_dir(&log_dir).unwrap();
         let line = format!("uri=?ST={TOKEN}&keep=yes\n");
+        let today = fixed_today();
         let first = log_dir.join("hearthstone-linux-gui.log");
-        let second = log_dir.join(dated_log_name(unix_day_number() - 1));
+        let second = log_dir.join(dated_log_name(today - 1));
         fs::write(&first, &line).unwrap();
         fs::write(&second, &line).unwrap();
         fs::write(log_dir.join(LEGACY_AUTH_CALLBACK_LOG), b"old token").unwrap();
@@ -1631,7 +1640,7 @@ mod tests {
         // here. Only require a warning when the directory actually rejects writes.
         let blocked = !can_create_file(&log_dir);
 
-        let warnings = capture_warnings(|| scrub_legacy_logs(&log_dir));
+        let warnings = capture_warnings(|| scrub_legacy_logs_at(&log_dir, today));
         fs::set_permissions(&log_dir, fs::Permissions::from_mode(0o755)).unwrap();
 
         if blocked {
@@ -1680,11 +1689,12 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let log = root.path().join(LEGACY_AUTH_CALLBACK_LOG);
         fs::write(&log, b"callback uri").unwrap();
-        let removed = capture_warnings(|| scrub_legacy_logs(root.path()));
+        let today = fixed_today();
+        let removed = capture_warnings(|| scrub_legacy_logs_at(root.path(), today));
         assert!(!removed.contains("WARN"), "{removed}");
         assert!(!log.exists());
 
-        let missing = capture_warnings(|| scrub_legacy_logs(root.path()));
+        let missing = capture_warnings(|| scrub_legacy_logs_at(root.path(), today));
         assert!(!missing.contains("WARN"), "{missing}");
     }
 
@@ -1697,7 +1707,8 @@ mod tests {
         let log = root.path().join("hearthstone-linux-gui.log");
         fs::write(&log, format!("ST={TOKEN}\n")).unwrap();
 
-        let warnings = capture_warnings(|| scrub_legacy_logs(root.path()));
+        let today = fixed_today();
+        let warnings = capture_warnings(|| scrub_legacy_logs_at(root.path(), today));
         assert!(
             warnings.contains("could not remove legacy auth callback log"),
             "{warnings}"
@@ -1717,17 +1728,18 @@ mod tests {
         let log_dir = root.path().join("logs");
         fs::create_dir(&log_dir).unwrap();
         fs::set_permissions(&log_dir, fs::Permissions::from_mode(0o755)).unwrap();
-        let existing = log_dir.join(dated_log_name(unix_day_number() - 1));
+        let today = fixed_today();
+        let existing = log_dir.join(dated_log_name(today - 1));
         fs::write(&existing, b"plain log line\n").unwrap();
         fs::set_permissions(&existing, fs::Permissions::from_mode(0o644)).unwrap();
 
-        let notes = prepare_startup_logs(&log_dir, None, true);
+        let notes = prepare_startup_logs_at(&log_dir, None, true, today);
         assert!(notes.warnings.is_empty(), "{:?}", notes.warnings);
         assert_eq!(mode(&log_dir), 0o700);
         assert_eq!(mode(&existing), 0o600);
         assert_eq!(fs::read(&existing).unwrap(), b"plain log line\n");
 
-        let (writer, guard) = open_log_writer(&log_dir).expect("log writer");
+        let (writer, guard) = open_log_writer_at(&log_dir, today).expect("log writer");
         drop(writer);
         drop(guard);
 
@@ -1741,13 +1753,6 @@ mod tests {
         }
         assert!(saw_log);
         assert_eq!(mode(&log_dir), 0o700);
-    }
-
-    /// One clock sample. Boundary tests pass this into the `_at` helpers so
-    /// retention does not read the clock a second time and disagree across UTC midnight.
-    #[cfg(unix)]
-    fn fixed_today() -> i64 {
-        unix_day_number()
     }
 
     #[cfg(unix)]
@@ -1830,6 +1835,47 @@ mod tests {
         );
         assert!(!expired.exists());
         assert_eq!(fs::read(&user).unwrap(), line.as_bytes());
+    }
+
+    /// `d` and `d + 1` are adjacent injected days. The file kept on `d` is the
+    /// file deleted on `d + 1`. Deletion goes through `delete_expired_rotated_logs_at`,
+    /// which does not read the wall clock.
+    #[cfg(unix)]
+    #[test]
+    fn retention_boundary_follows_injected_day_across_midnight() {
+        let today = fixed_today();
+        let next_day = today + 1;
+        let window = i64::try_from(MAX_LOG_FILES).unwrap();
+        let boundary_day = today - window;
+        assert_eq!(
+            dated_log_name(boundary_day),
+            dated_log_name(next_day - window - 1),
+            "the log kept on day d is the log deleted on day d+1"
+        );
+
+        for day in [today, next_day] {
+            let root = tempfile::tempdir().unwrap();
+            let on_window = root.path().join(dated_log_name(day - window));
+            let past_window = root.path().join(dated_log_name(day - window - 1));
+            for age in 0..window {
+                fs::write(root.path().join(dated_log_name(day - age)), b"newer\n").unwrap();
+            }
+            fs::write(&on_window, b"boundary\n").unwrap();
+            fs::write(&past_window, b"expired\n").unwrap();
+
+            let warnings = delete_expired_rotated_logs_at(root.path(), day);
+            assert!(warnings.is_empty(), "day {day}: {warnings:?}");
+            assert!(
+                on_window.is_file(),
+                "day {day} keeps a log dated exactly {MAX_LOG_FILES} days earlier"
+            );
+            assert_eq!(fs::read(&on_window).unwrap(), b"boundary\n");
+            assert!(
+                !past_window.exists(),
+                "day {day} deletes a log dated {} days earlier",
+                MAX_LOG_FILES + 1
+            );
+        }
     }
 
     #[cfg(unix)]
@@ -1922,13 +1968,14 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let line = format!("ST={TOKEN}\n");
         use std::os::unix::fs::PermissionsExt;
-        let log = root.path().join(dated_log_name(unix_day_number()));
+        let today = fixed_today();
+        let log = root.path().join(dated_log_name(today));
         fs::write(&log, &line).unwrap();
         fs::set_permissions(&log, fs::Permissions::from_mode(0o644)).unwrap();
         let other = root.path().join("shared.log");
         fs::hard_link(&log, &other).unwrap();
 
-        let warnings = capture_warnings(|| scrub_legacy_logs(root.path()));
+        let warnings = capture_warnings(|| scrub_legacy_logs_at(root.path(), today));
         assert!(
             warnings.contains("hard link"),
             "expected a hard-link warning, got {warnings}"
@@ -1941,13 +1988,13 @@ mod tests {
         );
         assert!(root.path().join(SCRUB_MARKER).is_file());
 
-        let again = capture_warnings(|| scrub_legacy_logs(root.path()));
+        let again = capture_warnings(|| scrub_legacy_logs_at(root.path(), today));
         assert!(!again.contains("WARN"), "{again}");
         assert_eq!(fs::read(&log).unwrap(), line.as_bytes());
 
         let outside = root.path().join("secret.log");
         fs::write(&outside, &line).unwrap();
-        let link = root.path().join(dated_log_name(unix_day_number() - 1));
+        let link = root.path().join(dated_log_name(today - 1));
         symlink(&outside, &link).unwrap();
         assert!(redact_log_file(&link).is_ok());
         assert_eq!(fs::read(&outside).unwrap(), line.as_bytes());
@@ -1962,7 +2009,7 @@ mod tests {
     fn precreate_private_log_is_owner_only_and_does_not_truncate() {
         use std::os::unix::fs::PermissionsExt;
         let root = tempfile::tempdir().unwrap();
-        let day = unix_day_number();
+        let day = fixed_today();
         let existing = root.path().join(dated_log_name(day));
         fs::write(&existing, b"keep").unwrap();
         fs::set_permissions(&existing, fs::Permissions::from_mode(0o644)).unwrap();
