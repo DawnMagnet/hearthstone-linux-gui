@@ -39,10 +39,12 @@ names the game P/Invokes.
   helper. It is not written back into the response.
 - `CommerceTransport`. `FixtureReplay` feeds tests. `NotYetSpecifiedTransport`
   is what the game process uses. Neither implementation sends bytes.
-- `blz_checkout_purchase`, `blz_checkout_battlenet_purchase`, and
-  `blz_commerce_vc_purchase` return a null result before the transport is
-  touched. No failure JSON is invented. `blz_checkout_resume` returns an
-  ordinary result and does nothing.
+- Purchase exports are `REFUSED_EXPORTS` in `crates/commerce` (the dynamic
+  symbols for `blz_checkout_purchase`, `blz_checkout_battlenet_purchase`, and
+  `blz_commerce_vc_purchase`). That list is the only source. Each one returns
+  a null result before the transport is touched. No failure JSON is invented.
+  A commerce-bridge must refuse those symbols before writing the call into
+  the pipe. `blz_checkout_resume` returns an ordinary result and does nothing.
 - Hosts. The only recorded row is the EU capture: region id `2`, gateway
   `https://eu.api.blizzard.com`, OAuth `https://oauth.battle.net/sso`. A
   non-empty `override_gateway_url` or `override_oauth_url` from the game

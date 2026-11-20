@@ -4,8 +4,9 @@
 //! listener only after the registry lock is released. A listener that queues
 //! `blz_catalog_load_products` does not see that answer until the next update.
 //!
-//! Purchase entry points return before any transport call. `blz_checkout_resume`
-//! returns an ordinary result and does not ask the transport to finish a purchase.
+//! Purchase entry points on [`hearthstone_linux_gui_commerce::REFUSED_EXPORTS`]
+//! return before any transport call. `blz_checkout_resume` returns an ordinary
+//! result and does not ask the transport to finish a purchase.
 //! Result state stays 0: that is the value on ordinary frames in the capture.
 //! State 1 was observed and its meaning is still unknown, so it is never set.
 
@@ -153,8 +154,15 @@ pub(crate) fn products(sdk: isize, request: *const c_char) -> isize {
     })
 }
 
-/// Refuses a purchase without reading the payload and without touching the transport.
-pub(crate) fn refuse_purchase(sdk: isize) -> isize {
+/// Refuses one symbol from [`hearthstone_linux_gui_commerce::REFUSED_EXPORTS`].
+///
+/// Returns a null result before any transport call and does not build a
+/// failure document. A symbol that is not on the list also returns null; it
+/// is not counted as a purchase refusal.
+pub(crate) fn refuse_listed(sdk: isize, export: &str) -> isize {
+    if !hearthstone_linux_gui_commerce::is_refused_export(export) {
+        return 0;
+    }
     crate::registry::with_mut(|reg| {
         if let Some(session) = reg.session_mut(sdk) {
             session.refuse_purchase();
