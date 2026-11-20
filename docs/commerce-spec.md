@@ -422,3 +422,12 @@ checkout stays in Blizzard's own web checkout.
    behaviour on each.
 5. **`result_t` states** and the meaning of `owner` in listener events.
 6. **Other regions and locales** (`region`, `titleSegment`, placement ids).
+
+## Implementation
+
+The read-only Linux libraries in [commerce-impl.md](commerce-impl.md) implement
+the surface in this document. They do not answer the open questions above.
+CN and EU are not assumed to share a backend: the only hosts filled in are
+the EU gateway and OAuth URL from this capture, and only for region id `2`.
+Any other region stays unspecified unless the game passes an override URL.
+Purchase calls are refused locally and do not perform network I/O.
