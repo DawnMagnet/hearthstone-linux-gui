@@ -4,7 +4,14 @@ version.workspace = true
 rust-version.workspace = true
 edition = "2021"
 license = "MIT"
+description = "Linux P/Invoke stand-in for the read-only commerce SDK surface."
 
 [lib]
 name = "blz_commerce_sdk_plugin"
 crate-type = ["cdylib"]
+
+[dependencies]
+hearthstone-linux-gui-commerce = { path = "../../commerce" }
+
+[dev-dependencies]
+serde_json = "1.0.154"

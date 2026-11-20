@@ -1,0 +1,13 @@
+[package]
+name = "hearthstone-linux-gui-commerce"
+version.workspace = true
+rust-version.workspace = true
+edition = "2021"
+license = "MIT"
+description = "Read-only commerce session for the Linux Hearthstone client. Not a Blizzard SDK."
+
+# No HTTP client. Paths, methods, headers, and token exchange are not specified,
+# and this crate must not grow a live Blizzard call by accident.
+[dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"

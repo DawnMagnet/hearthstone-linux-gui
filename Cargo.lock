@@ -908,6 +908,18 @@ dependencies = [
 [[package]]
 name = "hearthstone-linux-gui-blz-commerce-sdk-plugin-stub"
 version = "0.4.1"
+dependencies = [
+ "hearthstone-linux-gui-commerce",
+ "serde_json",
+]
+
+[[package]]
+name = "hearthstone-linux-gui-commerce"
+version = "0.4.1"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "hearthstone-linux-gui-commerce-http-client-stub"
